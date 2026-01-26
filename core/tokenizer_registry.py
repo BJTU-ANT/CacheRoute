@@ -15,11 +15,12 @@
         没有 tiktoken：直接跳过 GPT 专用逻辑
         全都失败：len(text) 兜底，不会报错
 """
-
+import json
+import os
 # from __future__ import annotations
 from functools import lru_cache
 from typing import Optional
-from CacheRoute.util.timer import timing
+# from CacheRoute.util.timer import timing
 
 # 这些库可能不存在，所以用 try/except 处理
 try:
@@ -44,9 +45,31 @@ class TokenizerRegistry:
     # key 是“模型族”，value 是默认的 HF 模型名
     HF_FAMILY_DEFAULTS = {
         "qwen": "Qwen/Qwen2-1.5B",
-        "llama": "meta-llama/Meta-Llama-3-8B",
+        "llama": "meta-llama/Meta-Llama-3-70B",
         "deepseek": "deepseek-ai/deepseek-moe-16b",  # 你可以换成自己常用的
     }
+
+    @classmethod
+    def _is_local_model_dir(cls, name: str) -> bool:
+        """
+        判断 name 是否是本地模型目录（而不是 Hugging Face repo id）。
+        经验上：本地目录应当存在，且包含 tokenizer 文件之一。
+        """
+        if not name:
+            return False
+        if not os.path.isdir(name):
+            return False
+
+        # 常见 tokenizer 文件：tokenizer.json / tokenizer.model / vocab.json / merges.txt / special_tokens_map.json 等
+        markers = [
+            "tokenizer.json",
+            "tokenizer.model",
+            "vocab.json",
+            "merges.txt",
+            "special_tokens_map.json",
+            "tokenizer_config.json",
+        ]
+        return any(os.path.exists(os.path.join(name, m)) for m in markers)
 
     @classmethod
     def detect_family(cls, tokenizer_type: str) -> str:
@@ -66,6 +89,31 @@ class TokenizerRegistry:
 
         # 兜底归为 other
         return "other"
+
+    @classmethod
+    def _resolve_tokenizer_source(cls, model_name: str) -> str:
+        """
+        把 served-model-name / repo id / 本地路径 统一解析成 tokenizer 的加载源：
+        - 如果是本地目录：返回本地目录
+        - 如果在映射表里：返回映射到的本地目录
+        - 否则原样返回（可能是 repo id）
+        """
+        # 1) 本地目录直接返回
+        if cls._is_local_model_dir(model_name):
+            return model_name
+
+        # 2) served-name 映射
+        raw = os.getenv("SCHEDULER_TOKENIZER_MAP", "").strip()
+        if raw:
+            try:
+                mp = json.loads(raw)
+                if isinstance(mp, dict) and model_name in mp:
+                    return mp[model_name]
+            except Exception:
+                pass
+
+        # 3) fallback：原样
+        return model_name
 
     # ---------------- GPT 系列（tiktoken） ----------------
 
@@ -103,8 +151,15 @@ class TokenizerRegistry:
             return None
 
         try:
-            # trust_remote_code=True 方便适配 Qwen/DeepSeek 这类自定义 tokenizer
-            return AutoTokenizer.from_pretrained(hf_model_name, trust_remote_code=True,use_fast=True)
+            is_local = cls._is_local_model_dir(hf_model_name)
+
+            # 本地目录：强制只从本地加载，避免任何联网探测
+            return AutoTokenizer.from_pretrained(
+                hf_model_name,
+                trust_remote_code=True,
+                use_fast=True,
+                local_files_only=is_local,
+            )
         except Exception:
             return None
 
@@ -112,14 +167,20 @@ class TokenizerRegistry:
     # @timing
     def _hf_count_tokens(cls, text: str, family: str, model_name: str) -> Optional[int]:
         """
-        对 Qwen/LLaMA/DeepSeek 这类 HF 模型计数。
+        对 HF 模型计数。优先使用本地 tokenizer 目录，其次才用 repo id / family 默认。
         """
-        # 先看是不是直接给了完整 HF 模型名（如 'Qwen/Qwen2-1.5B'）
-        if "/" in model_name:
+        model_name = cls._resolve_tokenizer_source(model_name)
+
+        # 1) 本地目录优先
+        if cls._is_local_model_dir(model_name):
             hf_name = model_name
         else:
-            # 否则用 family 默认的 HF 名称
-            hf_name = cls.HF_FAMILY_DEFAULTS.get(family)
+            # 2) 如果像 repo id（包含一个 / 但不是本地目录），直接用它
+            if "/" in model_name:
+                hf_name = model_name
+            else:
+                # 3) 否则用 family 默认
+                hf_name = cls.HF_FAMILY_DEFAULTS.get(family)
 
         if hf_name is None:
             return None
@@ -129,8 +190,6 @@ class TokenizerRegistry:
             return None
 
         try:
-            # 对大部分 HF tokenizer，encode 返回 token id list
-            # add_special_tokens=False 避免再加 BOS/EOS 之类的
             return len(tok.encode(text, add_special_tokens=False))
         except Exception:
             return None
@@ -166,42 +225,48 @@ class TokenizerRegistry:
 
         # 1) GPT 系列 → tiktoken
         if family == "gpt":
-            print(f"user tokenizer {model_name} ")
+            print(f"[TokenizerRegistry] user tokenizer {model_name} ")
             n = cls._gpt_count_tokens(text, model_name)
             if n is not None:
                 return n
 
         # 2) Qwen / LLaMA / DeepSeek → HF tokenizer
         if family in {"qwen", "llama", "deepseek"}:
-            print(f"user tokenizer {model_name} ")
+            print(f"[TokenizerRegistry] user tokenizer {model_name} ")
             n = cls._hf_count_tokens(text, family, model_name)
             if n is not None:
-                return n
+                return n+1
 
         # 3) 其他 / 都失败 → 退化为按字符数估算
         return len(text)
 
     @classmethod
-    def warmup_tokenizers(cls,model_name:str):
+    def warmup_tokenizers(cls, model_name: str):
         """
-            预加载某个模型对应的 tokenizer，使后续 estimate_tokens 调用不再触发冷启动。
+        预加载某个模型对应的 tokenizer，使后续 estimate_tokens 不再触发冷启动。
+        本地目录：直接 warmup 本地 tokenizer，并强制 local_files_only。
         """
+        model_name = cls._resolve_tokenizer_source(model_name)
+
+        # 本地目录优先 warmup
+        if cls._is_local_model_dir(model_name):
+            cls._get_hf_tokenizer(model_name)
+            return
+
         family = cls.detect_family(model_name)
 
         if family == "gpt":
-            # 只会触发 _get_gpt_encoding 的 lru_cache
             cls._get_gpt_encoding(model_name)
-            print("tokenizer warmup successful")
-        elif family in {"qwen", "llama", "deepseek"}:
+            return
+
+        if family in {"qwen", "llama", "deepseek"}:
             if "/" in model_name:
                 hf_name = model_name
             else:
                 hf_name = cls.HF_FAMILY_DEFAULTS.get(family)
+
             if hf_name is not None:
                 cls._get_hf_tokenizer(hf_name)
-                print("tokenizer warmup successful")
-            else:
-                print("warmup failed, please check up model type.")
 
 
 # 为了用起来更方便，暴露一个顶层函数
