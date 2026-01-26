@@ -5,7 +5,7 @@
 (3)更新scheduler，摒弃之前的本地yaml构建方式，支持启动初始化从kdn进行snapshot抓取并构建知识清单。<br>
 (4)更新knowledge_base，支持sha256至int64映射（注：Faiss是通过INT64检索，而KDN形成的是sha256的str表达格式，所以在snap后需要进行映射。）<br>
 (5)优化scheduler_CLI，增强信息维护和交互命令行接口<br>
-<img width="554" height="509" alt="image" src="https://github.com/user-attachments/assets/696145ea-83ef-4e4a-b575-d1e74175ef72" />
+(6)scheduler新增功能，动态同步KDN知识库状态，采用两阶段增量刷新，第一阶段拉轻量元信息，对于变更项才拉取二阶段<br>
 
 ---
 涉及修改文件:<br>
@@ -18,5 +18,8 @@
 `store/knowledge_base.py`<br>
 `core/request.py`<br>
 `proxy/proxy.py`<br>
-`proxy/proxy.py`<br>
+`test/demo_scheduler.py`<br>
+
+涉及新增文件:<br>
+`scheduler/kdn_sync.py`<br>
 
