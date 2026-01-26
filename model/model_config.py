@@ -98,21 +98,93 @@ def _load_mapping(path: Union[str, pathlib.Path]) -> Dict[str, Dict[str, Any]]:
     return data
 
 
+def _normalize_model_key(model_name: str) -> str:
+    """
+    将外部传入的 model_name（可能是路径/别名/文件名）规范化为内部逻辑 key。
+
+    规则：
+      1) 如果是路径，取最后一段（basename）；
+      2) 去掉常见权重文件后缀（.bin / .pt / .safetensors）；
+      3) 通过别名表把各种写法统一到 YAML 中配置的标准 key；
+      4) 返回规范化后的“候选 key”（还需要在 get_config_by_model 中和 mapping 实际对照）。
+    """
+    s = str(model_name).strip()
+
+    # 1) 路径 → basename
+    if "/" in s or "\\" in s:
+        s = pathlib.Path(s).name  # e.g. DeepSeek-R1-Distill-Qwen-1.5B 或 deepseekv3.bin
+
+    # 2) 去掉常见权重后缀
+    for suf in (".bin", ".pt", ".safetensors"):
+        if s.endswith(suf):
+            s = s[: -len(suf)]
+            break
+
+    lower = s.lower()
+
+    # 3) 别名映射表：key 全部小写
+    ALIASES = {
+        # 这里可以按你的 YAML 配置来写“标准名”
+        # 思路：左边是各种乱写法（统一小写），右边是 YAML 里真正的 key
+        "deepseekv3": "DeepseekV3",
+        "deepseek-v3": "DeepseekV3",
+        "deepseek_r1_distill_qwen_1.5b": "DeepSeek-R1-Distill-Qwen-1.5B",
+        "deepseek-r1-distill-qwen-1.5b": "DeepSeek-R1-Distill-Qwen-1.5B",
+        # 以后有别的模型，直接在这里加
+    }
+
+    if lower in ALIASES:
+        return ALIASES[lower]
+
+    # 默认直接返回 basename 版本，后续再和 YAML keys 做一次大小写无关匹配
+    return s
+
+
 def get_config_by_model(model_name: str,
                             config_path: Union[str, pathlib.Path] = DEFAULT_CONFIG_PATH
                             ) -> ModelConfig:
     """
     根据模型名读取外部文件，返回对应的 ModelConfig。
+
+    支持的 model_name 形式：
+      - 逻辑名：DeepseekV3
+      - 逻辑名变种：deepseekv3 / DeepSeek-R1-Distill-Qwen-1.5B 等
+      - 路径：/workspace/.../DeepSeek-R1-Distill-Qwen-1.5B
+      - 文件名：DeepseekV3.bin / DeepSeek-R1-Distill-Qwen-1.5B.safetensors
+
+    内部会自动：
+      1) 规范化 model_name → 逻辑 key；
+      2) 先尝试精确匹配 mapping[key]；
+      3) 再用大小写无关的方式兜底。
     """
-    # print(DEFAULT_CONFIG_PATH)
     mapping = _load_mapping(config_path)
-    key = str(model_name)
-    if key not in mapping:
-        # 支持大小写/别名模糊匹配
+
+    # 第一步：规范化（处理路径/后缀/别名）
+    key_candidate = _normalize_model_key(model_name)
+
+    # 第二步：直接精确匹配（比如 YAML 里本来就写了 DeepSeek-R1-Distill-Qwen-1.5B）
+    if key_candidate in mapping:
+        key = key_candidate
+    else:
+        # 第三步：大小写无关匹配（再兜一层底）
         normalized = {k.lower(): k for k in mapping.keys()}
-        if key.lower() not in normalized:
-            raise KeyError(f"配置中不存在模型: {model_name}；可用项：{list(mapping.keys())}")
-        key = normalized[key.lower()]
+        cand_lower = key_candidate.lower()
+        if cand_lower in normalized:
+            key = normalized[cand_lower]
+        else:
+            # 再退一步：用原始 model_name 也尝试一次大小写无关匹配（防止 normalize 反而搞丢）
+            raw = str(model_name)
+            raw_lower = raw.lower()
+            if raw in mapping:
+                key = raw
+            elif raw_lower in normalized:
+                key = normalized[raw_lower]
+            else:
+                raise KeyError(
+                    f"配置中不存在模型: model_name={model_name}, "
+                    f"规范化后候选 key={key_candidate}；可用项：{list(mapping.keys())}"
+                )
+
     return ModelConfig.from_dict(mapping[key])
 
 
