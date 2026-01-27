@@ -139,6 +139,7 @@ Python版本：3.12.11<br>
 9. 在完成KDN预热后，依次启动调度器（调度器在初始化时会向KDN抓取可用知识信息）、代理、客户端和实例demo(在本地IDE调试可以直接用demo_run)
     ```
    cd test
+   ./quick_start_docker.sh
    python3 demo_scheduler.py
    python3 demo_proxy.py
    python3 demo_instance.py
