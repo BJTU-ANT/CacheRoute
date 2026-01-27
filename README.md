@@ -22,6 +22,8 @@
 涉及新增文件:<br>
 `scheduler/kdn_sync.py`<br>
 
+更多更新日志：https://github.com/BJTU-ANT/CacheRoute/tree/main/doc/blog
+
 ---
 
 ### CacheRoute
