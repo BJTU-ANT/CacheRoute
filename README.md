@@ -7,7 +7,7 @@
 (5)优化scheduler_CLI，增强信息维护和交互命令行接口<br>
 (6)scheduler新增功能，动态同步KDN知识库状态，采用两阶段增量刷新，第一阶段拉轻量元信息，对于变更项才拉取二阶段<br>
 
-更多日志：https://github.com/BJTU-ANT/CacheRoute/tree/main/doc/blog
+更多日志及其修改详情：https://github.com/BJTU-ANT/CacheRoute/tree/main/doc/blog
 
 ---
 
