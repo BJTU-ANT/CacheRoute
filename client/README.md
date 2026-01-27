@@ -11,13 +11,13 @@
 ### 请求示例
 示例以环回地址自测为例，实际使用url需要替换为scheduler的{ip_address:port}<br>
 (1) chat模式非流式请求：<br>
-  <img src="../.assets/readme_client_chat_completion.png" width="400" alt="client chat completion 示例"><br>
+  <img src="../.assets/readme_client_chat_completion.png" width="600" alt="client chat completion 示例"><br>
 
 
 (2) chat模式流式请求：<br>
-  <img src="../.assets/readme_client_chat_completion_stream.png" width="400" alt="client chat completion stream 示例"><br>
+  <img src="../.assets/readme_client_chat_completion_stream.png" width="600" alt="client chat completion stream 示例"><br>
 
 (3) completion模式（强制非流式）<br>
-  <img src="../.assets/readme_client_completion.png" width="400" alt="client completion 示例"><br>
+  <img src="../.assets/readme_client_completion.png" width="600" alt="client completion 示例"><br>
 
 
