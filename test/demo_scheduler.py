@@ -5,24 +5,17 @@ Scheduler_v1启动demo：
   - 使用 uvicorn 启动 HTTP 服务
 """
 
-import os, sys, logging, time
+import os, logging
 import uvicorn
-import threading
-
-from pathlib import Path
-
-ROOT_DIR = Path(__file__).resolve().parents[1]
-if str(ROOT_DIR) not in sys.path:
-    sys.path.append(str(ROOT_DIR))
 
 from scheduler import scheduler
-
+from core import config
 
 # 在 demo 里配置要预热的模型路径以及知识库路径
-MODEL_PATH = "/workspace/llm-stack/models/LLM-Research/Meta-Llama-3-70B-Instruct"
-KNOWLEDGE_YAML_PATH = ROOT_DIR / "data" / "knowledge_base.yaml"
-EMBEDDING_MODEL = "/workspace/llm-stack/CacheRoute/model/embedder/intfloat__multilingual-e5-large-instruct"
-KDN_BASE_URL = "http://127.0.0.1:9101"
+MODEL_PATH = config.DEFAULT_MODEL
+KNOWLEDGE_YAML_PATH = config.KNOWLEDGE_YAML_PATH
+EMBEDDING_MODEL = config.EMBEDDING_MODEL
+KDN_BASE_URL = config.DEFAULT_BASE_URL
 
 def main():
     # logging配置
