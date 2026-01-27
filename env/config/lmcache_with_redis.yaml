@@ -1,0 +1,14 @@
+chunk_size: 256
+
+local_cpu: true
+max_local_cpu_size: 80.0
+
+remote_url: "redis://127.0.0.1:6379"
+remote_serde: "cachegen"
+
+local_disk: null
+max_local_disk_size: 0
+
+save_decode_cache: false
+cache_policy: "LRU"
+numa_mode: null

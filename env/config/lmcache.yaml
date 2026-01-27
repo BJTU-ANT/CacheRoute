@@ -1,0 +1,10 @@
+chunk_size: 256
+local_cpu: true
+max_local_cpu_size: 64.0
+local_disk: "file:///workspace/llm-stack/lmcache-data/"
+max_local_disk_size: 200.0
+remote_url: null
+save_decode_cache: false
+cache_policy: "LRU"
+numa_mode: null
+

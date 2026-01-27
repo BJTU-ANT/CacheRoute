@@ -1,0 +1,7 @@
+{
+  "kv_connector": "lmcache",
+  "kv_role": "kv_both",
+  "kv_connector_extra_config": {
+    "config_file": "/workspace/llm-stack/config/lmcache.yaml"
+  }
+}
