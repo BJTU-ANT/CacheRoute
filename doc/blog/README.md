@@ -1,3 +1,4 @@
+### 260127 更新了env/README.md :完善了构建新版本的vllm+LMcache镜像的操作步骤
 ### 260126 大更新(v0.1.0)：重构scheduler，proxy和request部分的知识库维护部分，不再依赖本地yaml预设值。而是实现scheduler启动时抓取KDN服务器中的知识索引，构建自己的知识清单。
 
 (1)KDN_server的/search/text支持按field回传，而不是每次都回传整个结构体<br>
