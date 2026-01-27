@@ -22,13 +22,13 @@
 涉及新增文件:<br>
 `scheduler/kdn_sync.py`<br>
 
-更多更新日志：https://github.com/BJTU-ANT/CacheRoute/tree/main/doc/blog
+更多日志：https://github.com/BJTU-ANT/CacheRoute/tree/main/doc/blog
 
 ---
 
 ### CacheRoute
 
-<img width="1536" height="1024" alt="CacheRoute" src="https://github.com/user-attachments/assets/41d7577a-6670-4a32-bd96-6b50c7746547" />
+<img width="1536" height="369" alt="CacheRoute" src="https://github.com/user-attachments/assets/6050e71f-0e37-4cf9-b712-26e11242c9cd" />
 
 CacheRoute是一种新型的跨LLM系统任务调度平台。大语言模型的知识密集型业务（如浏览器AI、知识问答AI）涉及大量知识重用，而现有方法主要通过将知识的文本片段放在问题前作为prompt一同送入模型进行重计算。为减轻文本知识注入带来的计算压力，同时提升LLM系统的Prefill响应速度，CacheRoute设置KDN服务器保留热门知识的KVCache，并有选择性的启用基于KVCache的知识注入。它构建了一种任务调度模型，通过动态衡量任务队列情况以及网络和算力的资源负载，为每个任务动态地调整知识注入策略（基于文本的，基于KVCache的）来有效提升任务性能和系统吞吐量。具体内容见xxx。
 
