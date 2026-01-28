@@ -620,6 +620,27 @@ async def admin_refresh_knowledge():
         logger.exception(f"[Scheduler] admin refresh failed: {e}")
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
 
+
+@scheduler.get("/debug/strategy")
+async def debug_strategy() -> Dict[str, Any]:
+    strategy = getattr(scheduler.state, "proxy_strategy", None)  # type: ignore
+    pool = get_pool()
+    proxy_infos = await pool.list(include_dead=False)
+
+    # 只返回简要信息，避免输出过大
+    sample = [{
+        "proxy_id": p.proxy_id,
+        "host": p.host,
+        "port": p.port,
+        "is_alive": True,  # list(include_dead=False) 已保证 alive
+    } for p in proxy_infos[:10]]
+
+    return {
+        "strategy": getattr(strategy, "name", None) or type(strategy).__name__ if strategy else None,
+        "proxy_count": len(proxy_infos),
+        "proxies_sample": sample,
+    }
+
 # 预留：/knowledge/update 等路由以后再加
 # @api.post("/knowledge/update")
 # async def knowledge_update(request: FastAPIRequest):
