@@ -487,7 +487,7 @@ class Request:
         p_addr, p_port = "127.0.0.1", 8001
         # 若 scheduler 提供了策略和 proxy 列表，则在 build_request 内做选择
         try:
-            if proxies and strategy is not None:
+            if proxies and hasattr(strategy, "select"):
                 # 统一策略接口：要求策略提供 select(proxies, request_obj_like) 或 select(proxies, payload)
                 # 这里为了避免 build_request 依赖 scheduler 的 Request 类型，我们先把最小上下文传给策略：
                 chosen = strategy.select(proxies=proxies, payload=payload, url_path=url_path, user_addr=user_addr)
@@ -572,3 +572,4 @@ class Request:
             f"  User_url_path={self.Task.User_url_path},\n"
             f")"
         )
+
