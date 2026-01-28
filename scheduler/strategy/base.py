@@ -4,9 +4,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
-from scheduler.resource.proxy_pool import ProxyInfo
-from core import Request as SchedulerRequest  # 你 scheduler.py 里就是这么 import 的
-
 
 class ProxySelectionStrategy(ABC):
     """
@@ -25,4 +22,5 @@ class ProxySelectionStrategy(ABC):
         url_path: str,
         user_addr: str,
     ) -> Optional[Dict[str, Any]]:
+
         raise NotImplementedError
