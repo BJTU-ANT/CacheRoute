@@ -4,7 +4,7 @@ Scheduler_v1启动demo：
   - 引用 scheduler.py 里的 api
   - 使用 uvicorn 启动 HTTP 服务
 """
-
+import argparse
 import os, logging
 import uvicorn
 
@@ -16,6 +16,8 @@ MODEL_PATH = config.DEFAULT_MODEL
 KNOWLEDGE_YAML_PATH = config.KNOWLEDGE_YAML_PATH
 EMBEDDING_MODEL = config.EMBEDDING_MODEL
 KDN_BASE_URL = config.DEFAULT_BASE_URL
+dp_port = config.SCHEDULER_DP_PORT
+dp_host = config.SCHEDULER_DP_HOST
 
 def main():
     # logging配置
@@ -23,6 +25,10 @@ def main():
         level=logging.INFO,  # 根 logger 级别设为 INFO
         format=" [%(levelname)s] %(name)s: %(message)s",
     )
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--strategy", default="round_robin", help="proxy scheduling strategy")
+    args = parser.parse_args()
 
     # 把模型路径暴露给 scheduler（scheduler.py 里通过 os.getenv 读取）
     os.environ["SCHEDULER_MODEL_PATH"] = MODEL_PATH
@@ -32,10 +38,11 @@ def main():
     os.environ["SCHEDULER_EMBEDDING_MODEL"] = EMBEDDING_MODEL
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    os.environ["SCHEDULER_STRATEGY"] = args.strategy
 
 
     # 配置 uvicorn.Server
-    config = uvicorn.Config(scheduler, host="127.0.0.1", port=7001, reload=False)
+    config = uvicorn.Config(scheduler, host=dp_host, port=dp_port, reload=False)
     server = uvicorn.Server(config)
     server.run()
     print("[DEMO] Scheduler stopped, demo exit.")
