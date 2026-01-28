@@ -4,6 +4,10 @@ import shlex
 import time
 import requests
 
+from urllib.parse import urlparse, urlunparse
+
+from core import config
+
 """
 Scheduler CLI (HTTP Client)
 
@@ -15,20 +19,24 @@ Why this CLI:
 Required Scheduler endpoints:
 - GET  /debug/status
 - POST /debug/knowledge/peek
+etc.
 
 Usage:
   python3 scheduler_cli.py --base-url http://127.0.0.1:7001
 
 Interactive commands:
-  :help                          show help
-  :status                        show scheduler knowledge summary (entries/dim/faiss/kdn source)
-  :fields                        show KnowledgeUnit fields discovered from scheduler
-  :list [N]                      list first N kids (default 10)
-  :peek <kid> [kid2 ...]         show basic metadata for specified kids
-  :exit / :quit                  exit CLI
+  :help                         show help
+  :knowledge_status             show scheduler knowledge summary (entries/dim/faiss/kdn source)
+  :knowledge_schema             show KnowledgeUnit fields discovered from scheduler
+  :knowledge_list [N]           list first N kids (default 10)
+  :peek <kid> [kid2 ...]        show basic metadata for specified kids
+  :refresh                      trigger refresh from KDN immediately
+  :proxies [--all|-a]           show proxy pool information
+  :strategy                     show scheduler routing strategy
+  :exit / :quit                 exit CLI
 """
 
-DEFAULT_BASE_URL = os.getenv("SCHEDULER_BASE_URL", "http://127.0.0.1:7001").rstrip("/")
+DEFAULT_BASE_URL = os.getenv("SCHEDULER_BASE_URL", config.SCHEDULER_BASE_URL).rstrip("/")
 DEFAULT_TIMEOUT = 10
 
 
@@ -44,10 +52,28 @@ def http_post(base_url: str, path: str, payload: dict, timeout_s: int = DEFAULT_
     return r.json()
 
 
+def http_get_url(url: str, timeout_s: int = DEFAULT_TIMEOUT) -> dict:
+    r = requests.get(url, timeout=timeout_s)
+    r.raise_for_status()
+    return r.json()
+
+
 def _fmt_ts(ts: int | None) -> str:
     if not ts:
         return "None"
     return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(int(ts)))
+
+
+def infer_cp_url(base_url: str) -> str:
+    u = urlparse(base_url)
+    host = u.hostname or "127.0.0.1"
+    port = u.port
+
+    # 保守：无端口就默认 7002
+    cp_port = 7002 if port is None else (7002 if port == 7001 else port + 1)
+
+    scheme = u.scheme or "http"
+    return urlunparse((scheme, f"{host}:{cp_port}", "", "", "", ""))
 
 
 def cmd_status(base_url: str):
@@ -67,10 +93,10 @@ def cmd_status(base_url: str):
             print(f"    - {k}")
 
 
-def cmd_fields(base_url: str):
+def cmd_schema(base_url: str):
     s = http_get(base_url, "/debug/status")
     fields = s.get("unit_fields") or []
-    print("[UNIT_FIELDS]")
+    print("[KNOWLEDGE_SCHEMA]")
     if not fields:
         print("  (empty)  -> maybe knowledge not loaded or no sample unit")
         return
@@ -82,7 +108,7 @@ def cmd_list(base_url: str, n: int = 10):
     s = http_get(base_url, "/debug/status")
     kids = s.get("sample_kids") or []
     kids = kids[: max(1, n)]
-    print(f"[LIST] first {len(kids)} kids:")
+    print(f"[KNOWLEDGE_LIST] first {len(kids)} kids:")
     for k in kids:
         print(f"  - {k}")
 
@@ -129,16 +155,62 @@ def cmd_refresh(base_url: str):
     print(r)
 
 
+def cmd_proxies(cp_url: str, include_dead: bool = False):
+    data = http_get_url(f"{cp_url}/v1/proxy/list?include_dead={'true' if include_dead else 'false'}")
+    proxies = data if isinstance(data, list) else (data.get("items") or [])
+
+    print("[PROXY_POOL]")
+    print(f"  count: {len(proxies)}  include_dead={include_dead}")
+
+    for p in proxies:
+        pid = p.get("proxy_id")
+        host = p.get("host")
+        port = p.get("port")
+        alive = p.get("is_alive")
+        last_seen = p.get("last_seen_at")
+
+        # 兼容两种结构：平铺字段或 load 子对象
+        inflight = p.get("inflight")
+        gpu_util = p.get("gpu_util")
+        if inflight is None and isinstance(p.get("load"), dict):
+            inflight = p["load"].get("inflight")
+        if gpu_util is None and isinstance(p.get("load"), dict):
+            gpu_util = p["load"].get("gpu_util")
+
+        ls = "-"
+        if isinstance(last_seen, (int, float)):
+            ls = time.strftime("%H:%M:%S", time.localtime(int(last_seen)))
+
+        print(f"  - {pid}  {host}:{port}  alive={alive}  last_seen={ls}  inflight={inflight}  gpu_util={gpu_util}")
+
+
+def cmd_strategy(base_url: str):
+    r = http_get(base_url, "/debug/strategy")
+    print("[STRATEGY]")
+    print(f"  name: {r.get('strategy')}")
+    print(f"  proxy_count: {r.get('proxy_count')}")
+
+    sample = r.get("proxies_sample") or []
+    if sample:
+        print("  proxies_sample:")
+        for p in sample:
+            print(f"    - {p.get('proxy_id')} {p.get('host')}:{p.get('port')} alive={p.get('is_alive')}")
+
+
+
 def print_help():
     print("=" * 80)
     print("Scheduler CLI (HTTP)")
     print("")
     print("Commands:")
-    print("  :status                show scheduler knowledge summary")
-    print("  :fields                show KnowledgeUnit fields stored in scheduler")
-    print("  :list [N]              list first N kids (default 10)")
+    print("  :help                  show help menu")
+    print("  :knowledge_status      show scheduler knowledge summary")
+    print("  :knowledge_schema      show KnowledgeUnit shema stored in scheduler")
+    print("  :knowledge_list [N]    list first N kids (default 10)")
     print("  :peek <kid> [kid2 ...] show basic metadata for specified kids")
     print("  :refresh               trigger refresh from KDN immediately")
+    print("  :proxies [--all|-a]    show proxy pool information")
+    print("  :strategy              show scheduler routing strategy")
     print("  :exit / :quit          exit CLI")
     print("=" * 80)
 
@@ -146,11 +218,15 @@ def print_help():
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--base-url", default=DEFAULT_BASE_URL, help="Scheduler base url, e.g. http://127.0.0.1:7001")
+    ap.add_argument("--cp-url", default=os.getenv("SCHEDULER_CP_URL", ""),
+                    help="Control plane url, e.g. http://127.0.0.1:7002")
     args = ap.parse_args()
     base_url = args.base_url.rstrip("/")
+    cp_url = (args.cp_url.rstrip("/") if args.cp_url else infer_cp_url(base_url)).rstrip("/")
 
     print_help()
     print(f"[CLI] scheduler={base_url}")
+    print(f"[CLI] scheduler control_plane={cp_url}")
 
     while True:
         try:
@@ -172,7 +248,7 @@ def main():
             continue
 
         # status
-        if line == ":status":
+        if line == ":knowledge_status":
             try:
                 cmd_status(base_url)
             except Exception as e:
@@ -180,15 +256,15 @@ def main():
             continue
 
         # fields
-        if line == ":fields":
+        if line in (":knowledge_schema", ":fields"):
             try:
-                cmd_fields(base_url)
+                cmd_schema(base_url)
             except Exception as e:
-                print(f"[ERROR] fields failed: {e}")
+                print(f"[ERROR] schema failed: {e}")
             continue
 
         # list
-        if line.startswith(":list"):
+        if line.startswith(":knowledge_list"):
             tokens = shlex.split(line)
             n = 10
             if len(tokens) >= 2:
@@ -218,6 +294,25 @@ def main():
                 cmd_refresh(base_url)
             except Exception as e:
                 print(f"[ERROR] refresh failed: {e}")
+            continue
+
+        # proxies
+        if line.startswith(":proxies"):
+            tokens = shlex.split(line)
+            include_dead = ("--all" in tokens) or ("-a" in tokens)
+            try:
+                cmd_proxies(cp_url, include_dead=include_dead)
+            except Exception as e:
+                print(f"[ERROR] proxies failed: {e}")
+            continue
+
+        # strategy
+        if line == ":strategy":
+            try:
+                cmd_strategy(base_url)
+            except Exception as e:
+                print(f"[ERROR] strategy failed: {e}")
+                print("        ensure scheduler exposes GET /debug/strategy")
             continue
 
         print(f"[ERROR] Unknown command: {line!r}")
