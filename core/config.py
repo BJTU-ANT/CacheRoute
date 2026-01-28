@@ -53,7 +53,9 @@ CONTROL_PLANE_TTL_S = 30                                        # 控制平面TT
 HEARTBEAT_INTERVAL_S = 10                                       # 心跳包间隔时间（s）
 
 SCHEDULER_DP_PORT = 7001                                        # 业务平面监听端口
+SCHEDULER_DP_HOST = "127.0.0.1"                                 # 业务平面监听地址
 SCHEDULER_CP_PORT = 7002                                        # 控制平面监听端口
+SCHEDULER_CP_HOST = "127.0.0.1"                                 # 控制平面监听地址
 # ====================================================================#
 #                               Proxy                                 #
 # ====================================================================#
@@ -121,3 +123,4 @@ SYN_TIMEOUT = 3
 MOONCAKE_PROTOCOL = "tcp"
 # RDMA配置 设备名 可选 "" or "mlx5_0"
 MOONCAKE_DEVICE_NAME = ""
+
