@@ -4,12 +4,14 @@
 (2)scheduler实现基于轮询的调度策略，根据可用proxy选择轮询。scheduler内新建strategy目录，用于定义后续scheduler各种策略的具体实现方法。<br>
 (3)demo_scheduler，新增`-- strategy`可选项，用于启动scheduler时选择调度策略<br>
 (4)调度策略判定从scheduler主循环迁移至build_request，优化结构<br>
+(5)丰富scheduler的cli功能，能够查看proxy池简易状态<br>
 
 涉及修改文件:<br>
 `core/config.py`<br>
 `core/request.py`<br>
 `scheduler/resource/control_plane.py`<br>
 `scheduler/scheduler.py`<br>
+`scheduler/scheduler_cli.py`<br>
 `test/demo_scheduler.py`<br>
 
 涉及新增文件:<br>
