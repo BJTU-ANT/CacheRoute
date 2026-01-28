@@ -1,11 +1,10 @@
-### 260126 大更新(v0.1.0)：重构scheduler，proxy和request部分的知识库维护部分，不再依赖本地yaml预设值。而是实现scheduler启动时抓取KDN服务器中的知识索引，构建知识清单。
+### 260128 scheduler控制平面维护结构构建，proxy对接接口构建
 
-(1)KDN_server的/search/text支持按field回传，而不是每次都回传整个结构体<br>
-(2)KDN_server支持/snapshot整个知识库状态用于scheduler更新<br>
-(3)更新scheduler，摒弃之前的本地yaml构建方式，支持启动初始化从kdn进行snapshot抓取并构建知识清单。<br>
-(4)更新knowledge_base，支持sha256至int64映射（注：Faiss是通过INT64检索，而KDN形成的是sha256的str表达格式，所以在snap后需要进行映射。）<br>
-(5)优化scheduler_CLI，增强信息维护和交互命令行接口<br>
-(6)scheduler新增功能，动态同步KDN知识库状态，采用两阶段增量刷新，第一阶段拉轻量元信息，对于变更项才拉取二阶段<br>
+(1)新增维护proxy信息的结构体，包含静态信息（如注册时携带的信息`proxy_id/host/port/endpoints/tags/weight/meta`），和动态信息（如`load`，`last_seen`）。scheduler在初始化时会启用业务和控制两个平面，[业务平面]-[池信息结构体]-[控制平面]。scheduler在startup时创建pool。控制平面`control_plane.py`动态修改Proxy资源池信息，后续业务平面执行调度策略时会抓取proxy资源池信息。<br>
+(2)scheduler实现基于轮询的调度策略，根据可用proxy选择轮询。scheduler内新建strategy目录，用于定义后续scheduler各种策略的具体实现方法。<br>
+(3)demo_scheduler，新增`-- strategy`可选项，用于启动scheduler时选择调度策略<br>
+(4)调度策略判定从scheduler主循环迁移至build_request，优化结构<br>
+(5)丰富scheduler的cli功能，能够查看proxy池简易状态<br>
 
 更多日志及其修改详情：https://github.com/BJTU-ANT/CacheRoute/tree/main/doc/blog
 
