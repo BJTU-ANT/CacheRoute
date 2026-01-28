@@ -1,12 +1,22 @@
 ### 260128 scheduler控制平面维护结构构建，proxy对接接口构建
 
-(1)新增维护proxy信息的结构体，包含静态信息（如注册时携带的信息`proxy_id/host/port/endpoints/tags/weight/meta`），和动态信息（如`load`，`last_seen`）<br>
+(1)新增维护proxy信息的结构体，包含静态信息（如注册时携带的信息`proxy_id/host/port/endpoints/tags/weight/meta`），和动态信息（如`load`，`last_seen`）。scheduler在初始化时会启用业务和控制两个平面，[业务平面]-[池信息结构体]-[控制平面]。scheduler在startup时创建pool。控制平面`control_plane.py`动态修改Proxy资源池信息，后续业务平面执行调度策略时会抓取proxy资源池信息。<br>
+(2)scheduler实现基于轮询的调度策略，根据可用proxy选择轮询。scheduler内新建strategy目录，用于定义后续scheduler各种策略的具体实现方法。<br>
+(3)demo_scheduler，新增`-- strategy`可选项，用于启动scheduler时选择调度策略<br>
+(4)调度策略判定从scheduler主循环迁移至build_request，优化结构<br>
 
 涉及修改文件:<br>
+`core/config.py`<br>
+`core/request.py`<br>
 `scheduler/resource/control_plane.py`<br>
+`scheduler/scheduler.py`<br>
+`test/demo_scheduler.py`<br>
 
 涉及新增文件:<br>
 `scheduler/resource/proxy_pool.py`<br>
+`scheduler/stategy/base.py`<br>
+`scheduler/stategy/factory.py`<br>
+`scheduler/stategy/round_robin.py`<br>
 
 维护者：heyao
 
@@ -17,7 +27,7 @@
 (1)更新env/README.md: 构建新版本的vllm+LMcache镜像的操作步骤<br>
 (2)新增启动脚本，支持容器容器和多开窗口，提升测试效率<br>
 (3)抽离demo_scheduler.py本地配置参数，统一送入core/config文件<br>
-(4)调整了scheduler内目录结构，按功能新增knowledge（用于维护知识清单）和resource（维护可用proxy及其计算网络资源）
+(4)调整了scheduler内目录结构，按功能新增knowledge（用于维护知识清单）和resource（维护可用proxy及其计算网络资源）<br>
 (5)新增scheduler的控制平面接口，它在scheduler初始化时被自动拉起监听，用于与proxy交互进行proxy注册以及后续的资源同步。
 
 涉及修改文件:<br>
