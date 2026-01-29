@@ -1,3 +1,22 @@
+### 260129 Proxy对接接口构建
+
+(1)构建与scheduler对接的proxy交互方法，使得proxy在启动时自动注册，然后动态发心跳包保活，退出后自动注销<br>
+(2)新增`proxy/sclient`目录，用于维护与scheduler交互的client方法<br>
+(3)新增`proxy/metrics`目录，用于后续处理从instance池抓取资源的整合处理(_TODO. sihan_)，随后通过心跳包上传至scheduler<br>
+(4)proxy依然是一个双平面结构（业务平面+控制平面）业务平面默认端口8001，proxy在初始化时应向scheduler注册的端口。控制平面默认8002，它用于作为instance交互proxy的端口，用于更新instance状态并维护instance池状态。proxy业务平面执行策略时将instance池状态作为输入执行具体策略。<br>
+
+涉及修改文件:<br>
+`proxy/proxy.py`<br>
+`core/config.py`<br>
+
+涉及新增文件:<br>
+`proxy/sclient/scheduler_client.py`<br>
+`proxy/metrics/local_metrics.py`
+
+维护者：heyao
+
+---
+
 ### 260128 scheduler控制平面维护结构构建，proxy对接接口构建
 
 (1)新增维护proxy信息的结构体，包含静态信息（如注册时携带的信息`proxy_id/host/port/endpoints/tags/weight/meta`），和动态信息（如`load`，`last_seen`）。scheduler在初始化时会启用业务和控制两个平面，[业务平面]-[池信息结构体]-[控制平面]。scheduler在startup时创建pool。控制平面`control_plane.py`动态修改Proxy资源池信息，后续业务平面执行调度策略时会抓取proxy资源池信息。<br>
