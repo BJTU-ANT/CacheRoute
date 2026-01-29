@@ -16,7 +16,7 @@
 一些提上日程的工作：<br>
 (1)KDN服务器的UI搭建，重点是知识可读性（_TODO. chen_）<br>
 (2)instance侧需要搭建一个灵活的资源检索平台(主要是基于vllm平台抓取信息)，使得instance面向proxy暴露动态更新的实例负载信息，便于proxy抓取（_TODO. sihan_）<br>
-(3)scheduler对池级业务流状态维护_(TODO. heyao)_<br>
+(3)scheduler对池级业务流状态维护(_TODO. heyao_)<br>
 
 维护者：heyao
 
