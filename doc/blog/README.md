@@ -2,7 +2,7 @@
 
 (1)构建与scheduler对接的proxy交互方法，使得proxy在启动时自动注册，然后动态发心跳包保活，退出后自动注销<br>
 (2)新增`proxy/sclient`目录，用于维护与scheduler交互的client方法<br>
-(3)新增`proxy/metrics`目录，用于后续处理从instance池抓取资源的整合处理(_TODO. sihan_)，随后通过心跳包上传至scheduler<br>
+(3)新增`proxy/metrics`目录，用于后续处理从instance池抓取资源的整合处理，随后通过心跳包上传至scheduler<br>
 (4)proxy依然是一个双平面结构（业务平面+控制平面）业务平面默认端口8001，proxy在初始化时应向scheduler注册的端口。控制平面默认8002，它用于作为instance交互proxy的端口，用于更新instance状态并维护instance池状态。proxy业务平面执行策略时将instance池状态作为输入执行具体策略。<br>
 
 涉及修改文件:<br>
@@ -12,6 +12,11 @@
 涉及新增文件:<br>
 `proxy/sclient/scheduler_client.py`<br>
 `proxy/metrics/local_metrics.py`
+
+一些提上日程的工作：<br>
+(1)KDN服务器的UI搭建，重点是知识可读性（_TODO. chen_）<br>
+(2)instance侧需要搭建一个灵活的资源检索平台(主要是基于vllm平台抓取信息)，使得instance面向proxy暴露动态更新的实例负载信息，便于proxy抓取（_TODO. sihan_）<br>
+(3)scheduler对池级业务流状态维护_(TODO. heyao)_<br>
 
 维护者：heyao
 
