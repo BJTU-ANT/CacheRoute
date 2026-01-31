@@ -15,27 +15,84 @@ vllm实例与proxy之间的适配层instance：
 
 from __future__ import annotations
 
-# import os
-# import asyncio
+import os
+import asyncio
 import json
 # import time
 
 from typing import Any, AsyncGenerator, Dict
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request as FastAPIRequest
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from core import forward_request
+from core import forward_request, config
 from .mock_resp import (mock_text_completion,
                         mock_chat_completion,
                         mock_chat_stream
                         )
-from core.config import USE_MOCK,VLLM_BASE_URL
 from util import parse_stream_flag
+from instance.pclient.proxy_client import ProxyControlClient
 
-instance = FastAPI(title="Instance v1")
 
-vllm_base_url = VLLM_BASE_URL.rstrip("/")
-use_mock = True if USE_MOCK else False
+PROXY_CP_URL = os.environ.get("PROXY_CP_URL", config.PROXY_CP_URL).rstrip("/")
+INSTANCE_ADVERTISE_HOST = os.environ.get("INSTANCE_ADVERTISE_HOST", config.INSTANCE_HOST)
+INSTANCE_ADVERTISE_PORT = int(os.environ.get("INSTANCE_ADVERTISE_PORT", os.environ.get("INSTANCE_PORT", config.INSTANCE_PORT)))
+INSTANCE_ID = os.environ.get("INSTANCE_ID", f"hp_{INSTANCE_ADVERTISE_HOST}:{INSTANCE_ADVERTISE_PORT}")
+
+vllm_base_url = config.VLLM_BASE_URL.rstrip("/")
+use_mock = True if config.USE_MOCK else False
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    client = ProxyControlClient(PROXY_CP_URL, timeout_s=5.0)
+    stop = asyncio.Event()
+    app.state._pc = client # type: ignore
+    app.state._stop = stop # type: ignore
+
+    try:
+        reg = await client.register(
+            instance_id=INSTANCE_ID,
+            host=INSTANCE_ADVERTISE_HOST,
+            port=INSTANCE_ADVERTISE_PORT,
+            endpoints=["chat/completions", "completions"],
+            meta={"version": "instance_v1"},
+        )
+        interval = float(reg.heartbeat_interval_s) if reg.heartbeat_interval_s else 10.0
+    except Exception as e:
+        # 不阻塞 instance 业务启动：注册失败时 proxy 看不到，但 instance 自己仍可跑
+        interval = 10.0
+
+    async def _hb():
+        while not stop.is_set():
+            try:
+                await client.heartbeat(INSTANCE_ID)
+            except Exception:
+                pass
+            await asyncio.sleep(interval)
+
+    task = asyncio.create_task(_hb())
+    app.state._hb_task = task # type: ignore
+
+    try:
+        yield
+    finally:
+        stop.set()
+        try:
+            task.cancel()
+        except Exception:
+            pass
+        try:
+            await client.unregister(INSTANCE_ID)
+        except Exception:
+            pass
+        try:
+            await client.close()
+        except Exception:
+            pass
+
+instance = FastAPI(title="Instance v1", lifespan=lifespan)
+
+
 
 
 
