@@ -1,10 +1,15 @@
-### 260128 scheduler控制平面维护结构构建，proxy对接接口构建
+### 260130 (v0.1.1) Proxy与Instance之间的接口功能完善
 
-(1)新增维护proxy信息的结构体，包含静态信息（如注册时携带的信息`proxy_id/host/port/endpoints/tags/weight/meta`），和动态信息（如`load`，`last_seen`）。scheduler在初始化时会启用业务和控制两个平面，[业务平面]-[池信息结构体]-[控制平面]。scheduler在startup时创建pool。控制平面`control_plane.py`动态修改Proxy资源池信息，后续业务平面执行调度策略时会抓取proxy资源池信息。<br>
-(2)scheduler实现基于轮询的调度策略，根据可用proxy选择轮询。scheduler内新建strategy目录，用于定义后续scheduler各种策略的具体实现方法。<br>
-(3)demo_scheduler，新增`-- strategy`可选项，用于启动scheduler时选择调度策略<br>
-(4)调度策略判定从scheduler主循环迁移至build_request，优化结构<br>
-(5)丰富scheduler的cli功能，能够查看proxy池简易状态<br>
+(1)实现proxy控制平面逻辑Fastapi(8002)，供Instance调用register/heartbeat/unregister/list<br>
+(2)构建描述Instance状态的结构体`InstancePool`，描述Instance池ID，Instance负载信息等状态<br>
+(3)支持proxy在lifespan启动时构建InstancePool，注入控制平面并启动控制平面。支持proxy在注销时在注销时退出控制平面并上报scheduler。<br>
+(4)支持Instance与proxy控制平面之间的交互，register/heartbeat/unregister<br>
+
+一些提上日程的工作：<br>
+(1)KDN服务器的UI搭建，重点是知识可读性（_TODO. chen_）<br>
+(2)instance侧需要搭建一个灵活的资源检索平台(主要是基于vllm平台抓取信息)，使得instance面向proxy暴露动态更新的实例负载信息，便于proxy抓取（_TODO. sihan_）<br>
+(3)scheduler对池级业务流状态维护(_TODO. heyao_)<br>
+(4)proxy调度策略接入Instance池<br>
 
 更多日志及其修改详情：https://github.com/BJTU-ANT/CacheRoute/tree/main/doc/blog
 
