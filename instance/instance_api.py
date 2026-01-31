@@ -57,17 +57,30 @@ async def lifespan(app: FastAPI):
             endpoints=["chat/completions", "completions"],
             meta={"version": "instance_v1"},
         )
+        runtime_instance_id = reg.instance_id
         interval = float(reg.heartbeat_interval_s) if reg.heartbeat_interval_s else 10.0
+        print(
+            f"[Instance] registered to proxy_cp={PROXY_CP_URL} "
+            f"id={reg.instance_id} advertise={INSTANCE_ADVERTISE_HOST}:{INSTANCE_ADVERTISE_PORT} "
+            f"hb={reg.heartbeat_interval_s}s ttl={reg.ttl_s}s"
+        )
     except Exception as e:
         # 不阻塞 instance 业务启动：注册失败时 proxy 看不到，但 instance 自己仍可跑
         interval = 10.0
+        runtime_instance_id = INSTANCE_ID
+        print(f"[Instance][WARN] register failed: proxy_cp={PROXY_CP_URL} err={e}")
 
     async def _hb():
+        fail = 0
         while not stop.is_set():
             try:
-                await client.heartbeat(INSTANCE_ID)
-            except Exception:
-                pass
+                await client.heartbeat(runtime_instance_id)
+                fail = 0
+            except Exception as e:
+                fail += 1
+                # 每 6 次失败打一次，避免刷屏
+                if fail % 6 == 0:
+                    print(f"[Instance][WARN] heartbeat failed x{fail}: proxy_cp={PROXY_CP_URL} err={e}")
             await asyncio.sleep(interval)
 
     task = asyncio.create_task(_hb())
@@ -82,7 +95,7 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
         try:
-            await client.unregister(INSTANCE_ID)
+            await client.unregister(runtime_instance_id)
         except Exception:
             pass
         try:
