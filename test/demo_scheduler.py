@@ -15,7 +15,7 @@ from core import config
 MODEL_PATH = config.DEFAULT_MODEL
 KNOWLEDGE_YAML_PATH = config.KNOWLEDGE_YAML_PATH
 EMBEDDING_MODEL = config.EMBEDDING_MODEL
-KDN_BASE_URL = config.DEFAULT_BASE_URL
+KDN_BASE_URL = config.KDN_BASE_URL
 dp_port = config.SCHEDULER_DP_PORT
 dp_host = config.SCHEDULER_DP_HOST
 
@@ -50,3 +50,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
