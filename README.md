@@ -146,7 +146,7 @@ Python版本：3.12.11<br>
    ./quick_start_docker.sh
    python3 demo_scheduler.py
    python3 demo_proxy.py
-   python3 demo_instance.py
+   python3 demo_instance.py --port <default 9001> --host <xxx>
    python3 demo_client.py 或 demo_client.py --with-ui（推荐，启动有UI界面的版本，支持自动校验报文）
    ```
    **注意**：如果执行时出现import报错，为容器添加关于项目的工作路径：
