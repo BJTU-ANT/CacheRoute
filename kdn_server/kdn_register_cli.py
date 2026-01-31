@@ -31,7 +31,7 @@ HTTP endpoints:
 - --status-kid <kid>            查询指定kid的状态
 """
 
-DEFAULT_BASE_URL = config.DEFAULT_BASE_URL
+DEFAULT_BASE_URL = config.KDN_BASE_URL
 DEFAULT_WARN_LEN = config.DEFAULT_WARN_LEN
 
 # build_kv 的默认值（与你服务端默认保持一致）
@@ -473,4 +473,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
