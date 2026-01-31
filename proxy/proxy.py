@@ -19,6 +19,7 @@ import os
 import json
 import asyncio
 import logging
+import uvicorn
 
 from contextlib import asynccontextmanager
 from dataclasses import fields
@@ -33,16 +34,21 @@ from core import forward_request
 from core import config
 
 from proxy.sclient.scheduler_client import SchedulerControlClient
+from proxy.resource.instance_pool import InstancePool
+from proxy.resource import p_control_plane
 
 SCHEDULER_CP_URL = os.environ.get("SCHEDULER_CP_URL", config.SCHEDULER_CP_URL).rstrip("/")
-KDN_BASE_URL = os.environ.get("KDN_BASE_URL", config.DEFAULT_BASE_URL).rstrip("/")
+KDN_BASE_URL = os.environ.get("KDN_BASE_URL", config.KDN_BASE_URL).rstrip("/")
 
-PROXY_PORT = int(os.environ.get("PROXY_PORT", "8002"))
-PROXY_ADVERTISE_HOST = os.environ.get("PROXY_ADVERTISE_HOST", config.PROXY_CP_HOST)
-PROXY_ADVERTISE_PORT = int(os.environ.get("PROXY_ADVERTISE_PORT", str(config.PROXY_CP_PORT)))
+# PROXY_PORT = int(os.environ.get("PROXY_PORT", "8002"))
+PROXY_ADVERTISE_HOST = os.environ.get("PROXY_ADVERTISE_HOST", config.PROXY_DP_HOST)
+PROXY_ADVERTISE_PORT = int(os.environ.get("PROXY_ADVERTISE_PORT", str(config.PROXY_DP_PORT)))
 PROXY_ID = os.environ.get("PROXY_ID", f"hp_{PROXY_ADVERTISE_HOST}:{PROXY_ADVERTISE_PORT}")
 PROXY_HEARTBEAT_S = float(os.environ.get("PROXY_HEARTBEAT_S", config.HEARTBEAT_INTERVAL_S))
 
+# NOTE:
+# This is a TEMPORARY fallback for legacy request path.
+# It MUST be removed once instance_pool-based routing is enabled.
 INSTANCE_PORT = int(os.environ.get("INSTANCE_PORT", "9001"))
 
 logger = logging.getLogger("proxy")
@@ -58,6 +64,32 @@ async def lifespan(app: FastAPI):
       - running: 周期心跳，保证 proxy_pool 不过期
       - shutdown: 优雅注销（非强依赖，kill -9 情况靠 TTL 清理）
     """
+    # --- 初始化实例池，并注入proxy控制平面 ---
+    ttl_s = int(os.environ.get("PROXY_INSTANCE_TTL_S", config.INSTANCE_ALIVE_TTL_S))
+    app.state.instance_pool = InstancePool(ttl_s=ttl_s)  # type: ignore
+    p_control_plane.set_pool(app.state.instance_pool)  # type: ignore
+
+    # ---尝试启动proxy控制平面，用于与Instance交互来动态刷新Instance池 ---
+    cp_host = os.environ.get("PROXY_CP_HOST", config.PROXY_CP_HOST)
+    cp_port = int(os.environ.get("PROXY_CP_PORT", config.PROXY_CP_PORT))
+
+    cp_config = uvicorn.Config(
+        p_control_plane.control_plane,
+        host=cp_host,
+        port=cp_port,
+        log_level="info",
+        # 重要：不要启用 reload / workers，embedded 场景保持单进程单实例
+    )
+    cp_server = uvicorn.Server(cp_config)
+    app.state._cp_server = cp_server  # type: ignore
+
+    async def _run_cp():
+        await cp_server.serve()
+
+    app.state._cp_task = asyncio.create_task(_run_cp())  # type: ignore
+    logger.info("[Proxy] control plane started: http://%s:%s", cp_host, cp_port)
+
+    # --- 启用scheduler客户端，尝试与scheduler交互并注册、与scheduler保活 ---
     client = SchedulerControlClient(SCHEDULER_CP_URL, timeout_s=5.0)
     app.state._sched_client = client  # type: ignore
     app.state._proxy_id = PROXY_ID    # type: ignore
@@ -97,7 +129,23 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        # 3) shutdown: stop heartbeat + unregister
+        # 关闭控制平面
+        try:
+            srv = getattr(app.state, "_cp_server", None)  # type: ignore
+            t = getattr(app.state, "_cp_task", None)  # type: ignore
+            if srv is not None:
+                srv.should_exit = True
+                srv.force_exit = True
+            if t is not None:
+                # 不要长时间 await；给它一个很短的机会退出即可
+                try:
+                    await asyncio.wait_for(t, timeout=2.0)
+                except Exception:
+                    t.cancel()
+        except Exception:
+            pass
+
+        # 向scheduler汇报
         try:
             app.state._hb_stop.set()  # type: ignore
             task = getattr(app.state, "_hb_task", None)  # type: ignore
