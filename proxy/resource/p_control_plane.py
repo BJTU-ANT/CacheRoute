@@ -1,4 +1,5 @@
 # proxy/resource/p_control_plane.py
+
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
@@ -7,6 +8,9 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 from .instance_pool import InstancePool
+
+import logging
+logger = logging.getLogger("proxy.p_control_plane")
 
 
 _control_plane = FastAPI(title="CacheRoute Proxy Control Plane", version="v1")
@@ -64,6 +68,12 @@ async def register(req: InstanceRegisterReq) -> Dict[str, Any]:
         weight=req.weight,
         meta=req.meta,
     )
+
+    logger.info(
+        "[ProxyCP] instance register: id=%s addr=%s:%s endpoints=%s tags=%s weight=%s meta=%s",
+        it.instance_id, it.host, it.port, it.endpoints, it.tags, it.weight, it.meta
+    )
+
     # 给 instance 建议心跳周期：固定 10s，或 ttl/3（取较小）
     hb = min(10, max(1, pool.ttl_s // 3))
     return {
@@ -82,6 +92,9 @@ async def heartbeat(req: InstanceHeartbeatReq) -> Dict[str, Any]:
         qps_1m=req.qps_1m,
         gpu_util=req.gpu_util,
     )
+    if not ok:
+        logger.warning("[ProxyCP] heartbeat for unknown instance_id=%s", req.instance_id)
+
     return {"ok": ok}
 
 
@@ -89,6 +102,7 @@ async def heartbeat(req: InstanceHeartbeatReq) -> Dict[str, Any]:
 async def unregister(req: InstanceUnregisterReq) -> Dict[str, Any]:
     pool = get_pool()
     ok = pool.remove(req.instance_id)
+    logger.info("[ProxyCP] instance unregister: id=%s ok=%s", req.instance_id, ok)
     return {"ok": ok}
 
 
