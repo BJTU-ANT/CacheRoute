@@ -1,3 +1,21 @@
+### 260201 Proxy_CLI显示输出功能
+
+(1)支持proxy_CLI开发，显示输出实例池、proxy信息，并维护使用方法<br>
+
+涉及修改文件:<br>
+`proxy/proxy_cli.py`<br>
+`proxy/README.md`<br>
+
+一些提上日程的工作：<br>
+(1)KDN服务器的UI搭建，重点是知识可读性（_TODO. chen_）<br>
+(2)instance侧需要搭建一个灵活的资源检索平台(主要是基于vllm平台抓取信息)，使得instance面向proxy暴露动态更新的实例负载信息，便于proxy抓取（_TODO. sihan_）<br>
+(3)scheduler对池级业务流状态维护(_TODO. heyao_)<br>
+(4)proxy调度策略接入Instance池<br>
+
+维护者：heyao
+
+---
+
 ### 260131 一些有关Instance的功能完善
 
 (1)Instance支持启动多个不同端口号的实例，解决了多个Instance下proxy注册失败问题<br>
@@ -7,12 +25,6 @@
 `proxy/resource/p_control_plane.py`<br>
 `instance/instance_api.py`<br>
 `test/demo_instance.py`<br>
-
-一些提上日程的工作：<br>
-(1)KDN服务器的UI搭建，重点是知识可读性（_TODO. chen_）<br>
-(2)instance侧需要搭建一个灵活的资源检索平台(主要是基于vllm平台抓取信息)，使得instance面向proxy暴露动态更新的实例负载信息，便于proxy抓取（_TODO. sihan_）<br>
-(3)scheduler对池级业务流状态维护(_TODO. heyao_)<br>
-(4)proxy调度策略接入Instance池<br>
 
 维护者：heyao
 
