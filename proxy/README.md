@@ -24,6 +24,7 @@ python3 proxy/proxy_cli.py --<option>
 `--proxy-id`： 当前 proxy_id（默认从环境变量 PROXY_ID 读取）<br>
 `--scheduler-proxy-list-path`： Scheduler “代理列表”接口路径（默认 /v1/proxy/list)<br>
 `--timeout`： HTTP 超时时间（默认 5s）<br>
+
 支持进入后的REPL命令：
 `:help`: 查看命令帮助<br>
 `:status`: 查看 Proxy 控制平面健康状态与实例计数<br>
@@ -32,4 +33,16 @@ python3 proxy/proxy_cli.py --<option>
 `:watch [--all] [--interval S] [--limit N]`: 持续刷新（Ctrl+C 停止），用于观察 TTL/心跳是否稳定<br>
 `:scheduler`: 查询 Scheduler 控制平面，看当前 proxy_id 是否已注册/在线<br>
 `:exit/:quit`: 退出 REPL<br>
+
+启动<br>
+<img width="1200" height="125" alt="图片" src="https://github.com/user-attachments/assets/07b78380-bd7d-47ae-8f7d-f45cdd7882cb" />
+
+命令集合<br>
+<img width="1200" height="418" alt="图片" src="https://github.com/user-attachments/assets/0e161d8a-1321-436c-a78d-81feae125987" />
+
+查看proxy-scheduler信息<br>
+<img width="1200" height="184" alt="图片" src="https://github.com/user-attachments/assets/192ae569-d0ac-419c-b84f-db1c2a7a0f31" />
+
+查看实例池<br>
+<img width="1200" height="144" alt="图片" src="https://github.com/user-attachments/assets/183ccc5b-65dc-426d-843a-c8c1509fb7ab" />
 
