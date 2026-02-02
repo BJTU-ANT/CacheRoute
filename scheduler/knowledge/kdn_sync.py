@@ -25,11 +25,39 @@ from .kdn_client import fetch_kdn_snapshot, fetch_kdn_items_by_kids
 _kdn_meta_cache: Dict[str, Tuple] = {}
 
 
+def _format_kdn_addr(host: str, port: int) -> str:
+    return f"kdn://{host}:{int(port)}"
+
+
+async def select_kdn_base_url(app) -> tuple[str | None, list[str]]:
+    """
+    Select one alive KDN server from scheduler's kdn_pool.
+    Returns:
+      - base_url: "http://host:port" or None
+      - alive_addrs: ["kdn://host:port", ...] (for KnowledgeUnit.avail_kdn_servers)
+    """
+    pool = getattr(app.state, "kdn_pool", None)
+    if pool is None:
+        return None, []
+
+    alive = await pool.list(include_dead=False)
+    if not alive:
+        return None, []
+
+    # Round-robin index stored on app.state (best-effort)
+    idx = int(getattr(app.state, "_kdn_rr_idx", 0) or 0)
+    chosen = alive[idx % len(alive)]
+    app.state._kdn_rr_idx = idx + 1
+
+    base_url = f"http://{chosen.host}:{int(chosen.port)}"
+    alive_addrs = [_format_kdn_addr(x.host, x.port) for x in alive]
+    return base_url, alive_addrs
+
 
 def build_table_from_kdn_items(
     items: List[dict],
     dim: int,
-    kdn_base_url: str,
+    avail_kdn_servers: List[str],
 ) -> KnowledgeTable:
     """
     Build a KnowledgeTable from KDN snapshot items.
@@ -61,7 +89,7 @@ def build_table_from_kdn_items(
         unit = KnowledgeUnit(
             embedding=list(emb),
             length=length,
-            avail_kdn_servers=[f"kdn://{kdn_base_url.replace('http://','').replace('https://','')}"],
+            avail_kdn_servers=list(avail_kdn_servers or []),
             text_abstract=None,
 
             # KV metadata
@@ -89,9 +117,9 @@ async def kdn_refresh_once(app) -> dict:
         raise RuntimeError("scheduler.state._kdn_refresh_lock is not initialized")
 
     async with lock:
-        kdn_base_url = getattr(app.state, "kdn_base_url", None)
+        kdn_base_url, alive_addrs = await select_kdn_base_url(app)
         if not kdn_base_url:
-            return {"ok": False, "reason": "kdn_base_url not set"}
+            return {"ok": False, "reason": "no alive kdn in pool"}
 
         # A) 拉轻量 meta snapshot
         meta_items = await fetch_kdn_snapshot(
@@ -102,7 +130,17 @@ async def kdn_refresh_once(app) -> dict:
 
         added, updated, removed = diff_kdn_meta(meta_items)
 
-        table: KnowledgeTable = app.state.knowledge_table
+        table = getattr(app.state, "knowledge_table", None)
+        if table is None:
+            # 首次构建：使用 scheduler embedder 的 dim（最可靠）
+            embedder = getattr(app.state, "embedding_engine", None)
+            if embedder is None:
+                raise RuntimeError("embedding_engine is not initialized; cannot build KnowledgeTable")
+
+            table = KnowledgeTable(dim=int(embedder.dim))
+            app.state.knowledge_table = table
+            logger.info("[Scheduler] KnowledgeTable initialized (first build), dim=%s", embedder.dim)
+
         changed = False
 
         # B) 新增 / 更新
@@ -124,7 +162,7 @@ async def kdn_refresh_once(app) -> dict:
                 unit = KnowledgeUnit(
                     embedding=list(emb),
                     length=int(it.get("length") or 0),
-                    avail_kdn_servers=[f"kdn://{kdn_base_url.replace('http://', '').replace('https://', '')}"],
+                    avail_kdn_servers=list(alive_addrs),
                     kv_ready=int(it.get("kv_ready") or 0),
                     kv_rel_dir=it.get("kv_rel_dir"),
                     kv_dumped_keys=it.get("kv_dumped_keys"),
@@ -164,9 +202,9 @@ async def kdn_auto_refresh_loop(app, stop_event: asyncio.Event):
     interval_s = int(os.getenv("SCHEDULER_KDN_REFRESH_INTERVAL_S", str(SCHEDULER_KDN_REFRESH_INTERVAL_S_DEFAULT)))
     interval_s = max(5, interval_s)
 
-    kdn_base_url = getattr(app.state, "kdn_base_url", None)
-    if not kdn_base_url:
-        return
+    # kdn_base_url = getattr(app.state, "kdn_base_url", None)
+    # if not kdn_base_url:
+    #     return
 
     while not stop_event.is_set():
         try:
