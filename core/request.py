@@ -475,16 +475,16 @@ class Request:
             User_addr=user_addr,
             KDN_server_addr = "",
             default_know_addr = "",  # 这里暂时用 KDN 作为默认知识服务器，可按需调整
-            P_proxy_addr = "127.0.0.1",
-            P_proxy_port = 8001,
+            P_proxy_addr = "",
+            P_proxy_port = 0,
             D_proxy_addr = "",
             D_proxy_port = 0,
-            prefill_instance = "127.0.0.1",
+            prefill_instance = "0",
             decode_instance = "",
             batch_order = 0,
             User_url_path=url_path
         )
-        p_addr, p_port = "127.0.0.1", 8001
+
         # 若 scheduler 提供了策略和 proxy 列表，则在 build_request 内做选择
         try:
             if proxies and hasattr(strategy, "select"):
@@ -493,11 +493,11 @@ class Request:
                 chosen = strategy.select(proxies=proxies, payload=payload, url_path=url_path, user_addr=user_addr)
                 if chosen:
                     p_addr, p_port = chosen["host"], int(chosen["port"])
+                    task_obj.P_proxy_addr, task_obj.P_proxy_port = p_addr, p_port
         except Exception as e:
             # 不要让调度失败影响原功能：失败就继续用 8001
             print(f"[Scheduler-Strategy]: select failed, fallback to default. err={e}")
 
-        task_obj.P_proxy_addr, task_obj.P_proxy_port = p_addr, p_port
 
         # =========================
         # ---- 拼装最终 Request ----
@@ -572,4 +572,3 @@ class Request:
             f"  User_url_path={self.Task.User_url_path},\n"
             f")"
         )
-
