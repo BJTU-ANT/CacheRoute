@@ -36,6 +36,7 @@ from core import config
 from proxy.sclient.scheduler_client import SchedulerControlClient
 from proxy.resource.instance_pool import InstancePool
 from proxy.resource import p_control_plane
+from proxy.strategy.factory import build_instance_strategy
 
 SCHEDULER_CP_URL = os.environ.get("SCHEDULER_CP_URL", config.SCHEDULER_CP_URL).rstrip("/")
 KDN_BASE_URL = os.environ.get("KDN_BASE_URL", config.KDN_BASE_URL).rstrip("/")
@@ -68,6 +69,16 @@ async def lifespan(app: FastAPI):
     ttl_s = int(os.environ.get("PROXY_INSTANCE_TTL_S", config.INSTANCE_ALIVE_TTL_S))
     app.state.instance_pool = InstancePool(ttl_s=ttl_s)  # type: ignore
     p_control_plane.set_pool(app.state.instance_pool)  # type: ignore
+
+    # --- 加载proxy调度策略（业务面使用） ---
+    strategy_name = os.environ.get("PROXY_INSTANCE_STRATEGY", "round_robin")
+    try:
+        app.state.instance_strategy = build_instance_strategy(strategy_name)  # type: ignore
+        logger.info("[Proxy] instance strategy=%s", strategy_name)
+    except Exception as e:
+        # 策略初始化失败是致命的（否则业务面无法选择 instance）
+        logger.error("[Proxy] invalid instance strategy=%s err=%s", strategy_name, str(e))
+        raise
 
     # ---尝试启动proxy控制平面，用于与Instance交互来动态刷新Instance池 ---
     cp_host = os.environ.get("PROXY_CP_HOST", config.PROXY_CP_HOST)
@@ -309,7 +320,7 @@ def build_body_for_instance(req_obj: SchedulerRequest, mode: str) -> Dict[str, A
     max_tokens = getattr(prompt, "max_tokens", None)
     temperature = getattr(prompt, "temperature", None)
     top_p = getattr(prompt, "top_p", None)
-    stream = getattr(prompt, "stream")
+    stream = getattr(prompt, "stream", False)
     # print(f"[Proxy]stream={stream}")
 
     if mode == "chat":
@@ -339,6 +350,28 @@ def build_body_for_instance(req_obj: SchedulerRequest, mode: str) -> Dict[str, A
         body["top_p"] = top_p
 
     return body
+
+
+def select_instance(app: FastAPI, req_obj: SchedulerRequest):
+    """
+    业务面选择一个 instance。
+    - 输入：当前存活实例列表（由 InstancePool 提供）
+    - 输出：一个 InstanceInfo（至少有 host/port/instance_id）
+    """
+    pool = app.state.instance_pool  # type: ignore
+    strategy = app.state.instance_strategy  # type: ignore
+
+    instances = pool.list(include_dead=False)
+    if not instances:
+        return None
+
+    try:
+        chosen = strategy.select(instances, hint=req_obj)
+        return chosen
+    except Exception as e:
+        logger.warning("[Proxy] instance select failed: err=%s", str(e))
+        return None
+
 
 
 # ======================= 本地代理方法路由 =======================
@@ -392,16 +425,17 @@ async def proxy_chat_completions(request: FastAPIRequest):
             # 先跑通：KDN 出错时不阻断推理，退化为不注入直接转发
             logger.exception("[Proxy] KDN fetch failed, fallback to no-rag. err=%s", str(e))
 
-    host = req_obj.Task.prefill_instance
-    port = INSTANCE_PORT
-    instance_url = f"http://{host}:{port}/v1/chat/completions"
+    chosen = select_instance(proxy, req_obj)
+    if not chosen:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "no_instance", "detail": "proxy has no alive instance"},
+        )
 
-    logger.info(
-        "[Proxy] 转发到 Instance(chat): url=%s, model=%s",
-        instance_url,
-        json.dumps(instance_body,ensure_ascii=False)[:1200],
-        # instance_body.get("model"),
-    )
+    host = chosen.host
+    port = int(chosen.port)
+    instance_url = f"http://{host}:{port}/v1/chat/completions"
+    logger.info("[Proxy] instance chosen(chat): id=%s addr=%s:%s", getattr(chosen, "instance_id", "?"), host, port)
 
     # 下游流式：直接把 Instance 的 SSE 往上游透传
     try:
@@ -460,16 +494,18 @@ async def proxy_completions(request: FastAPIRequest):
         except Exception as e:
             logger.exception("[Proxy] KDN fetch failed, fallback to no-rag. err=%s", str(e))
 
-    host = req_obj.Task.prefill_instance
-    port = INSTANCE_PORT
+    chosen = select_instance(proxy, req_obj)
+    if not chosen:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "no_instance", "detail": "proxy has no alive instance"},
+        )
+
+    host = chosen.host
+    port = int(chosen.port)
     instance_url = f"http://{host}:{port}/v1/completions"
 
-    logger.info(
-        "[Proxy] 转发到 Instance(completions): url=%s, model=%s",
-        instance_url,
-        json.dumps(instance_body, ensure_ascii=False)[:1200],
-        # instance_body.get("model"),
-    )
+    logger.info("[Proxy] instance chosen(completions): id=%s addr=%s:%s", getattr(chosen, "instance_id", "?"), host, port)
 
     # 下游非流式：forward_request 仍然返回一个 async 生成器，但只会 yield 一次 bytes
     try:
