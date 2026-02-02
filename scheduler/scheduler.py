@@ -4,11 +4,13 @@
 
 调度器核心：
   - 基于 FastAPI 提供 HTTP 接口
+  - 启动时挂起控制平面，构建proxy池和kdn池
+  - 控制平面接收来自proxy和kdn服务器的注册，并维护资源池
   - 接收 /v1/chat/completions 和 /v1/completions 的 POST 请求
   - 解析 URL / payload / 客户端 IP
   - 分配 1~65535 循环的 request_id
-  - 调用 Request.build_request(...) 构建内部 Request 对象
-  - 启动时预热分词器，预热embedding模型，预热知识库
+  - 调用 Request.build_request(...) 构建内部 Request 对象，构建Request时调用策略选择最优kdn和proxy
+  
 
 调度器Workflow：
   调度层：
@@ -43,6 +45,7 @@ from pydantic import BaseModel
 from core import TokenizerRegistry
 from core import Request as SchedulerRequest
 from core import forward_request
+from core import config
 
 from model import EmbeddingEngine
 from .knowledge.kdn_client import fetch_kdn_snapshot
@@ -52,8 +55,9 @@ from .knowledge.kdn_sync import (
     kdn_auto_refresh_loop,
     kdn_refresh_once
 )
-from .resource.control_plane import control_plane, set_pool, get_pool
+from .resource.control_plane import control_plane, set_pool, get_pool, set_kdn_pool
 from .resource.proxy_pool import ProxyPool
+from .resource.kdn_pool import KDNPool
 from .strategy import create_strategy
 
 from store import (
@@ -144,89 +148,29 @@ async def lifespan(app: FastAPI):
         logger.exception(f"[Scheduler] 预热 Embedding 模型失败: {e}")
         app.state.embedding_engine = None  # type: ignore
 
-    # ------------------------------------------
-    # 尝试初始化知识库
-    # ------------------------------------------
-    kdn_base_url = os.getenv("SCHEDULER_KDN_BASE_URL", "").strip()
-
-    # 复用已预热的 embedder（维度校验用）
-    kb_embedder = getattr(app.state, "embedding_engine", None)  # type: ignore
-
-    if kdn_base_url:
-        try:
-            items = await fetch_kdn_snapshot(
-                base_url=kdn_base_url,
-                need_fields=["kid", "length", "embed_dim", "embedding", "kv_ready", "kv_rel_dir", "kv_dumped_keys",
-                             "kv_updated_at"],
-                limit=1_000_000,
-                offset=0,
-                timeout_s=10.0,
-            )
-
-            if not items:
-                logger.warning(f"[Scheduler] KDN snapshot empty: {kdn_base_url!r}")
-                app.state.knowledge_table = None  # type: ignore
-            else:
-                # 维度：优先用 embedder.dim（最稳），否则用 snapshot embed_dim
-                dim = int(getattr(kb_embedder, "dim", 0) or int(items[0].get("embed_dim") or 0))
-                if dim <= 0:
-                    raise RuntimeError(f"Invalid embedding dim from KDN snapshot: {dim}")
-
-                # 构表函数
-                table = build_table_from_kdn_items(items, dim=dim, kdn_base_url=kdn_base_url)
-
-                app.state.knowledge_table = table  # type: ignore
-                app.state.kdn_base_url = kdn_base_url  # type: ignore
-                app.state._kdn_refresh_lock = asyncio.Lock()  # type: ignore
-                app.state.last_refresh_ts = int(time.time())  # type: ignore
-
-                logger.info(
-                    f"[Scheduler] Knowledge base loaded from KDN {kdn_base_url!r}, "
-                    f"entries={len(getattr(table, '_units', {}))}, dim={dim}"
-                )
-
-                # 启动后台 refresh程序，定期刷新knowledge_list
-                app.state._kdn_stop_event = asyncio.Event()   # type: ignore
-                app.state._kdn_refresh_task = asyncio.create_task(        # type: ignore
-                    kdn_auto_refresh_loop(app, app.state._kdn_stop_event)   # type: ignore
-                )
-
-        except Exception as e:
-            logger.exception(f"[Scheduler] Failed to init knowledge base from KDN {kdn_base_url!r}: {e}")
-            app.state.knowledge_table = None  # type: ignore
-
-    else:
-        # ---- fallback: YAML (keep your original behavior) ----
-        yaml_path = os.getenv("SCHEDULER_KNOWLEDGE_YAML", "").strip()
-        if yaml_path:
-            try:
-                knowledge_table = init_knowledge_table(
-                    yaml_path=yaml_path,
-                    embedder=kb_embedder,
-                )
-                app.state.knowledge_table = knowledge_table  # type: ignore
-                units = getattr(knowledge_table, "_units", {})
-                logger.info(
-                    f"[Scheduler] Knowledge base loaded from {yaml_path!r}, "
-                    f"entries={len(units)}"
-                )
-            except Exception as e:
-                logger.exception(f"[Scheduler] Failed to init knowledge base from {yaml_path!r}: {e}")
-                app.state.knowledge_table = None  # type: ignore
-        else:
-            logger.warning(
-                "[Scheduler] Env SCHEDULER_KNOWLEDGE_YAML not set, "
-                "knowledge base will NOT be initialized."
-            )
-            app.state.knowledge_table = None  # type: ignore
-
-    # ------------------------------------------
-    # 尝试启动控制平面
-    # ------------------------------------------
+    # -------------------------------------------------------------
+    # 尝试启动控制平面，启用proxy池和KDN池，并从KDN池拉取知识清单来初始化知识库
+    # -------------------------------------------------------------
     #先构建Proxy池实例
-    ttl = int(os.environ.get("SCHEDULER_PROXY_TTL_S", "30"))
+    ttl = int(os.environ.get("SCHEDULER_PROXY_TTL_S", config.CONTROL_PLANE_TTL_S))
     app.state.proxy_pool = ProxyPool(ttl_s=ttl)  # type: ignore
     set_pool(app.state.proxy_pool)  # type: ignore 让 7002 复用这份池
+
+    kdn_ttl = int(os.environ.get("SCHEDULER_KDN_TTL_S", config.CONTROL_PLANE_TTL_S))
+    app.state.kdn_pool = KDNPool(ttl_s=kdn_ttl)  # type: ignore
+    set_kdn_pool(app.state.kdn_pool)  # type: ignore
+
+    app.state.knowledge_table = None  # type: ignore
+    app.state.last_refresh_ts = 0  # type: ignore
+
+    # KDN refresh loop infra (always on)
+    app.state._kdn_refresh_lock = asyncio.Lock()  # type: ignore
+    app.state._kdn_stop_event = asyncio.Event()  # type: ignore
+    app.state._kdn_refresh_task = asyncio.create_task(  # type: ignore
+        kdn_auto_refresh_loop(app, app.state._kdn_stop_event)  # type: ignore
+    )
+
+    logger.info("[Scheduler] KDN refresh loop started (pool-based).")
 
     async def _run_control_plane(app):
         host = os.environ.get("SCHEDULER_CP_HOST", "0.0.0.0")
@@ -258,10 +202,18 @@ async def lifespan(app: FastAPI):
     logger.info("[Scheduler] startup: 初始化完成，监听服务中")
     try:
         yield
+
     finally:
         # ---------- shutdown ----------
         cp_server = getattr(app.state, "_cp_server", None) # type: ignore
         cp_task = getattr(app.state, "_cp_task", None) # type: ignore
+        ev = getattr(app.state, "_kdn_stop_event", None) # type: ignore
+        task = getattr(app.state, "_kdn_refresh_task", None) # type: ignore
+
+        if ev is not None:
+            ev.set()
+        if task is not None:
+            task.cancel()
 
         if cp_server is not None:
             cp_server.should_exit = True
@@ -271,22 +223,13 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass
 
-        stop_ev = getattr(app.state, "_kdn_stop_event", None) # type: ignore
-        task = getattr(app.state, "_kdn_refresh_task", None) # type: ignore
-        if stop_ev is not None:
-            stop_ev.set()
-        if task is not None:
-            try:
-                await task
-            except Exception:
-                pass
     # shutdown 阶段，如果后面有资源要清理，可以写在这里
     logger.info("[Scheduler] shutdown: 结束服务")
 
 
 scheduler = FastAPI(
     title="CacheRoute Scheduler",
-    version="0.1.0",
+    version="0.1.1",
     lifespan=lifespan,
 )
 
