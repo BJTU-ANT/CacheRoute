@@ -5,9 +5,9 @@
 (3)更新Scheduler获取知识清单的方式，为其构建KDN池，并在初始化时控制平面构建，由KDN服务器在启动时主动向Scheduler的kdn_pool注册，随后触发snapshot拉取知识清单<br>
 (4)CacheRoute中资源获取关系与启动顺序更新：
   ```
-  Scheduler启动->维护构建proxy_pool和kdn_pool，构建控制平面监听端口（7002），处理来自proxy和kdn的注册、心跳包和注销。<br>
-  KDN && Proxy启动->向Scheduler的控制平面发起注册请求，随后向Scheduler上报资源情况，后续执行个性化资源维护<br>
-  Instance启动->绑定具体vllm实例，探测资源，向本地proxy注册并上报负载情况<br>
+  1. Scheduler启动->维护构建proxy_pool和kdn_pool，构建控制平面监听端口（7002），处理来自proxy和kdn的注册、心跳包和注销
+  2. KDN && Proxy启动->向Scheduler的控制平面发起注册请求，随后向Scheduler上报资源情况，后续执行个性化资源维护
+  3. Instance启动->绑定具体vllm实例，探测资源，向本地proxy注册并上报负载情况
   ```
 涉及修改文件:<br>
 `core/config.py`
