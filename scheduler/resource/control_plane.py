@@ -19,14 +19,14 @@ Scheduler 控制平面（Control Plane）：
 from __future__ import annotations
 
 import os
-import time
+# import time
 import uuid
 import asyncio
 
 import logging
 logger = logging.getLogger("scheduler.control_plane")
 
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, Coroutine, Callable
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -37,6 +37,7 @@ from core import config
 
 _pool: Optional[ProxyPool] = None
 _kdn_pool: Optional[KDNPool] = None
+_on_kdn_register: Optional[Callable[[], Coroutine[Any, Any, None]]] = None
 
 CONTROL_PLANE_TTL_S = int(os.environ.get("SCHEDULER_PROXY_TTL_S", config.CONTROL_PLANE_TTL_S))
 HEARTBEAT_INTERVAL_S = int(os.environ.get("SCHEDULER_PROXY_HEARTBEAT_S", config.HEARTBEAT_INTERVAL_S))
@@ -174,6 +175,11 @@ def get_kdn_pool() -> KDNPool:
     if _kdn_pool is None:
         raise RuntimeError("KDNPool is not initialized. Call set_kdn_pool() at scheduler startup.")
     return _kdn_pool
+
+def set_on_kdn_register(cb: Callable[[], Coroutine[Any, Any, None]]) -> None:
+    """触发KDNrefresh更新用"""
+    global _on_kdn_register
+    _on_kdn_register = cb
 
 # ----------------------------
 # FastAPI app + 资源池实例
@@ -334,6 +340,14 @@ async def kdn_register(req: KDNRegisterRequest):
     )
     await pool.upsert(info)
     logger.info("kdn.register kdn_id=%s host=%s port=%s endpoints=%s", req.kdn_id, req.host, req.port, req.endpoints)
+
+    # fire-and-forget refresh trigger
+    if _on_kdn_register is not None:
+        try:
+            asyncio.create_task(_on_kdn_register())
+        except Exception:
+            logger.exception("failed to trigger on_kdn_register callback")
+
     return KDNRegisterResponse(
         kdn_id=req.kdn_id,
         heartbeat_interval_s=HEARTBEAT_INTERVAL_S,
