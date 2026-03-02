@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import threading
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from .base import ProxySelectionStrategy
 
 
@@ -12,19 +12,36 @@ class RoundRobinStrategy(ProxySelectionStrategy):
     """
     最简单的 round-robin：
     - 在“当前存活 proxy 列表”上做循环取模
-    - 用 asyncio.Lock 保护 index，避免并发请求打乱顺序
+    - 用 threading.Lock 保护 index，避免并发请求打乱顺序
     """
 
     name: str = "round_robin"
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._cursor = 0
+        self._kdn_cursor = 0
+        self._proxy_cursor = 0
 
-    def select(self, proxies: List[Dict[str, Any]], payload: Dict[str, Any], url_path: str, user_addr: str) -> Optional[Dict[str, Any]]:
-        if not proxies:
-            return None
+    def select(
+        self,
+        kdns: List[Dict[str, Any]],
+        proxies: List[Dict[str, Any]],
+        payload: Dict[str, Any],
+        url_path: str,
+        user_addr: str,
+    ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+        chosen_kdn = None
+        chosen_proxy = None
+
         with self._lock:
-            idx = self._cursor % len(proxies)
-            self._cursor += 1
-        return proxies[idx]
+            if kdns:
+                ki = self._kdn_cursor % len(kdns)
+                self._kdn_cursor += 1
+                chosen_kdn = kdns[ki]
+
+            if proxies:
+                pi = self._proxy_cursor % len(proxies)
+                self._proxy_cursor += 1
+                chosen_proxy = proxies[pi]
+
+        return chosen_kdn, chosen_proxy
