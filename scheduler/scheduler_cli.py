@@ -83,14 +83,28 @@ def cmd_status(base_url: str):
     print(f"  entries: {s.get('entries')}")
     print(f"  dim: {s.get('dim')}")
     print(f"  faiss_total: {s.get('faiss_total')}")
-    print(f"  kdn_base_url: {s.get('kdn_base_url')}")
+    # print(f"  kdn_base_url: {s.get('kdn_base_url')}")
     print(f"  last_refresh_ts: {s.get('last_refresh_ts')} ({_fmt_ts(s.get('last_refresh_ts'))})")
+
+    print("  [KDN]")
+    print(f"    alive: {s.get('kdn_alive', 0)}")
+    print(f"    last_selected: {s.get('kdn_last_selected')} (id={s.get('kdn_last_selected_id')})")
+    print(f"    last_refresh_ok: {s.get('kdn_last_refresh_ok')}  "
+          f"ts={s.get('kdn_last_refresh_ts')} ({_fmt_ts(s.get('kdn_last_refresh_ts'))})")
+    reason = s.get("kdn_last_refresh_reason", "") or ""
+    if reason:
+        print(f"    last_refresh_reason: {reason}")
+    addrs = s.get("kdn_alive_addrs", []) or []
+    if addrs:
+        shown = addrs[:10]
+        suffix = " ..." if len(addrs) > 10 else ""
+        print(f"    alive_addrs[{len(addrs)}]: {shown}{suffix}")
 
     sample = s.get("sample_kids") or []
     if sample:
-        print("  sample_kids[0:10]:")
+        print("    sample_kids[0:10]:")
         for k in sample:
-            print(f"    - {k}")
+            print(f"        - {k}")
 
 
 def cmd_schema(base_url: str):
@@ -154,6 +168,33 @@ def cmd_refresh(base_url: str):
     print("[REFRESH]")
     print(r)
 
+def cmd_kdn(cp_url: str, include_dead: bool = False):
+    data = http_get_url(f"{cp_url}/v1/kdn/list?include_dead={'true' if include_dead else 'false'}")
+    kdns = data if isinstance(data, list) else (data.get("items") or [])
+
+    print("[KDN_POOL]")
+    print(f"  count: {len(kdns)}  include_dead={include_dead}")
+
+    for k in kdns:
+        kid = k.get("kdn_id")
+        host = k.get("host")
+        port = k.get("port")
+        alive = k.get("is_alive")
+        last_seen = k.get("last_seen_at")
+
+        # 兼容两种结构：平铺字段或 load 子对象
+        items = k.get("items")
+        qps_1m = k.get("qps_1m")
+        if items is None and isinstance(k.get("load"), dict):
+            items = k["load"].get("items")
+        if qps_1m is None and isinstance(k.get("load"), dict):
+            qps_1m = k["load"].get("qps_1m")
+
+        ls = "-"
+        if isinstance(last_seen, (int, float)):
+            ls = time.strftime("%H:%M:%S", time.localtime(int(last_seen)))
+
+        print(f"  - {kid}  {host}:{port}  alive={alive}  last_seen={ls}  items={items}  qps_1m={qps_1m}")
 
 def cmd_proxies(cp_url: str, include_dead: bool = False):
     data = http_get_url(f"{cp_url}/v1/proxy/list?include_dead={'true' if include_dead else 'false'}")
@@ -209,6 +250,7 @@ def print_help():
     print("  :knowledge_list [N]    list first N kids (default 10)")
     print("  :peek <kid> [kid2 ...] show basic metadata for specified kids")
     print("  :refresh               trigger refresh from KDN immediately")
+    print("  :kdn [--all|-a]        show KDN pool information")
     print("  :proxies [--all|-a]    show proxy pool information")
     print("  :strategy              show scheduler routing strategy")
     print("  :exit / :quit          exit CLI")
@@ -294,6 +336,16 @@ def main():
                 cmd_refresh(base_url)
             except Exception as e:
                 print(f"[ERROR] refresh failed: {e}")
+            continue
+
+        # KDN
+        if line.lower().startswith(":kdn"):
+            tokens = shlex.split(line)
+            include_dead = ("--all" in tokens) or ("-a" in tokens)
+            try:
+                cmd_kdn(cp_url, include_dead=include_dead)
+            except Exception as e:
+                print(f"[ERROR] KDN catch failed: {e}")
             continue
 
         # proxies
