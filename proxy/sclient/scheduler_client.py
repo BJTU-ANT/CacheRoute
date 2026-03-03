@@ -38,6 +38,10 @@ class SchedulerControlClient:
         tags: Optional[List[str]] = None,
         weight: float = 1.0,
         meta: Optional[Dict[str, Any]] = None,
+        max_capacity: int = 0,
+        instance_count: int = 0,
+        kv_mem_per_instance_gb: float = 0.0,
+        kv_cache_update_policy: str = "lru",
     ) -> RegisterResult:
         payload = {
             "proxy_id": proxy_id,
@@ -47,6 +51,10 @@ class SchedulerControlClient:
             "tags": tags or [],
             "weight": weight,
             "meta": meta or {},
+            "max_capacity": max_capacity,
+            "instance_count": instance_count,
+            "kv_mem_per_instance_gb": kv_mem_per_instance_gb,
+            "kv_cache_update_policy": kv_cache_update_policy,
         }
         r = await self._client.post(f"{self.base_url}/v1/proxy/register", json=payload)
         r.raise_for_status()
