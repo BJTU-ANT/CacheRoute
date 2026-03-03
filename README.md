@@ -1,15 +1,19 @@
-### 260302 Scheduler显示优化，KDN+Proxy调度策略集成
+### 260303 完善scheduler的proxy资源池信息维护
 
-(1)完善scheduler_cli的status查询输出，支持查看kdn资源池状态<br>
-(2)优化kdn的知识更新（即`kdn_refresh_once()`函数），现在在old_table更新，可能在并发refresh时造成混乱。因此在更新时先新建一个new_table，并发更新都集中在new_table上，待完毕后统一swap old_table。<br>
-(3)将KDN选择策略集成到scheduler的strategy统一策略中，现在scheduler在选择时仅在handle_client()送入proxy池和proxy选择策略，并在request.py执行时确定proxy。kdn则在外面通过一个外挂简单循环实现，没有集成至统一scheduler配置的入口策略中。通过集成，使得KDN选择策略一同集成进scheduler/strategy内<br>
-(4)优化kdn_refresh，在KDN注册成功后立即触发一次refresh，而不是等待周期更新。
+(1)新增proxy_pool中proxy对控制LLM系统的静态处理能力描述，作为后续调度变量它由proxy注册时上报，在完整的生命周期内保持不变，具体涉及<br>
+ - proxy所支持的最大并发任务数 `PROXY_MAX_CAPACITY`<br>
+ - proxy管理实例数 `PROXY_INSTANCE_COUNT`<br>
+ - proxy中管理的每个实例的KVCache内存大小 `PROXY_KV_MEM_PER_INSTANCE_GB`<br>
+ - proxy管理实例池的KV内存大小 `kv_cache_pool_gb`<br>
+ - proxy对KV缓存的更新策略 `PROXY_KV_CACHE_UPDATE_POLICY`<br>
+
+(2)支持scheduler对流事件的追踪，scheduler根据会话维护每个proxy正在执行的任务数，进而作为LLM系统负载的评判依据之一。此外，它还结合proxy心跳包和scheduler基于流的自校正来维护资源动态性。具体的，为减少维护inflight所带来的成本，采用由scheduler事件驱动+proxy低频校准的混合维护机制。scheduler收到新的任务请求，流数就加1。只要scheduler对proxy的这次转发stream结束了（不管对端是正常结束、异常、被取消、下游断开），scheduler都认为这个inflight周期结束；这样容易做到不漏减。此外，通过proxy的周期汇报来校准，避免大规模负载偏差。<br>
 
 一些提上日程的工作：<br>
 (1)KDN服务器的UI搭建，重点是知识可读性（_TODO. chen_）<br>
 (2)instance侧需要搭建一个灵活的资源检索平台(主要是基于vllm平台抓取信息)，使得instance面向proxy暴露动态更新的实例负载信息，便于proxy抓取（_TODO. sihan_）<br>
-(3)scheduler对池级业务流状态维护(_TODO. heyao_)<br>
-(4)proxy调度策略接入Instance池<br>
+(3)双inflight对池级业务流状态维护(_TODO. heyao_)<br>
+(4)知识清单中可用LLM系统的状态更新<br>
 
 更多日志及其修改详情：https://github.com/BJTU-ANT/CacheRoute/tree/main/doc/blog
 
