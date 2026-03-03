@@ -47,6 +47,7 @@ from util import parse_stream_flag
           |  User_addr                  用户IP地址
           |  KDN_server_addr            KDN服务器地址
           |  default_know_addr          默认文本注入服务器地址
+          |  P_proxy_id                 选择代理的ID号
           |  P_proxy_addr               P池代理IP地址
           |  D_proxy_addr               D池代理IP地址
           |  P_proxy_port               P池代理端口号
@@ -235,6 +236,7 @@ class Task:
             User_addr：用户的IP地址，表征用户身份
             KDN_server_addr<任务根据知识需求挑选出的最合适的KDN服务器地址>
             default_know_addr<默认的知识注入服务器，采用文本的注入方式>
+            P_proxy_id<处理任务的代理ID，用于追踪流>
             P_proxy_addr<处理任务的P池代理IP地址，默认为本地换回地址>
             P_proxy_port<处理任务的P池代理端口号，默认为8001>
             D_proxy_addr<处理任务的D池代理IP地址，默认为本地换回地址>
@@ -246,6 +248,7 @@ class Task:
     User_addr: str
     KDN_server_addr: str
     default_know_addr: str
+    P_proxy_id: str
     P_proxy_addr: str
     P_proxy_port: int
     D_proxy_addr: str
@@ -464,7 +467,10 @@ class Request:
                 service_obj.Knowledge_length = 0
         else:
             # 未开启知识注入或未初始化知识库，保持默认值
-            print("[Service] Ban knowledge task, skip retriever")
+            if not service_obj.Enable_know_injection:
+                print("[Service] Ban knowledge task, skip retriever!")
+            elif knowledge_table is None:
+                print("[Service] Not found available knowledge table, skip retriever, please check whether KDN servers is up!")
             service_obj.Knowledge_List = []
             service_obj.Knowledge_length = 0
 
@@ -476,6 +482,7 @@ class Request:
             User_addr=user_addr,
             KDN_server_addr = "",
             default_know_addr = "",  # 这里暂时用 KDN 作为默认知识服务器，可按需调整
+            P_proxy_id= "",
             P_proxy_addr = "",
             P_proxy_port = 0,
             D_proxy_addr = "",
@@ -504,6 +511,7 @@ class Request:
                     task_obj.KDN_server_addr = f"http://{chosen_kdn['host']}:{int(chosen_kdn['port'])}"
 
                 if chosen_proxy:
+                    task_obj.P_proxy_id = chosen_proxy["proxy_id"]
                     task_obj.P_proxy_addr = chosen_proxy["host"]
                     task_obj.P_proxy_port = int(chosen_proxy["port"])
 
