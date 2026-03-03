@@ -294,7 +294,7 @@ def _handle_client(
     print(f"[Scheduler] 构建内部 Request 成功: Request_ID={req_obj.Request_ID},\n"
           f"[Scheduler] Endpoint_type={getattr(req_obj.Service, 'Endpoint_type', None)},\n"
           f"[Scheduler] Knowledge_List={req_obj.Service.Knowledge_List},\n"
-          f"[Scheduler] Selected KDN={req_obj.Task.KDN_server_addr}, Proxy={req_obj.Task.P_proxy_addr}:{req_obj.Task.P_proxy_port}"
+          f"[Scheduler] Selected KDN={req_obj.Task.KDN_server_addr}, ProxyID={req_obj.Task.P_proxy_id}[{req_obj.Task.P_proxy_addr}:{req_obj.Task.P_proxy_port}]"
           )
 
     return req_obj
@@ -348,11 +348,17 @@ async def create_chat_completions(request: FastAPIRequest):
     if not req_obj.Task.KDN_server_addr or not req_obj.Task.P_proxy_addr or req_obj.Task.P_proxy_port <= 0:
         raise RuntimeError("Routing failed: missing KDN or Proxy selection")
 
-    # 根据调度结果选择下游 URL
+    # 根据调度结果选择下游 URL，更新对应proxy_id的inflight
     host = req_obj.Task.P_proxy_addr
     port = req_obj.Task.P_proxy_port
     endpoint = getattr(req_obj.Service, "Endpoint_type", "chat/completions")
     downstream_url = f"http://{host}:{port}/v1/{endpoint}"
+    proxy_id = req_obj.Task.P_proxy_id
+    if not proxy_id:
+        raise RuntimeError("Routing failed: missing P_proxy_id for inflight tracking")
+    ok = await pool.inflight_delta(proxy_id, +1)
+    if not ok:
+        raise RuntimeError(f"Proxy not found in pool: {proxy_id}")
 
     # 转化payload
     data_for_downstream = req_obj.to_payload()
@@ -369,15 +375,18 @@ async def create_chat_completions(request: FastAPIRequest):
 
     # 定义一个 async 生成器，从下游流式读取，再回给上游
     async def iter_upstream():
-        # forward_request 本身是一个 async generator
-        async for chunk in forward_request(
-            url=downstream_url,
-            data=data_for_downstream,
-            use_chunked=True,            # chat/completions 一般是流式
-            extra_headers=extra_headers, # 透传必要头
-        ):
-            # 这里 chunk 已经是 bytes，直接 yield 出去即可
-            yield chunk
+        try:
+            # forward_request 本身是一个 async generator
+            async for chunk in forward_request(
+                url=downstream_url,
+                data=data_for_downstream,
+                use_chunked=True,            # chat/completions 一般是流式
+                extra_headers=extra_headers, # 透传必要头
+            ):
+                # 这里 chunk 已经是 bytes，直接 yield 出去即可
+                yield chunk
+        finally:
+            await pool.inflight_delta(proxy_id, -1)
 
     # 用 StreamingResponse 包一层，实现用户侧的流式响应
     return StreamingResponse(iter_upstream(), media_type="application/json")
@@ -429,11 +438,17 @@ async def create_completions(request: FastAPIRequest):
     if not req_obj.Task.KDN_server_addr or not req_obj.Task.P_proxy_addr or req_obj.Task.P_proxy_port <= 0:
         raise RuntimeError("Routing failed: missing KDN or Proxy selection")
 
-    # 根据调度结果选择下游 URL
+    # 根据调度结果选择下游 URL，更新对应proxy_id的inflight
     host = req_obj.Task.P_proxy_addr
     port = req_obj.Task.P_proxy_port
     endpoint = getattr(req_obj.Service, "Endpoint_type", "completions")
     downstream_url = f"http://{host}:{port}/v1/{endpoint}"
+    proxy_id = req_obj.Task.P_proxy_id
+    if not proxy_id:
+        raise RuntimeError("Routing failed: missing P_proxy_id for inflight tracking")
+    ok = await pool.inflight_delta(proxy_id, +1)
+    if not ok:
+        raise RuntimeError(f"Proxy not found in pool: {proxy_id}")
 
     # 转化payload
     data_for_downstream = req_obj.to_payload()
@@ -450,15 +465,18 @@ async def create_completions(request: FastAPIRequest):
 
     # 定义一个 async 生成器，从下游流式读取，再回给上游
     async def iter_upstream():
-        # forward_request 本身是一个 async generator
-        async for content in forward_request(
-                url=downstream_url,
-                data=data_for_downstream,
-                use_chunked=False,  # chat/completions 一般是流式
-                extra_headers=extra_headers,  # 透传必要头
-        ):
-            # 这里 chunk 已经是 bytes，直接 yield 出去即可
-            yield content
+        try:
+            # forward_request 本身是一个 async generator
+            async for content in forward_request(
+                    url=downstream_url,
+                    data=data_for_downstream,
+                    use_chunked=False,  # chat/completions 一般是流式
+                    extra_headers=extra_headers,  # 透传必要头
+            ):
+                # 这里 chunk 已经是 bytes，直接 yield 出去即可
+                yield content
+        finally:
+            await pool.inflight_delta(proxy_id, -1)
 
     # 用 StreamingResponse 包一层，实现用户侧的流式响应
     return StreamingResponse(iter_upstream(), media_type="application/json")
@@ -490,7 +508,27 @@ async def debug_status() -> Dict[str, Any]:
     kdn_last_refresh_reason = getattr(scheduler.state, "kdn_last_refresh_reason", "") # type: ignore
     kdn_last_refresh_ts = int(getattr(scheduler.state, "kdn_last_refresh_ts", 0) or 0) # type: ignore
 
+    pool = get_pool()
+    proxy_infos = await pool.list(include_dead=False)
+
+    proxy_states = []
+    for p in proxy_infos:
+        proxy_states.append({
+            "proxy_id": p.proxy_id,
+            "host": p.host,
+            "port": p.port,
+            "max_capacity": p.load.max_capacity,
+            "instance_count": p.load.instance_count,
+            "kv_mem_per_instance_gb": p.load.kv_mem_per_instance_gb,
+            "kv_cache_pool_gb": p.load.kv_cache_pool_gb,
+            "kv_cache_update_policy": getattr(p, "kv_cache_update_policy", "static"),
+            "inflight": p.load.inflight,
+            "qps_1m": p.load.qps_1m,
+            "gpu_util": p.load.gpu_util,
+        })
+
     if table is None:
+
         return {
             "knowledge_loaded": False,
             "entries": 0,
@@ -507,6 +545,7 @@ async def debug_status() -> Dict[str, Any]:
             "kdn_last_refresh_ok": False,
             "kdn_last_refresh_reason": "",
             "kdn_last_refresh_ts": 0,
+            "proxies": proxy_states,
         }
 
     units = getattr(table, "_units", {})
@@ -552,6 +591,7 @@ async def debug_status() -> Dict[str, Any]:
         "kdn_last_refresh_ok": kdn_last_refresh_ok,
         "kdn_last_refresh_reason": kdn_last_refresh_reason,
         "kdn_last_refresh_ts": kdn_last_refresh_ts,
+        "proxies": proxy_states,
     }
 
 
