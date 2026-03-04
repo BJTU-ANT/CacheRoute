@@ -25,11 +25,12 @@
 """
 
 from __future__ import annotations
-
+import sys
 import asyncio
-
 import os, logging
-# import time
+from logging.handlers import RotatingFileHandler
+from datetime import datetime
+from pathlib import Path
 
 import uvicorn
 # import aiohttp
@@ -72,7 +73,7 @@ from util import timing
 from core.config import DEFAULT_MODEL, DEFAULT_EMBED_MODEL, SCHEDULER_CP_PORT
 
 
-# ======================= 请求 ID 分配器 与 payload说明=======================
+# ======================= 请求ID分配器等基本函数=======================
 
 class RequestIdAllocator:
     """
@@ -92,13 +93,114 @@ class RequestIdAllocator:
 
 
 id_alloc = RequestIdAllocator()
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("scheduler")
 logger.setLevel(logging.INFO)
+
 
 class PeekPayload(BaseModel):
     kids: List[str]
     need_fields: List[str] = ["length", "avail_kdn_servers", "text_abstract"]
 
+
+def init_logging() -> str:
+    """
+    目标：
+    1) SCHEDULER_LOG_FILE 允许配置为“目录路径”或“文件路径”
+       - 目录：/logs/scheduler  -> /logs/scheduler/scheduler-YYYYMMDD-HHMMSS.log
+       - 文件：/logs/scheduler/scheduler.log -> /logs/scheduler/scheduler-YYYYMMDD-HHMMSS.log
+    2) 修复 handler 重复创建（先复用已有 RotatingFileHandler，找不到才创建）
+    3) 隔离 uvicorn 对 root logger 的影响：业务日志写在独立 logger 上 propagate=False
+    4) 控制台只输出 ERROR（错误立刻可见）
+    """
+    # ---------- 1) 解析用户配置：目录 or 文件 ----------
+    cfg_path = os.environ.get("SCHEDULER_LOG_FILE", getattr(config, "SCHEDULER_LOG_FILE", "scheduler.log"))
+    p = Path(str(cfg_path)).expanduser()
+
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    if p.suffix.lower() == ".log":
+        # 用户给的是文件路径
+        base_dir = p.parent
+        stem = p.stem or "scheduler"
+    else:
+        # 用户给的是目录路径
+        base_dir = p
+        stem = "scheduler"
+
+    base_dir.mkdir(parents=True, exist_ok=True)
+    log_path = str(base_dir / f"{stem}-{ts}.log")
+
+    # ---------- 2) 业务 logger（不走 root） ----------
+    biz = logging.getLogger("scheduler")
+    cp = logging.getLogger("scheduler.control_plane")
+    hb = logging.getLogger("scheduler.hbreport")
+
+    for lg in (biz, cp, hb):
+        lg.setLevel(logging.INFO)
+        lg.propagate = False
+
+    # ---------- 3) 先复用已有 file handler（修复必修问题1） ----------
+    def _find_same_file_handler(lg: logging.Logger, target: str) -> RotatingFileHandler | None:
+        for h in lg.handlers:
+            if isinstance(h, RotatingFileHandler) and getattr(h, "baseFilename", None) == target:
+                return h
+        return None
+
+    fh = (
+        _find_same_file_handler(biz, log_path)
+        or _find_same_file_handler(cp, log_path)
+        or _find_same_file_handler(hb, log_path)
+    )
+
+    if fh is None:
+        file_fmt = logging.Formatter(
+            "%(asctime)s.%(msecs)03d %(levelname)s %(name)s:%(lineno)d | %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+        fh = RotatingFileHandler(
+            log_path,
+            maxBytes=50 * 1024 * 1024,
+            backupCount=5,
+            encoding="utf-8",
+        )
+        fh.setLevel(logging.INFO)
+        fh.setFormatter(file_fmt)
+
+    # 挂载到三个 logger（避免重复 add）
+    for lg in (biz, cp, hb):
+        if fh not in lg.handlers:
+            lg.addHandler(fh)
+
+    # ---------- 4) root 控制台：ERROR only ----------
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+
+    stream_handlers = [h for h in root.handlers if isinstance(h, logging.StreamHandler)]
+    if not stream_handlers:
+        sh = logging.StreamHandler(sys.stdout)
+        sh.setLevel(logging.ERROR)
+        sh.setFormatter(logging.Formatter("%(levelname)s | %(name)s | %(message)s"))
+        root.addHandler(sh)
+    else:
+        for h in stream_handlers:
+            h.setLevel(logging.ERROR)
+
+    # ---------- 5) 降噪（可选） ----------
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+
+    # ---------- 6) 自检：写一条，立刻 flush ----------
+    biz.info("[Scheduler] logging initialized, log_path=%s", log_path)
+    for h in biz.handlers:
+        try:
+            h.flush()
+        except Exception:
+            pass
+
+    return log_path
 
 
 # ======================= Scheduler初始化 =======================
@@ -109,6 +211,8 @@ async def lifespan(app: FastAPI):
       - startup: 预热分词器
       - shutdown: 目前没资源要清理，预留接口
     """
+    log_path = init_logging()
+    print(f"[Scheduler] started. log_file={log_path}")
     # ------------------------------------------
     # 尝试预热 tokenizer 分词器
     # ------------------------------------------
@@ -272,11 +376,12 @@ def _handle_client(
     request_id = id_alloc.next_id()
 
     # 打印调试信息
-    print("+" * 80)
-    print(f"[Scheduler] 收到 HTTP 请求: path={url_path}, client_ip={client_ip},\n"
-          f"分配 request_id={request_id},\n"
-          f"payload={payload}")
-    print("+" * 80)
+    if os.environ.get("SCHEDULER_VERBOSE_REQUEST_LOG", config.SCHEDULER_VERBOSE_REQUEST_LOG) == "1":
+        print("+" * 80)
+        print(f"[Scheduler] 收到 HTTP 请求: path={url_path}, client_ip={client_ip},\n"
+              f"分配 request_id={request_id},\n"
+              f"payload={payload}")
+        print("+" * 80)
 
     # 直接复用你改好的 build_request
     req_obj = SchedulerRequest.build_request(
@@ -290,12 +395,12 @@ def _handle_client(
         kdns=kdns,
         strategy=strategy,
     )
-
-    print(f"[Scheduler] 构建内部 Request 成功: Request_ID={req_obj.Request_ID},\n"
-          f"[Scheduler] Endpoint_type={getattr(req_obj.Service, 'Endpoint_type', None)},\n"
-          f"[Scheduler] Knowledge_List={req_obj.Service.Knowledge_List},\n"
-          f"[Scheduler] Selected KDN={req_obj.Task.KDN_server_addr}, ProxyID={req_obj.Task.P_proxy_id}[{req_obj.Task.P_proxy_addr}:{req_obj.Task.P_proxy_port}]"
-          )
+    if os.environ.get("SCHEDULER_VERBOSE_REQUEST_LOG", config.SCHEDULER_VERBOSE_REQUEST_LOG) == "1":
+        print(f"[Scheduler] 构建内部 Request 成功: Request_ID={req_obj.Request_ID},\n"
+              f"[Scheduler] Endpoint_type={getattr(req_obj.Service, 'Endpoint_type', None)},\n"
+              f"[Scheduler] Knowledge_List={req_obj.Service.Knowledge_List},\n"
+              f"[Scheduler] Selected KDN={req_obj.Task.KDN_server_addr}, ProxyID={req_obj.Task.P_proxy_id}[{req_obj.Task.P_proxy_addr}:{req_obj.Task.P_proxy_port}]"
+              )
 
     return req_obj
 
