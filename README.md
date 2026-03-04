@@ -88,18 +88,25 @@ Python版本：3.12.11<br>
     ```
     sudo docker run --gpus all -it --name CacheRoute --ipc=host --shm-size=64g --ulimit memlock=-1 --ulimit stack=67108864 --memory=0 --memory-swap=0 -p 8000:8000 -v /llm-stack:/workspace/llm-stack cacheroute:vllm0.13-lmcache3.11-pytorch2.9.1 bash
     ```
-3. 打开容器(涉及开启多个容器命令行时)
-    ```
-    sudo docker exec -it CacheRoute bash
-    ```
-4. 若显示容器未启动，启动容器
+3. 启动并打开容器(涉及开启多个容器命令行时)
     ```
     sudo docker start CacheRoute 
+    sudo docker exec -it CacheRoute bash
     ```
    先启动一个Redis容器，作为LMcache_connector后续的KVCache store.
     ```
     sudo docker run -d --name lmcache-redis --network container:vllm_lmcache_test redis:7 redis-server --save "" --appendonly no --maxmemory 200gb --maxmemory-policy allkeys-lru
     ```
+4. 在`core/config.py`内根据实际模型下载路径完成必要的参数配置（scheduler强依赖embedding、tokenizer、model模型）
+    ```
+    DEFAULT_MODEL:                               运行的大模型路径
+    DEFAULT_MODEL_SHORTNAME:                     大模型简写（与后续vLLM启动指令挂钩）
+    SCHEDULER/PROXY/INSTANCE/KDN_LOG_FILE:       Scheduler/proxy/instance/kdn的日志输出路径，<path-to-Cacheroute/log/**>
+    EMBEDDING_MODEL:                             本地下载的Embedding模型实际路径，<path-to-Cacheroute/model/embedder/**>
+    DEFAULT_EMBED_MODEL:                         Embedding模型名称，用于未配置EMBEDDING_MODEL情况下默认走huggingface下载
+    ...
+    ```
+   此外，还有许多参数配置，其详细说明可见`core/config.py`,其具体使用方式见`test/demo_***`。
 5. 启动vLLM0.13+LMCache3.11服务(非PD分离)，指令启动的是TP8下运行LLaMA-70B模型，自行根据需求调整，同时确保CacheRoute/core/config.py内 `USE_MOCK = False`
     ```
    export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
