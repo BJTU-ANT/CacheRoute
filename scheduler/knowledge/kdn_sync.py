@@ -18,7 +18,7 @@ from typing import List, Dict, Tuple
 from core.config import SCHEDULER_KDN_REFRESH_INTERVAL_S_DEFAULT
 from store.knowledge_base import KnowledgeTable, KnowledgeUnit
 from .kdn_client import fetch_kdn_snapshot, fetch_kdn_items_by_kids
-
+from scheduler.resource.control_plane import _hb_agg
 
 # kid -> signature
 # signature = (embed_dim, length, kv_ready, kv_updated_at, kv_dumped_keys)
@@ -149,7 +149,7 @@ async def kdn_refresh_once(app) -> dict:
             if embedder is None:
                 raise RuntimeError("embedding_engine is not initialized; cannot build KnowledgeTable")
             new_table = KnowledgeTable(dim=embedder.dim)
-            logger.info("[Scheduler] KnowledgeTable initialized (first build), dim=%s", embedder.dim)
+            logger.debug("[Scheduler] KnowledgeTable initialized (first build), dim=%s", embedder.dim)
         else:
             new_table = old_table.clone_without_index()
 
@@ -228,10 +228,18 @@ async def kdn_auto_refresh_loop(app, stop_event: asyncio.Event):
     while not stop_event.is_set():
         try:
             r = await kdn_refresh_once(app)
+            try:
+                await _hb_agg.record_kdn_refresh(r)
+            except Exception:
+                # 输出层故障不能影响业务
+                logger.debug("[Scheduler] record_kdn_refresh failed", exc_info=True)
+
+            # 不再刷屏：降为 debug
             if r.get("ok"):
-                logger.info(f"[Scheduler] KDN auto-refresh OK: entries={r['entries']}, added={r['added']}, updated={r['updated']}, removed={r['removed']}")
+                logger.debug("[Scheduler] KDN auto-refresh OK: entries=%s, added=%s, updated=%s, removed=%s",
+                             r.get("entries"), r.get("added"), r.get("updated"), r.get("removed"))
             else:
-                logger.warning(f"[Scheduler] KDN auto-refresh skipped: {r}")
+                logger.debug("[Scheduler] KDN auto-refresh skipped: %s", r)
         except Exception as e:
             logger.exception(f"[Scheduler] KDN auto-refresh FAILED: {e}")
             app.state.kdn_last_refresh_ok = False
