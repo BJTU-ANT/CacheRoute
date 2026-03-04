@@ -25,6 +25,7 @@ import asyncio
 
 import logging
 logger = logging.getLogger("scheduler.control_plane")
+_hb_logger = logging.getLogger("scheduler.hbreport")
 
 from typing import Any, Dict, List, Optional, Coroutine, Callable
 
@@ -33,6 +34,7 @@ from pydantic import BaseModel, Field
 
 from .proxy_pool import ProxyInfo, ProxyLoad, ProxyPool
 from .kdn_pool import KDNInfo, KDNLoad, KDNPool
+from .hb_log import HeartbeatLogAggregator, hb_report_loop
 from core import config
 
 _pool: Optional[ProxyPool] = None
@@ -196,6 +198,33 @@ def set_on_kdn_register(cb: Callable[[], Coroutine[Any, Any, None]]) -> None:
 
 control_plane = FastAPI(title="CacheRoute Scheduler Control Plane v1")
 
+_HB_REPORT_INTERVAL_S = int(os.environ.get("SCHEDULER_HB_REPORT_INTERVAL_S", "30"))
+_hb_agg = HeartbeatLogAggregator()
+
+@control_plane.on_event("startup")
+async def _hb_report_startup():
+    async def _get_proxies() -> List[ProxyInfo]:
+        # 取“池内当前状态”，包含 load/last_seen
+        return await get_pool().list(include_dead=True)
+
+    async def _get_kdns() -> List[KDNInfo]:
+        return await get_kdn_pool().list(include_dead=True)
+
+    control_plane.state._hb_report_task = asyncio.create_task(
+        hb_report_loop(
+            _hb_agg,
+            _hb_logger,
+            interval_s=_HB_REPORT_INTERVAL_S,
+            get_proxies=_get_proxies,
+            get_kdns=_get_kdns,
+        )
+    )
+
+@control_plane.on_event("shutdown")
+async def _hb_report_shutdown():
+    t = getattr(control_plane.state, "_hb_report_task", None)  # type: ignore
+    if t is not None:
+        t.cancel()
 # 单进程共享资源池：控制平面 API 写入；未来调度策略从同一个 pool 读取
 # _pool = ProxyPool(ttl_s=CONTROL_PLANE_TTL_S)
 
@@ -300,9 +329,19 @@ async def proxy_heartbeat(req: ProxyHeartbeatRequest):
     pool = get_pool()
     ok = await pool.heartbeat(req.proxy_id, load=load)
     if not ok:
+        # 失败：立刻输出（并计入 err）
+        await _hb_agg.record_proxy(req.proxy_id, ok=False)
+        logger.warning("proxy.heartbeat rejected: proxy_id not registered, proxy_id=%s", req.proxy_id)
         raise HTTPException(status_code=404, detail="proxy_id not registered")
 
-    logger.info("proxy.heartbeat proxy_id=%s", req.proxy_id)
+    # 成功：只聚合，不逐条 logger.info 刷屏
+    await _hb_agg.record_proxy(
+        req.proxy_id,
+        ok=True,
+        inflight=req.inflight,
+        qps_1m=req.qps_1m,
+        gpu_util=req.gpu_util,
+    )
     return {"ok": True}
 
 
@@ -384,9 +423,16 @@ async def kdn_heartbeat(req: KDNHeartbeatRequest):
     pool = get_kdn_pool()
     ok = await pool.heartbeat(req.kdn_id, load=load)
     if not ok:
+        await _hb_agg.record_kdn(req.kdn_id, ok=False)
+        logger.warning("kdn.heartbeat rejected: kdn_id not registered, kdn_id=%s", req.kdn_id)
         raise HTTPException(status_code=404, detail="kdn_id not registered")
 
-    logger.info("kdn.heartbeat kdn_id=%s", req.kdn_id)
+    await _hb_agg.record_kdn(
+        req.kdn_id,
+        ok=True,
+        items=req.items,
+        qps_1m=req.qps_1m,
+    )
     return {"ok": True}
 
 @control_plane.post("/v1/kdn/unregister")
