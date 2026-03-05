@@ -1,0 +1,23 @@
+2026-03-04 04:16:18.920 INFO scheduler:196 | [Scheduler] logging initialized, log_path=/workspace/llm-stack/CacheRoute/log/scheduler/scheduler-20260304-041618.log
+2026-03-04 04:16:19.830 INFO scheduler:223 | [Scheduler] Warmup tokenizers, model_path='/workspace/llm-stack/models/LLM-Research/Meta-Llama-3-70B-Instruct'
+2026-03-04 04:16:23.306 INFO scheduler:242 | [Scheduler] Warmup embedding model: '/workspace/llm-stack/CacheRoute/model/embedder/intfloat__multilingual-e5-large-instruct', dim=1024, device=cuda
+2026-03-04 04:16:23.306 INFO scheduler:276 | [Scheduler] KDN refresh loop started (pool-based).
+2026-03-04 04:16:23.306 INFO scheduler:291 | [Scheduler] on_kdn_register callback installed
+2026-03-04 04:16:23.307 INFO scheduler:317 | [Scheduler] scheduler strategy=round_robin
+2026-03-04 04:16:23.307 INFO scheduler:320 | [Scheduler] startup: 初始化完成，监听服务中
+2026-03-04 04:16:34.916 INFO scheduler.control_plane:402 | kdn.register kdn_id=kdn_local_1 host=127.0.0.1 port=9101 endpoints=['knowledge/snapshot', 'knowledge/search/text']
+2026-03-04 04:16:35.195 INFO scheduler.control_plane:300 | proxy.register proxy_id=hp_127.0.0.1:8001 host=127.0.0.1 port=8001 endpoints=['chat/completions', 'completions']
+2026-03-04 04:16:53.374 INFO scheduler.hbreport:229 | 
+------
+HBReport window=34.5s interval=30s
+[Proxy]
+  - proxy_id=hp_127.0.0.1:8001 ok/total=4/4 err=0 load(inflight=0 qps_1m=0.0 gpu_util=0.0) last_seen_at=1772597810.211
+[KDN]
+  - kdn_id=kdn_local_1 ok/total=4/4 err=0 load(items=0 qps_1m=0.0) last_seen_at=1772597810.018
+[Knowledge]
+  - refresh_ok=0 refresh_fail=1
+  - last_fail: reason=no alive kdn in pool
+------
+2026-03-04 04:17:13.163 INFO scheduler.control_plane:353 | proxy.unregister proxy_id=hp_127.0.0.1:8001
+2026-03-04 04:17:14.493 INFO scheduler.control_plane:442 | kdn.unregister kdn_id=kdn_local_1
+2026-03-04 04:17:17.316 INFO scheduler:345 | [Scheduler] shutdown: 结束服务

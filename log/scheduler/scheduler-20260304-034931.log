@@ -1,0 +1,34 @@
+2026-03-04 03:49:31.500 INFO scheduler:196 | [Scheduler] logging initialized, log_path=/workspace/llm-stack/CacheRoute/log/scheduler/scheduler-20260304-034931.log
+2026-03-04 03:49:31.904 INFO scheduler:223 | [Scheduler] Warmup tokenizers, model_path='/workspace/llm-stack/models/LLM-Research/Meta-Llama-3-70B-Instruct'
+2026-03-04 03:49:35.249 INFO scheduler:242 | [Scheduler] Warmup embedding model: '/workspace/llm-stack/CacheRoute/model/embedder/intfloat__multilingual-e5-large-instruct', dim=1024, device=cuda
+2026-03-04 03:49:35.249 INFO scheduler:276 | [Scheduler] KDN refresh loop started (pool-based).
+2026-03-04 03:49:35.249 INFO scheduler:291 | [Scheduler] on_kdn_register callback installed
+2026-03-04 03:49:35.249 INFO scheduler:317 | [Scheduler] scheduler strategy=round_robin
+2026-03-04 03:49:35.249 INFO scheduler:320 | [Scheduler] startup: 初始化完成，监听服务中
+2026-03-04 03:49:45.937 INFO scheduler.control_plane:389 | kdn.register kdn_id=kdn_local_1 host=127.0.0.1 port=9101 endpoints=['knowledge/snapshot', 'knowledge/search/text']
+2026-03-04 03:49:47.719 INFO scheduler.control_plane:287 | proxy.register proxy_id=hp_127.0.0.1:8001 host=127.0.0.1 port=8001 endpoints=['chat/completions', 'completions']
+2026-03-04 03:50:05.311 INFO scheduler.hbreport:187 | 
+------
+HBReport window=34.0s interval=30s
+[Proxy]
+  - proxy_id=hp_127.0.0.1:8001 ok/total=4/4 err=0 last(inflight=None qps_1m=None gpu_util=None)
+[KDN]
+  - kdn_id=kdn_local_1 ok/total=4/4 err=0 last(items=None qps_1m=None)
+[Knowledge]
+  - refresh_ok=0 refresh_fail=1
+  - last_fail: reason=no alive kdn in pool
+------
+2026-03-04 03:50:35.311 INFO scheduler.hbreport:187 | 
+------
+HBReport window=30.0s interval=30s
+[Proxy]
+  - proxy_id=hp_127.0.0.1:8001 ok/total=6/6 err=0 last(inflight=None qps_1m=None gpu_util=None)
+[KDN]
+  - kdn_id=kdn_local_1 ok/total=6/6 err=0 last(items=None qps_1m=None)
+[Knowledge]
+  - refresh_ok=1 refresh_fail=0
+  - last_ok: entries=12 added=0 updated=0 removed=0
+------
+2026-03-04 03:50:59.835 INFO scheduler.control_plane:340 | proxy.unregister proxy_id=hp_127.0.0.1:8001
+2026-03-04 03:51:00.502 INFO scheduler.control_plane:429 | kdn.unregister kdn_id=kdn_local_1
+2026-03-04 03:51:01.636 INFO scheduler:345 | [Scheduler] shutdown: 结束服务
