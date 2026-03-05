@@ -32,6 +32,7 @@ from util import parse_stream_flag
       |__Class Service： 映射用户问题的服务需求，如是否支持PD分离，是否支持知识注入，TTFT，E2E和TPOT的SLO需求
       |   |  Enable_PD_Disaggregation   是否启用PD分离
       |   |  Enable_know_injection      是否启用知识注入
+      |   |  Injection_type             知识注入类型（文本orKV）
       |   |  Enable_compress            是否允许对KVCache压缩
       |   |  Compress_factor            压缩比例
       |   |  Enable_security            是否启用安全模式（预留接口）
@@ -106,6 +107,7 @@ class Service:
         定义问题服务的SLO基本信息，通过用户IP地址映射具体服务等级，支持映射模块出于安全、个性化等方面的扩展
             Enable_PD_Disaggregation<是否允许问题进行PD分离处理，默认为True>
             Enable_know_injection<是否允许调用远端知识，默认为True>
+            Injection_type<知识注入类型，默认为text，由proxy后续根据策略调整>
             Enable_compress<是都允许进行KVCache的压缩，默认为True>
             Compress_factor<KVCache的压缩比率，默认0.3，可选0.3,0.5和0.7>
             Enable_security<是否启用安全模式，默认false，为后续安全内容提供接口>
@@ -119,6 +121,7 @@ class Service:
     """
     Enable_PD_Disaggregation: bool
     Enable_know_injection: bool
+    Injection_type: str
     Enable_compress: bool
     Compress_factor: float
     Enable_security: bool
@@ -435,6 +438,7 @@ class Request:
             Enable_security = False,
             Compress_factor = 0.3,
             Enable_compress = True,
+            Injection_type="text",
             Endpoint_type="",
         )
 
@@ -508,7 +512,7 @@ class Request:
 
                 if chosen_kdn:
                     # 推荐统一成 http base_url，后面 KDN client 直接用
-                    task_obj.KDN_server_addr = f"http://{chosen_kdn['host']}:{int(chosen_kdn['port'])}"
+                    task_obj.KDN_server_addr = f"{chosen_kdn['host']}:{int(chosen_kdn['port'])}"
 
                 if chosen_proxy:
                     task_obj.P_proxy_id = chosen_proxy["proxy_id"]
@@ -568,6 +572,7 @@ class Request:
             f"--------Service--------\n"
             f"  Enable_PD={self.Service.Enable_PD_Disaggregation},\n"
             f"  Enable_know_injection={self.Service.Enable_know_injection},\n"
+            f"  Injection_type={self.Service.Injection_type},\n"
             f"  Enable_compress={self.Service.Enable_compress},\n"
             f"  Compress_factor={self.Service.Compress_factor},\n"
             f"  Enable_security={self.Service.Enable_security},\n"
