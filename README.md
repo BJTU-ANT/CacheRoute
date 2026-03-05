@@ -195,7 +195,11 @@ Python版本：3.12.11<br>
 `stream`:可选项，是否启用流式回复。注意，completion模式只能使用非流式<br>
 `RAG`:可选项，是否启用知识注入，False调度器将屏蔽该任务的知识检索
   
+scheduler任务调度实例
+<img width="1200" height="315" alt="image" src="https://github.com/user-attachments/assets/c090851d-433c-4d6c-a4ef-6c12b2fd2930" />
 
+Proxy任务调度实例
+<img width="1200" height="121" alt="image" src="https://github.com/user-attachments/assets/b2b8a294-1c32-48d8-a6c6-d01d342e8000" />
 
   
 
