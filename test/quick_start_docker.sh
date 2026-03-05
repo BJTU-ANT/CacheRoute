@@ -20,7 +20,7 @@ echo "[2/3] Open 6 vllm tabs in current window"
 for i in {1..6}; do
   gnome-terminal \
     --tab --title="vllm #${i}" \
-    -- bash -lc "docker exec -it ${VLLM_C} bash < /dev/tty"
+    -- bash -lc "docker exec -it ${VLLM_C} bash -lc 'cd llm-stack/CacheRoute/test && exec bash'"
   sleep 0.3
 done
 
