@@ -376,7 +376,7 @@ def _handle_client(
     request_id = id_alloc.next_id()
 
     # 打印调试信息
-    if os.environ.get("SCHEDULER_VERBOSE_REQUEST_LOG", config.SCHEDULER_VERBOSE_REQUEST_LOG) == "1":
+    if os.environ.get("SCHEDULER_VERBOSE_REQUEST_LOG", config.SCHEDULER_VERBOSE_REQUEST_LOG) == 1:
         print("+" * 80)
         print(f"[Scheduler] 收到 HTTP 请求: path={url_path}, client_ip={client_ip},\n"
               f"分配 request_id={request_id},\n"
@@ -395,13 +395,13 @@ def _handle_client(
         kdns=kdns,
         strategy=strategy,
     )
-    if os.environ.get("SCHEDULER_VERBOSE_REQUEST_LOG", config.SCHEDULER_VERBOSE_REQUEST_LOG) == "1":
+    if os.environ.get("SCHEDULER_VERBOSE_REQUEST_LOG", config.SCHEDULER_VERBOSE_REQUEST_LOG) == 1:
         print(f"[Scheduler] 构建内部 Request 成功: Request_ID={req_obj.Request_ID},\n"
               f"[Scheduler] Endpoint_type={getattr(req_obj.Service, 'Endpoint_type', None)},\n"
               f"[Scheduler] Knowledge_List={req_obj.Service.Knowledge_List},\n"
               f"[Scheduler] Selected KDN={req_obj.Task.KDN_server_addr}, ProxyID={req_obj.Task.P_proxy_id}[{req_obj.Task.P_proxy_addr}:{req_obj.Task.P_proxy_port}]"
               )
-
+    print(f"[Scheduler] Injection_type={getattr(req_obj.Service, 'Injection_type', None)}")
     return req_obj
 
 
