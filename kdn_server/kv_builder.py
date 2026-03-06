@@ -129,7 +129,7 @@ class KVCacheBuilder:
         # 你之前用的是 /v1/chat/completions，这里保持一致
         payload = {
             "model": self.cfg.model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [{"role": "system", "content": prompt}],
             "max_tokens": self.cfg.max_tokens,
             "temperature": self.cfg.temperature,
             "stream": False,
