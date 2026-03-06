@@ -15,6 +15,7 @@ vllm实例与proxy之间的适配层instance：
 
 from __future__ import annotations
 
+import uvicorn,logging
 import os
 import asyncio
 import json
@@ -31,6 +32,7 @@ from .mock_resp import (mock_text_completion,
                         mock_chat_stream
                         )
 from util import parse_stream_flag
+from instance import control_plane
 from instance.pclient.proxy_client import ProxyControlClient
 
 
@@ -48,6 +50,24 @@ async def lifespan(app: FastAPI):
     stop = asyncio.Event()
     app.state._pc = client # type: ignore
     app.state._stop = stop # type: ignore
+    cp_host = os.environ.get("INSTANCE_CP_HOST", config.INSTANCE_CP_HOST)
+    cp_port = int(os.environ.get("INSTANCE_CP_PORT", config.INSTANCE_CP_PORT))
+    logger = logging.getLogger("instance")
+
+    cp_config = uvicorn.Config(
+        control_plane.control_plane,
+        host=cp_host,
+        port=cp_port,
+        log_level="info",
+    )
+    cp_server = uvicorn.Server(cp_config)
+    app.state._cp_server = cp_server  # type: ignore
+
+    async def _run_cp():
+        await cp_server.serve()
+
+    app.state._cp_task = asyncio.create_task(_run_cp())  # type: ignore
+    logger.info("[Instance] control plane started: http://%s:%s", cp_host, cp_port)
 
     try:
         reg = await client.register(
@@ -100,6 +120,19 @@ async def lifespan(app: FastAPI):
             pass
         try:
             await client.close()
+        except Exception:
+            pass
+        try:
+            srv = getattr(app.state, "_cp_server", None)  # type: ignore
+            t = getattr(app.state, "_cp_task", None)  # type: ignore
+            if srv is not None:
+                srv.should_exit = True
+                srv.force_exit = True
+            if t is not None:
+                try:
+                    await asyncio.wait_for(t, timeout=2.0)
+                except Exception:
+                    t.cancel()
         except Exception:
             pass
 
