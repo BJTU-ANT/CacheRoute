@@ -122,11 +122,11 @@ Python版本：3.12.11<br>
      --served-model-name llama3-70b \
      --host 0.0.0.0 --port 8000 \
      --tensor-parallel-size 8 \
-     --gpu-memory-utilization 0.8 \
+     --gpu-memory-utilization 0.75 \
      --dtype auto \
      --max-model-len 4096 \
      --max-num-seqs 8 \
-     --max-num-batched-tokens 8192 \
+     --max-num-batched-tokens 16384 \
      --kv-offloading-backend lmcache \
      --kv-offloading-size 64\
      --disable-hybrid-kv-cache-manager \
