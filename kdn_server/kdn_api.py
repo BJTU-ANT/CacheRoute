@@ -47,8 +47,20 @@ async def _startup():
     # 1) 原有 TextDB 初始化逻辑（保持不变）
     db_dir = _get_db_dir()
     embedding_model = os.getenv("KDN_EMBEDDING_MODEL")
+    
     embedder = None
-    ...
+
+    if embedding_model:
+        try:
+            print(f"[KDN] loading embedding model from: {embedding_model}")
+            embedder = EmbeddingEngine(embedding_model)
+            print("[KDN] embedding model loaded successfully")
+        except Exception as e:
+            print(f"[KDN] failed to load embedding model: {e}")
+            embedder = None
+    else:
+        print("[KDN] KDN_EMBEDDING_MODEL not set")
+    
     _TEXT_DB = TextDatabase(str(db_dir), embedder=embedder)
     print(f"[KDN] TextDatabase ready: {db_dir}")
 
@@ -485,3 +497,4 @@ async def _shutdown():
             await _SCHED_CLI.close()
         except Exception:
             pass
+
