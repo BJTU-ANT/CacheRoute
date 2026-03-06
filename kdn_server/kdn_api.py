@@ -3,17 +3,22 @@ from __future__ import annotations
 
 import asyncio
 import os, time
-import shutil
+import shutil,logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from model import EmbeddingEngine
+from pydantic import BaseModel
 
 from .text_db import TextDatabase
 from .kv_builder import KVBuildConfig, KVCacheBuilder
 from .sclient.scheduler_client import SchedulerClient
+from core import config
+from kdn_server.kv_injector import KVCacheInjector
+
+
 
 kdn = FastAPI(title="KDN Server v2")
 
@@ -22,6 +27,17 @@ _SCHED_CLI: SchedulerClient | None = None
 _HB_TASK: asyncio.Task | None = None
 _HB_STOP: asyncio.Event | None = None
 _KDN_ID: str = ""
+
+
+class InjectReadyKVReq(BaseModel):
+    request_id: int
+    model: str
+    knowledge_ids: List[str] = []
+    redis_host: str
+    redis_port: int
+    redis_db: int = 0
+    redis_password: Optional[str] = None
+
 
 
 def _get_db_dir() -> Path:
@@ -47,7 +63,8 @@ async def _startup():
     # 1) 原有 TextDB 初始化逻辑（保持不变）
     db_dir = _get_db_dir()
     embedding_model = os.getenv("KDN_EMBEDDING_MODEL")
-    
+    print(f"[KDN] KDN_EMBEDDING_MODEL={embedding_model!r}")
+
     embedder = None
 
     if embedding_model:
@@ -60,7 +77,7 @@ async def _startup():
             embedder = None
     else:
         print("[KDN] KDN_EMBEDDING_MODEL not set")
-    
+
     _TEXT_DB = TextDatabase(str(db_dir), embedder=embedder)
     print(f"[KDN] TextDatabase ready: {db_dir}")
 
@@ -498,3 +515,105 @@ async def _shutdown():
         except Exception:
             pass
 
+
+@kdn.post("/knowledge/inject_ready_kv")
+async def inject_ready_kv(payload: Dict[str, Any]):
+    """
+    运行时 KV 注入接口：
+    - 只按 kid 查询已有状态
+    - 只对 kv_ready=1 的 kid 执行注入
+    - 不做 build
+    """
+    if _TEXT_DB is None:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "ok": False,
+                "injected_kids": [],
+                "text_only_kids": [],
+                "miss_kids": payload.get("knowledge_ids", []),
+                "keys_injected": 0,
+                "detail": "text_db is not ready",
+            },
+        )
+
+    requested = [str(x).strip().lower() for x in (payload.get("knowledge_ids") or [])]
+    if not requested:
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "detail": "knowledge_ids is empty"},
+        )
+
+    redis_host = str(payload.get("redis_host", "127.0.0.1"))
+    redis_port = int(payload.get("redis_port", 6379))
+    redis_db = int(payload.get("redis_db", 0))
+    redis_password = payload.get("redis_password", None)
+
+    # 这里一定要拆包：get_many -> (items, miss)
+    items, miss = _TEXT_DB.get_many(requested)
+
+    # items 里的元素是 KBItem，不是 dict
+    row_map = {str(it.id): it for it in items}
+
+    injected_kids: List[str] = []
+    text_only_kids: List[str] = []
+    miss_kids: List[str] = list(miss or [])
+    total_keys = 0
+
+    kv_root = str(_get_kv_root_dir())
+
+    injector = KVCacheInjector(
+        redis_host=redis_host,
+        redis_port=redis_port,
+        redis_db=redis_db,
+        redis_password=redis_password,
+    )
+
+    for kid in requested:
+        if kid in miss_kids:
+            continue
+
+        row = row_map.get(kid)
+        if row is None:
+            # 理论上 get_many 已经把 miss 给出来了，这里兜底
+            miss_kids.append(kid)
+            continue
+
+        # KBItem 字段访问用属性，不是 get()
+        if not bool(row.kv_ready):
+            text_only_kids.append(kid)
+            continue
+
+        # 运行时注入路径只认 kid，不信任 kv_rel_dir 的格式
+        kv_dir = os.path.join(kv_root, kid)
+
+        try:
+            res = injector.inject_kv_dir(kv_dir)
+
+            # 只有真正注入完成后才记 success
+            injected_kids.append(kid)
+            total_keys += int(res.injected)
+
+            logging.info(
+                "[KDN] inject_ready_kv ok: kid=%s kv_dir=%s injected=%s missing_files=%s",
+                kid, kv_dir, res.injected, res.missing_files
+            )
+
+        except Exception as e:
+            # 注入失败时先降级为 text_only，不阻断业务
+            text_only_kids.append(kid)
+            logging.exception(
+                "[KDN] inject_ready_kv failed: kid=%s kv_dir=%s err=%s",
+                kid, kv_dir, str(e)
+            )
+
+    return JSONResponse(
+        content={
+            "ok": True,
+            "injected_kids": injected_kids,
+            "text_only_kids": text_only_kids,
+            "miss_kids": miss_kids,
+            "keys_injected": total_keys,
+            "detail": "",
+        }
+    )

@@ -3,6 +3,7 @@ import os
 import shlex
 import requests
 from core import config
+
 """
 KDN 统一注册/构建工具（Text + KV）
 --base-url http://127.0.0.1:9101 指定KDN_API
@@ -35,8 +36,8 @@ DEFAULT_BASE_URL = config.KDN_BASE_URL
 DEFAULT_WARN_LEN = config.DEFAULT_WARN_LEN
 
 # build_kv 的默认值（与你服务端默认保持一致）
-DEFAULT_API_URL = config.DEFAULT_API_URL
-DEFAULT_MODEL = config.DEFAULT_MODEL_KDN
+DEFAULT_API_URL = config.KDN_BASE_URL
+DEFAULT_MODEL = config.DEFAULT_MODEL_SHORTNAME
 DEFAULT_MAX_TOKENS = config.DEFAULT_MAX_TOKENS
 DEFAULT_TEMPERATURE = config.DEFAULT_TEMPERATURE
 DEFAULT_REDIS_HOST = config.DEFAULT_REDIS_HOST
