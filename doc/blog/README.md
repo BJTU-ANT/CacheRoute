@@ -1,7 +1,6 @@
 ### 260306 大更新（v0.1.4）实现基于文本和基于KVCache注入的全流程行为打通
 
 (1)实现基于KVCache的知识注入，当Injection_type=kvcache时，prepare work仍然拉文本并拼接，但会额外通知选中的Instance将这批knowledge_id的KVCache注入到该Instance本地的redis。Instance完成后ACK给Proxy，Proxy待确认ACK后，任务才进入Ready队列。<br>
-<img width="600" height="354" alt="image" src="https://github.com/user-attachments/assets/7565bde8-4cba-4c93-8bdf-87ff22f7786c" />
 (1.1)实现proxy.manager对知识需求的状态分类处理，对每个List_ID，查询相应信息并归类为kv_ready，text_only或miss。在注入到prompt是优先将kv_ready的放在前面，text放在后面。相应的日志会反馈给scheduler，用于上层知识维护的决策。注意，如果kid未build，kdn只把命中的发给Instance，告知miss。然后由Instance反馈给proxy，进而反馈给scheduler miss 情况。因为对于KDN面向Instance和proxy的业务面，下游无权改变上游维护知识的存储结构（考虑到存储策略问题）。<br>
 (1.2)实现KVCache注入通信链路，proxy当Injection_type=kvcache时，先做text分类与注入，再等Instance/KDN的ACK，最后进入ready。针对kv_ready的kid发起KV注入请求。搭建proxy-Instance-kdn_server子链路。<br>
 (1.3)实现具体KVCache注入行为嵌入，统一消息格式以触发重用。<br>
