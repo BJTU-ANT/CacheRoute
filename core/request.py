@@ -438,7 +438,7 @@ class Request:
             Enable_security = False,
             Compress_factor = 0.3,
             Enable_compress = True,
-            Injection_type="text",
+            Injection_type="kvcache",
             Endpoint_type="",
         )
 

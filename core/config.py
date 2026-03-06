@@ -83,8 +83,15 @@ PROXY_KV_CACHE_UPDATE_POLICY = "lru"                            # Proxy管理实
 INSTANCE_BASE_URL = "http://127.0.0.1:9001"
 INSTANCE_HOST = "127.0.0.1"
 INSTANCE_PORT = 9001
+INSTANCE_CP_HOST = "127.0.0.1"
+INSTANCE_CP_PORT = 9002
 VLLM_BASE_URL = "http://127.0.0.1:8000"
 USE_MOCK = False                                 # 本地测试标签
+
+INSTANCE_REDIS_HOST = "127.0.0.1"
+INSTANCE_REDIS_PORT = 6379
+INSTANCE_REDIS_DB = 0
+INSTANCE_REDIS_PASSWORD = None
 
 # ====================================================================#
 #                               Other                                 #
