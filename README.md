@@ -198,7 +198,16 @@ scheduler任务调度实例
 <img width="1200" height="559" alt="image" src="https://github.com/user-attachments/assets/320b5058-04b2-4de3-aa3b-aaa714b69982" />
 
 Proxy任务调度实例
-<img width="1200" height="186" alt="image" src="https://github.com/user-attachments/assets/c08659b5-e43e-4cc0-9999-d0e88cd58f58" />
+<img width="1200" height="288" alt="image" src="https://github.com/user-attachments/assets/bc24230e-0167-469b-9e6a-a7be9f5d26f0" />
+
+vLLM+LMCache复用实例
+<img width="1200" height="163" alt="image" src="https://github.com/user-attachments/assets/7506da90-9978-41fe-8288-cc53bc3678a7" />
+
+客户端响应
+<img width="1200" height="374" alt="image" src="https://github.com/user-attachments/assets/5c2c891b-8eeb-4a69-85f9-f7bc588f38bc" />
+
+
+
 
 
   
