@@ -70,9 +70,12 @@ class TokenDatabase(metaclass=abc.ABCMeta):
 
             if hasattr(kv_cache_utils, "init_none_hash"):
                 kv_cache_utils.init_none_hash(self.hash_func)
-                NONE_HASH = kv_cache_utils.NONE_HASH
+                raw_none_hash = kv_cache_utils.NONE_HASH
+                NONE_HASH = self._normalize_hash_value(raw_none_hash)
                 logger.info(
-                    f"Initialized NONE_HASH={NONE_HASH} from vLLM (>= PR#20511)"
+                    "Initialized NONE_HASH=%s (raw_type=%s)",
+                    NONE_HASH,
+                    type(raw_none_hash).__name__,
                 )
             else:
                 NONE_HASH = 0
@@ -211,6 +214,23 @@ class TokenDatabase(metaclass=abc.ABCMeta):
         # When save_only_first_rank is enabled (for MLA), we deliberately
         # collapse the CacheEngineKey.world_size to 1 so that cache keys
         # become world-size agnostic across compatible deployments.
+
+        logical_world_size = (
+            self.metadata.world_size if not self.save_only_first_rank else 1
+        )
+
+        logger.info(
+            "[KEYDBG] fmt=%s model_name=%s world_size=%s worker_id=%s "
+            "chunk_hash=%s kv_dtype=%s request_configs=%s",
+            self.metadata.fmt,
+            self.metadata.model_name,
+            logical_world_size,
+            self.metadata.worker_id,
+            chunk_hash,
+            self.metadata.kv_dtype,
+            request_configs,
+        )
+
         return CacheEngineKey(
             self.metadata.fmt,
             self.metadata.model_name,
@@ -218,7 +238,7 @@ class TokenDatabase(metaclass=abc.ABCMeta):
             self.metadata.worker_id,
             chunk_hash,
             self.metadata.kv_dtype,
-            request_configs,
+            None,
         )
 
     def _normalize_hash_value(self, hv: Any) -> int:
