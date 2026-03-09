@@ -211,9 +211,9 @@ def print_help() -> None:
     msg = r"""
 用法示例（直接在 REPL 输入一行）：
 
-  http://127.0.0.1:7001/v1/chat/completions -H "Content-Type: application/json" -d '{"model": "xxx","messages":[{"role":"user","content":"Hello"}]}'
+    http://127.0.0.1:7001/v1/chat/completions -H "Content-Type: application/json" -d '{"model":"xxx","messages":[{"role":"user","content":"Hello"}],"RAG":true,"stream":true,"Injection_type":"kvcache"}'
 
-  http://127.0.0.1:7001/v1/completions -d '{"model": "xxx","prompt":"test"}'
+  http://127.0.0.1:7001/v1/completions -d '{"model": "xxx","prompt":"test","RAG":true,"Injection_type":"text"}'
 
 命令：
   :help      显示本帮助
