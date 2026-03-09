@@ -26,8 +26,8 @@ REQUIRED_FIELDS = {
     "completions": {"model", "prompt"},
 }
 ALLOWED_OPTION_FIELDS = {
-    "chat": {"temperature", "top_p", "max_tokens", "stream", "RAG"},
-    "completions": {"temperature", "top_p", "max_tokens", "RAG"},
+    "chat": {"temperature", "top_p", "max_tokens", "stream", "RAG", "Injection_type"},
+    "completions": {"temperature", "top_p", "max_tokens", "RAG", "Injection_type"},
 }
 
 
@@ -77,6 +77,9 @@ PROXY_MAX_CAPACITY = 8                                          # Proxy管理实
 PROXY_INSTANCE_COUNT = 1                                        # Proxy管理实例设备数量
 PROXY_KV_MEM_PER_INSTANCE_GB = 128                              # Proxy管理实例设备的KVCache缓存大小
 PROXY_KV_CACHE_UPDATE_POLICY = "lru"                            # Proxy管理实例的KVCache更新策略
+
+PREPARE_CONCURRENCY = 8                                         # Proxy每个实例允许的最大并发知识准备任务数
+READY_CONCURRENCY = 8                                           # Proxy每个实例允许的最大并发推理任务数
 # ====================================================================#
 #                              Instance                               #
 # ====================================================================#

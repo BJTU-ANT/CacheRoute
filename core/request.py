@@ -229,6 +229,29 @@ class Service:
         return knowledge_ids, total_len
 
 
+def normalize_injection_type(value: Any) -> str:
+    """
+    规范化知识注入类型：
+      - 未传 / 空值：默认 kvcache
+      - 接受常见别名：kvcache / kv / kv_cache -> kvcache
+      - text / prompt -> text
+      - 非法值：回退 kvcache
+    """
+    if value is None:
+        return "kvcache"
+
+    s = str(value).strip().lower()
+    if not s:
+        return "kvcache"
+
+    if s in ("kvcache", "kv", "kv_cache", "kv-cache"):
+        return "kvcache"
+
+    if s in ("text", "prompt"):
+        return "text"
+
+    print(f"[Request] Unknown Injection_type={value!r}, fallback to 'kvcache'")
+    return "kvcache"
 # ========================================================================================================================
 # ------------------------------------------------------Task--------------------------------------------------------------
 # ========================================================================================================================
@@ -382,6 +405,8 @@ class Request:
         max_tokens = int(payload.get("max_tokens", 1000) or 1000)
         stream = parse_stream_flag(payload.get("stream"))
         rag = parse_stream_flag(payload.get("RAG"))
+        injection_type = normalize_injection_type(payload.get("Injection_type"))
+
         try:
             temperature = float(payload.get("temperature", 1.0))
         except (TypeError, ValueError):
@@ -438,7 +463,7 @@ class Request:
             Enable_security = False,
             Compress_factor = 0.3,
             Enable_compress = True,
-            Injection_type="kvcache",
+            Injection_type=injection_type,
             Endpoint_type="",
         )
 
