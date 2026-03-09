@@ -1,0 +1,42 @@
+{
+  "requests": [
+    {
+      "name": "q1",
+      "url_path": "/v1/chat/completions",
+      "body": {
+        "model": "llama3-70b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is vllm?"
+          }
+        ],
+        "stream": true,
+        "RAG": true,
+        "Injection_type": "text",
+        "max_tokens": 64,
+        "temperature": 0.8,
+        "top_p": 1.0
+      }
+    },
+    {
+      "name": "q2",
+      "url_path": "/v1/chat/completions",
+      "body": {
+        "model": "llama3-70b",
+        "messages": [
+          {
+            "role": "user",
+            "content": "What is LMCache?"
+          }
+        ],
+        "stream": true,
+        "RAG": true,
+        "Injection_type": "text",
+        "max_tokens": 64,
+        "temperature": 0.8,
+        "top_p": 1.0
+      }
+    }
+  ]
+}
