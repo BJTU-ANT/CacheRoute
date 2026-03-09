@@ -23,7 +23,7 @@ import uvicorn
 
 from contextlib import asynccontextmanager
 from dataclasses import fields
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, AsyncGenerator
 
 from fastapi import FastAPI, Request as FastAPIRequest
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -313,6 +313,64 @@ def build_body_for_instance(req_obj: SchedulerRequest, mode: str) -> Dict[str, A
     return body
 
 
+def _sse_meta_event(task: ProxyTask) -> bytes:
+    payload = {
+        "trace": task.trace,
+        "kv_ack": task.kv_ack,
+        "kv_ready_kids": task.kv_ready_kids,
+        "text_only_kids": task.text_only_kids,
+        "miss_kids": task.miss_kids,
+        "error": task.error,
+    }
+    return (
+        "event: cacheroute_meta\n"
+        f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+    ).encode("utf-8")
+
+
+async def _wrap_chat_stream_with_meta(task: ProxyTask, queue_mgr: QueueManager) -> AsyncGenerator[bytes, None]:
+    """
+    转发下游 chat SSE，但把 [DONE] 延后，先插入一条 cacheroute_meta 事件。
+    """
+    pending = b""
+    done_seen = False
+
+    async for chunk in queue_mgr.iter_response(task):
+        if not chunk:
+            continue
+
+        pending += chunk
+
+        while b"\n" in pending:
+            line, pending = pending.split(b"\n", 1)
+            full_line = line + b"\n"
+
+            if line.startswith(b"data:"):
+                data = line[len(b"data:"):].strip()
+                if data == b"[DONE]":
+                    done_seen = True
+                    continue
+
+            yield full_line
+
+        # 保守处理：如果 chunk 里没有换行，继续积累
+
+    if pending:
+        # 还有残留未结束行，原样转发
+        yield pending
+        pending = b""
+
+    # 在 [DONE] 之前插入 meta
+    yield _sse_meta_event(task)
+
+    # 再发真正的 done
+    if done_seen:
+        yield b"data: [DONE]\n\n"
+    else:
+        # 即便下游没发，也补一个，避免 client 一直等
+        yield b"data: [DONE]\n\n"
+
+
 def select_instance(app: FastAPI, req_obj: SchedulerRequest):
     """
     业务面选择一个 instance。
@@ -396,7 +454,7 @@ async def proxy_chat_completions(request: FastAPIRequest):
 
         await queue_mgr.enqueue_prepare(task)
 
-        stream_gen = queue_mgr.iter_response(task)
+        stream_gen = _wrap_chat_stream_with_meta(task, queue_mgr)
         return StreamingResponse(stream_gen, media_type="text/event-stream")
 
     except Exception as e:
@@ -481,11 +539,15 @@ async def proxy_completions(request: FastAPIRequest):
         # 尝试按 JSON 解析；解析失败就原样返回文本，便于排查
         try:
             obj = json.loads(content_bytes.decode("utf-8", errors="replace"))
+            obj["_cacheroute_meta"] = {"trace": task.trace}
             return JSONResponse(status_code=200, content=obj)
         except Exception:
             return JSONResponse(
                 status_code=200,
-                content={"raw": content_bytes.decode("utf-8", errors="replace")},
+                content={
+                    "raw": content_bytes.decode("utf-8", errors="replace"),
+                    "_cacheroute_meta": {"trace": task.trace},
+                }
             )
 
     except Exception as e:
