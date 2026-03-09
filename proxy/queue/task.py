@@ -50,3 +50,7 @@ class ProxyTask:
     kv_ready_meta: list = field(default_factory=list)
 
     kv_ack: Dict[str, Any] = field(default_factory=dict)
+    trace: Dict[str, int] = field(default_factory=dict)
+
+    def mark(self, key: str, ts_ms: int) -> None:
+        self.trace[key] = int(ts_ms)
