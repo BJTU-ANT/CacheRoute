@@ -1,3 +1,27 @@
+### 260310 提升KDN批量注册与显示能力
+
+(1)支持KDN批量知识文本注册，读取json文件内的知识文本并依次送入KDN进行注册，初始化可用的KDN知识库，具体使用方法见kdn`README`。<br>
+(2)改善KDNcli输出显示，允许查看整体资源池状态。<br>
+
+涉及新增文件：<br>
+`kdn_server/util/knowledge_manifest.json`<br>
+`kdn_server/util/batch_register_kdn.py`<br>
+
+涉及修改文件:<br>
+`kdn_server/kdn_api.py`<br>
+`kdn_server/kdn_register_cli.py`<br>
+`kdn_server/text_db.py`<br>
+
+一些提上日程的工作：<br>
+(1)KDN服务器的UI搭建，重点是知识可读性（_TODO. chen_）<br>
+(2)instance侧需要搭建一个灵活的资源检索平台(主要是基于vllm平台抓取信息)，使得instance面向proxy暴露动态更新的实例负载信息，便于proxy抓取（_TODO. sihan_）<br>
+(3)双inflight对池级业务流状态维护(_TODO. heyao_)<br>
+(4)知识清单中可用LLM系统的状态更新<br>
+
+维护者：heyao
+
+---
+
 ### 260309 实现proxy并行处理任务队列，完善时间戳与client端发包器
 
 (1)支持多任务并行知识注入调度。目前`prepare-ready`处理是串行，同一个Instance只有一个`_prepare_worker_loop()`，它会在循环里等待一次完整的text获取、分类、可能的`kv_ack`，然后才处理下一个任务（串行）。而 instance_queues.py 目前也只有两个队列，没有并发控制器或活动任务计数。增加时间锚点给每个任务记录这些时间点，单位统一为 epoch_ms。<br>
@@ -11,18 +35,6 @@ python3 perf_client.py --base-url http://127.0.0.1:7001 --workload-file workload
 其中`--allow-duplicate`：是否允许重复抽样，`--seed`：相同的seed将抽样顺序固定，便于复现。<br>
 (3)透传client字段支持写入Injection_type字段，作为在proxy目前缺少调度策略时的调试控制。<br>
 (4)修改LMCache的keys生成规则，观察是否可以跨容器周期复用（有待观察）<br>
-
-涉及新增文件：<br>
-`client/perf_client.py`<br>
-`client/workload.json`<br>
-
-涉及修改文件:<br>
-`proxy/queue/instance_queues.py`<br>
-`proxy/queue/manager.py`<br>
-`proxy/queue/task.py`<br>
-`core/config.py`<br>
-`core/request.py`<br>
-`client/client.py`<br>
 
 一些提上日程的工作：<br>
 (1)KDN服务器的UI搭建，重点是知识可读性（_TODO. chen_）<br>
