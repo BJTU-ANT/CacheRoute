@@ -32,5 +32,3 @@ http://127.0.0.1:7001/v1/completions -H "Content-Type: application/json" -d '{"m
   
 <img width="553" height="73" alt="image" src="https://github.com/user-attachments/assets/3a6b3b0c-851a-44cf-8f62-d453b926b7c2" />
 
-<img width="1200" height="73" alt="image" src="https://github.com/user-attachments/assets/e3865894-d9ff-48fa-94f0-cf4a24d7cb12" />
-
