@@ -229,12 +229,66 @@ def _is_stream_requested(body: dict) -> bool:
         return v.strip().lower() in ("1", "true", "yes", "y")
     return bool(v)
 
+
+def _calc_metrics_from_trace(trace: Dict[str, int]) -> Dict[str, Optional[int]]:
+    def duration(start_key: str, end_key: str) -> Optional[int]:
+        if start_key in trace and end_key in trace:
+            return int(trace[end_key]) - int(trace[start_key])
+        return None
+
+    prepare_queue_wait_ms = duration("proxy_enqueue_ms", "prepare_start_ms")
+    prepare_exec_ms = duration("prepare_start_ms", "ready_enqueue_ms")
+    ready_queue_wait_ms = duration("ready_enqueue_ms", "ready_dequeue_ms")
+    instance_exec_to_first_token_ms = duration("forward_start_ms", "first_token_ms")
+
+    total_prefill_ms = duration("proxy_enqueue_ms", "first_token_ms")
+    proxy_before_vllm_ms = duration("proxy_enqueue_ms", "forward_start_ms")
+    knowledge_fetch_ms = duration("kdn_fetch_start_ms", "kdn_fetch_end_ms")
+    kv_ack_ms = duration("kv_ack_start_ms", "kv_ack_end_ms")
+
+    proxy_queue_wait_ms = None
+    if prepare_queue_wait_ms is not None or ready_queue_wait_ms is not None:
+        proxy_queue_wait_ms = (prepare_queue_wait_ms or 0) + (ready_queue_wait_ms or 0)
+
+    return {
+        "total_prefill_ms": total_prefill_ms,
+        "proxy_before_vllm_ms": proxy_before_vllm_ms,
+        "proxy_queue_wait_ms": proxy_queue_wait_ms,
+        "knowledge_fetch_ms": knowledge_fetch_ms,
+        "knowledge_preparation_total_ms": prepare_exec_ms,
+        "vllm_compute_to_first_token_ms": instance_exec_to_first_token_ms,
+        "kv_ack_ms": kv_ack_ms,
+    }
+
+
+def _print_perf_summary_from_meta(meta: Dict[str, Any]) -> None:
+    trace = meta.get("trace", {}) if isinstance(meta, dict) else {}
+    metrics = _calc_metrics_from_trace(trace if isinstance(trace, dict) else {})
+
+    def fmt(v: Any) -> str:
+        return "N/A" if v is None else str(v)
+
+    print("- Performance Summary:")
+    # print(f"  Injection Type: {meta.get('injection_type', 'N/A')}")
+    print(f"  Prefill Time (ms): {fmt(metrics.get('total_prefill_ms'))}")
+    # print(f"  Time Inside Proxy Before vLLM (ms): {fmt(metrics.get('proxy_before_vllm_ms'))}")
+    # print(f"  Waiting Time Inside Proxy Queue (ms): {fmt(metrics.get('proxy_queue_wait_ms'))}")
+    # print(f"  Knowledge Fetch Time (ms): {fmt(metrics.get('knowledge_fetch_ms'))}")
+    print(f"  Knowledge Preparation Time (ms): {fmt(metrics.get('knowledge_preparation_total_ms'))}")
+    print(f"  vLLM Compute Time To First Token (ms): {fmt(metrics.get('vllm_compute_to_first_token_ms'))}")
+    # print(f"  KV Injection Acknowledge Wait Time (ms): {fmt(metrics.get('kv_ack_ms'))}")
+    # print(f"  Missing Knowledge IDs: {meta.get('miss_kids', [])}")
+
+
 def _stream_and_print_sse(resp: requests.Response) -> None:
     """
     解析 OpenAI 风格 SSE：
       data: {...json...}
       data: [DONE]
     并将内容片段拼接为可读文本输出。
+    同时支持额外的：
+      event: cacheroute_meta
+      data: {...}
     """
     print("=" * 80)
     print(f"[RESPONSE] HTTP {resp.status_code} (streaming)")
@@ -243,30 +297,39 @@ def _stream_and_print_sse(resp: requests.Response) -> None:
     print("- Stream:")
 
     full_text_parts: List[str] = []
+    current_event = "message"
+    cacheroute_meta: Dict[str, Any] = {}
 
-    # iter_lines 会按 \n 切分，SSE 的事件间隔是空行；我们只处理以 data: 开头的行
     for line in resp.iter_lines(decode_unicode=True):
         if not line:
+            current_event = "message"
             continue
 
-        # 有些实现可能会带 "data: " 前缀
-        if line.startswith("data:"):
-            data = line[len("data:"):].strip()
-        else:
-            # 容错：如果没有 data: 前缀就跳过
+        if line.startswith("event:"):
+            current_event = line[len("event:"):].strip()
             continue
+
+        if not line.startswith("data:"):
+            continue
+
+        data = line[len("data:"):].strip()
 
         if data == "[DONE]":
             break
 
+        if current_event == "cacheroute_meta":
+            try:
+                cacheroute_meta = json.loads(data)
+            except Exception:
+                cacheroute_meta = {"raw_meta": data}
+            continue
+
         try:
             obj = json.loads(data)
         except Exception:
-            # 非 JSON，直接打印原始内容
             print(data, end="", flush=True)
             continue
 
-        # OpenAI chat.completions streaming: choices[0].delta.content
         delta = None
         choices = []
 
@@ -281,7 +344,6 @@ def _stream_and_print_sse(resp: requests.Response) -> None:
         if isinstance(delta, dict):
             piece = delta.get("content") or ""
 
-        # 兼容：有些实现会用 choices[0].text（completions）
         if not piece:
             try:
                 if choices:
@@ -294,8 +356,13 @@ def _stream_and_print_sse(resp: requests.Response) -> None:
             print(piece, end="", flush=True)
 
     print("\n" + "-" * 80)
-    print("[FULL TEXT]")
-    print("".join(full_text_parts))
+    # print("[FULL TEXT]")
+    # print("".join(full_text_parts))
+
+    if cacheroute_meta:
+        print("-" * 80)
+        _print_perf_summary_from_meta(cacheroute_meta)
+
     print("=" * 80)
 
 
@@ -316,6 +383,12 @@ def pretty_print_response(resp: requests.Response, request_body: dict) -> None:
     try:
         obj = resp.json()
         print(json.dumps(obj, ensure_ascii=False, indent=2))
+
+        meta = obj.get("_cacheroute_meta")
+        if isinstance(meta, dict):
+            print("-" * 80)
+            _print_perf_summary_from_meta(meta)
+
     except ValueError:
         # 不是合法 JSON，就原样输出
         print(text)
