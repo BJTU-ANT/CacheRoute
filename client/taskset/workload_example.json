@@ -1,0 +1,22 @@
+{
+  "requests": [
+    {
+      "name": "q1",
+      "messages": [
+        {
+          "role": "user",
+          "content": "What is vllm?"
+        }
+      ]
+    },
+    {
+      "name": "q2",
+      "messages": [
+        {
+          "role": "user",
+          "content": "What is LMCache?"
+        }
+      ]
+    }
+  ]
+}
