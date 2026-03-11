@@ -474,7 +474,7 @@ class TensorMemoryObj(MemoryObj):
             # causing negative ref_count warnings.
             if self.meta.ref_count <= 0:
                 logger.warning(
-                    "Skip ref_count_down for MemoryObj %s because ref_count is already %s. "
+                    "CacheRoute reuse external knowledge block. Skip existing ref_count_down for MemoryObj %s because ref_count is already %s. "
                     "This indicates a repeated release path.",
                     self.meta.address,
                     self.meta.ref_count,
