@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import os, time
 import shutil,logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -27,6 +28,7 @@ _SCHED_CLI: SchedulerClient | None = None
 _HB_TASK: asyncio.Task | None = None
 _HB_STOP: asyncio.Event | None = None
 _KDN_ID: str = ""
+_NETWORK_SIM: Optional["NetworkSimulator"] = None
 
 
 class InjectReadyKVReq(BaseModel):
@@ -38,6 +40,161 @@ class InjectReadyKVReq(BaseModel):
     redis_db: int = 0
     redis_password: Optional[str] = None
 
+
+@dataclass
+class TransferTask:
+    task_id: str
+    payload_bytes: int
+    ready_time: float
+    future: asyncio.Future
+
+    batch_id: Optional[int] = None
+    batch_size: int = 1
+    batch_start_time: float = 0.0
+    ack_time: float = 0.0
+
+    network_queue_ms: float = 0.0
+    network_transfer_ms: float = 0.0
+    network_total_ms: float = 0.0
+
+
+class NetworkSimulator:
+    """
+    最小可用网络模拟器：
+    - 批次窗口固定 batch_window_ms
+    - 同批任务平分总带宽
+    - ack 单独返回
+    - 批间串行
+    """
+
+    def __init__(
+        self,
+        bandwidth_mb_s: float,
+        batch_window_ms: float = 10.0,
+        fixed_latency_ms: float = 0.0,
+        efficiency: float = 1.0,
+    ):
+        self.bandwidth_bytes_s = max(1.0, float(bandwidth_mb_s) * 1024.0 * 1024.0)
+        self.batch_window_ms = max(0.0, float(batch_window_ms))
+        self.fixed_latency_ms = max(0.0, float(fixed_latency_ms))
+        self.efficiency = min(1.0, max(0.01, float(efficiency)))
+
+        self.pending: asyncio.Queue[TransferTask] = asyncio.Queue()
+        self.batch_seq = 0
+        self.running = True
+        self.worker_task: Optional[asyncio.Task] = None
+
+    async def start(self) -> None:
+        if self.worker_task is None:
+            self.worker_task = asyncio.create_task(self._run())
+
+    async def stop(self) -> None:
+        self.running = False
+        if self.worker_task is not None:
+            self.worker_task.cancel()
+            try:
+                await self.worker_task
+            except asyncio.CancelledError:
+                pass
+            self.worker_task = None
+
+    async def submit_transfer(
+        self,
+        task_id: str,
+        payload_bytes: int,
+        ready_time: float,
+    ) -> Dict[str, Any]:
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+
+        task = TransferTask(
+            task_id=str(task_id),
+            payload_bytes=max(0, int(payload_bytes)),
+            ready_time=float(ready_time),
+            future=fut,
+        )
+        await self.pending.put(task)
+        return await fut
+
+    async def _run(self) -> None:
+        while self.running:
+            first_task = await self.pending.get()
+
+            batch_id = self.batch_seq
+            self.batch_seq += 1
+
+            batch_tasks: List[TransferTask] = [first_task]
+
+            batch_open_time = time.perf_counter()
+            batch_deadline = batch_open_time + self.batch_window_ms / 1000.0
+
+            while True:
+                remain = batch_deadline - time.perf_counter()
+                if remain <= 0:
+                    break
+
+                try:
+                    task = await asyncio.wait_for(self.pending.get(), timeout=remain)
+                    batch_tasks.append(task)
+                except asyncio.TimeoutError:
+                    break
+
+            await self._serve_batch(batch_id, batch_tasks)
+
+    async def _serve_batch(self, batch_id: int, batch_tasks: List[TransferTask]) -> None:
+
+        batch_start = time.perf_counter()
+        batch_size = max(1, len(batch_tasks))
+
+        logging.info(
+            "[KDN-NET] batch start id=%s size=%s",
+            batch_id,
+            batch_size,
+        )
+
+        effective_bandwidth = self.bandwidth_bytes_s * self.efficiency
+        per_task_bandwidth = max(1.0, effective_bandwidth / batch_size)
+
+        latest_ack_time = batch_start
+
+        for task in batch_tasks:
+            transfer_s = float(task.payload_bytes) / per_task_bandwidth
+            total_net_s = self.fixed_latency_ms / 1000.0 + transfer_s
+            ack_time = batch_start + total_net_s
+
+            queue_s = max(0.0, batch_start - float(task.ready_time))
+
+            task.batch_id = batch_id
+            task.batch_size = batch_size
+            task.batch_start_time = batch_start
+            task.ack_time = ack_time
+            task.network_queue_ms = queue_s * 1000.0
+            task.network_transfer_ms = total_net_s * 1000.0
+            task.network_total_ms = max(0.0, ack_time - float(task.ready_time)) * 1000.0
+
+            latest_ack_time = max(latest_ack_time, ack_time)
+
+            asyncio.create_task(self._finish_task(task))
+
+        remain = latest_ack_time - time.perf_counter()
+        if remain > 0:
+            await asyncio.sleep(remain)
+
+    async def _finish_task(self, task: TransferTask) -> None:
+        remain = task.ack_time - time.perf_counter()
+        if remain > 0:
+            await asyncio.sleep(remain)
+
+        if not task.future.done():
+            task.future.set_result(
+                {
+                    "batch_id": task.batch_id,
+                    "batch_size": task.batch_size,
+                    "network_queue_ms": round(task.network_queue_ms, 3),
+                    "network_transfer_ms": round(task.network_transfer_ms, 3),
+                    "network_total_ms": round(task.network_total_ms, 3),
+                }
+            )
 
 
 def _get_db_dir() -> Path:
@@ -58,7 +215,7 @@ def _get_kv_root_dir() -> Path:
 
 @kdn.on_event("startup")
 async def _startup():
-    global _TEXT_DB, _SCHED_CLI, _HB_TASK, _HB_STOP, _KDN_ID
+    global _TEXT_DB, _SCHED_CLI, _HB_TASK, _HB_STOP, _KDN_ID, _NETWORK_SIM
 
     # 1) 原有 TextDB 初始化逻辑（保持不变）
     db_dir = _get_db_dir()
@@ -80,6 +237,30 @@ async def _startup():
 
     _TEXT_DB = TextDatabase(str(db_dir), embedder=embedder)
     print(f"[KDN] TextDatabase ready: {db_dir}")
+
+    network_enabled = os.getenv("KDN_NETWORK_ENABLE", "0").strip() == "1"
+    if network_enabled:
+        bandwidth_mb_s = float(os.getenv("KDN_NETWORK_BW_MB_S", "1000").strip())
+        batch_window_ms = float(os.getenv("KDN_NETWORK_BATCH_WINDOW_MS", "10").strip())
+        fixed_latency_ms = float(os.getenv("KDN_NETWORK_FIXED_LATENCY_MS", "0").strip())
+        efficiency = float(os.getenv("KDN_NETWORK_EFFICIENCY", "1.0").strip())
+
+        _NETWORK_SIM = NetworkSimulator(
+            bandwidth_mb_s=bandwidth_mb_s,
+            batch_window_ms=batch_window_ms,
+            fixed_latency_ms=fixed_latency_ms,
+            efficiency=efficiency,
+        )
+        await _NETWORK_SIM.start()
+
+        print(
+            "[KDN] NetworkSimulator enabled: "
+            f"bw={bandwidth_mb_s}MB/s batch_window={batch_window_ms}ms "
+            f"fixed_latency={fixed_latency_ms}ms efficiency={efficiency}"
+        )
+    else:
+        _NETWORK_SIM = None
+        print("[KDN] NetworkSimulator disabled")
 
     # 2) scheduler registration (optional but enabled by env)
     sched_url = os.getenv("SCHEDULER_CP_URL", "").strip()
@@ -496,7 +677,13 @@ async def purge_all(payload: Dict[str, Any]):
 
 @kdn.on_event("shutdown")
 async def _shutdown():
-    global _SCHED_CLI, _HB_TASK, _HB_STOP, _KDN_ID
+    global _SCHED_CLI, _HB_TASK, _HB_STOP, _KDN_ID, _NETWORK_SIM
+
+    if _NETWORK_SIM is not None:
+        try:
+            await _NETWORK_SIM.stop()
+        except Exception as e:
+            print(f"[KDN] network simulator stop failed: {e}")
 
     if _HB_STOP is not None:
         _HB_STOP.set()
@@ -559,6 +746,8 @@ async def inject_ready_kv(payload: Dict[str, Any]):
     text_only_kids: List[str] = []
     miss_kids: List[str] = list(miss or [])
     total_keys = 0
+    total_payload_bytes = 0
+    total_payload_files = 0
 
     kv_root = str(_get_kv_root_dir())
 
@@ -589,14 +778,44 @@ async def inject_ready_kv(payload: Dict[str, Any]):
 
         try:
             res = injector.inject_kv_dir(kv_dir)
+            redis_done_ts = time.perf_counter()
 
-            # 只有真正注入完成后才记 success
+            net_result = {
+                "batch_id": None,
+                "batch_size": 1,
+                "network_queue_ms": 0.0,
+                "network_transfer_ms": 0.0,
+                "network_total_ms": 0.0,
+            }
+
+            if _NETWORK_SIM is not None and int(res.payload_bytes) > 0:
+                net_result = await _NETWORK_SIM.submit_transfer(
+                    task_id=f"{kid}:{time.time_ns()}",
+                    payload_bytes=int(res.payload_bytes),
+                    ready_time=redis_done_ts,
+                )
+
+            # 只有真正注入完成 + 网络模拟完成后才记 success
             injected_kids.append(kid)
             total_keys += int(res.injected)
+            total_payload_bytes += int(res.payload_bytes)
+            total_payload_files += int(res.payload_files)
 
             logging.info(
-                "[KDN] inject_ready_kv ok: kid=%s kv_dir=%s injected=%s missing_files=%s",
-                kid, kv_dir, res.injected, res.missing_files
+                "[KDN] inject_ready_kv ok: kid=%s kv_dir=%s injected=%s missing_files=%s "
+                "payload_bytes=%s payload_files=%s batch_id=%s batch_size=%s "
+                "network_queue_ms=%.3f network_transfer_ms=%.3f network_total_ms=%.3f",
+                kid,
+                kv_dir,
+                res.injected,
+                res.missing_files,
+                res.payload_bytes,
+                res.payload_files,
+                net_result["batch_id"],
+                net_result["batch_size"],
+                net_result["network_queue_ms"],
+                net_result["network_transfer_ms"],
+                net_result["network_total_ms"],
             )
 
         except Exception as e:
@@ -614,6 +833,9 @@ async def inject_ready_kv(payload: Dict[str, Any]):
             "text_only_kids": text_only_kids,
             "miss_kids": miss_kids,
             "keys_injected": total_keys,
+            "payload_bytes": total_payload_bytes,
+            "payload_files": total_payload_files,
+            "network_sim_enabled": _NETWORK_SIM is not None,
             "detail": "",
         }
     )

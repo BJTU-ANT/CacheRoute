@@ -22,6 +22,8 @@ class InjectResult:
     injected: int
     missing_files: int
     keys_b64url: List[str]
+    payload_bytes: int                  # 本次实际成功注入到 Redis 的 KV dump 总字节数
+    payload_files: int
 
 
 class KVCacheInjector:
@@ -56,6 +58,8 @@ class KVCacheInjector:
         injected = 0
         missing_files = 0
         keys_b64url: List[str] = []
+        payload_bytes = 0
+        payload_files = 0
 
         with manifest_path.open("r", encoding="utf-8") as f:
             for line_no, line in enumerate(f, start=1):
@@ -80,15 +84,24 @@ class KVCacheInjector:
                     continue
 
                 value = dump_path.read_bytes()
+                value_size = len(value)
 
                 # 覆盖/注入：不清空现有 redis，只写入这些 key
                 self.rds.set(key, value)
                 injected += 1
+                payload_bytes += value_size
+                payload_files += 1
 
                 if return_keys:
                     keys_b64url.append(key_b64)
 
-        return InjectResult(injected=injected, missing_files=missing_files, keys_b64url=keys_b64url)
+        return InjectResult(
+            injected=injected,
+            missing_files=missing_files,
+            keys_b64url=keys_b64url,
+            payload_bytes=payload_bytes,
+            payload_files=payload_files,
+        )
 
 
 def main():
@@ -123,4 +136,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
