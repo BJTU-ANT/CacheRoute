@@ -30,7 +30,7 @@ http://127.0.0.1:7001/v1/completions -H "Content-Type: application/json" -d '{"m
 
 (2) 并发压力测试器`client/perf_client.py`，用于并发任务包以测试系统性能，支持显示任务的阶段性能以及整体测试平均任务性能,它根据rps等负载要求从指定`workload.json`取任务送入CacheRoute：<br>
   
-<img width="553" height="73" alt="image" src="https://github.com/user-attachments/assets/3a6b3b0c-851a-44cf-8f62-d453b926b7c2" />
+<img width="1200" height="73" alt="image" src="https://github.com/user-attachments/assets/3a6b3b0c-851a-44cf-8f62-d453b926b7c2" />
 
 使用方法：
 
