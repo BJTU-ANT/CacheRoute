@@ -23,6 +23,24 @@ def parse_bool(v: Any) -> bool:
     return False
 
 
+def resolve_injection_type(base_injection_type: str, req_index: int) -> str:
+    """
+    hybrid 只在 client 侧展开，按 3 个请求为一个周期：
+    - 第 0 个 -> kvcache
+    - 第 1 个 -> kvcache
+    - 第 2 个 -> text
+
+    即模式为：
+    kvcache, kvcache, text, kvcache, kvcache, text, ...
+    """
+    if base_injection_type == "hybrid":
+        pos = req_index % 3
+        if pos in (0, 1):
+            return "kvcache"
+        return "text"
+    return base_injection_type
+
+
 def is_stream(body: Dict[str, Any]) -> bool:
     return parse_bool(body.get("stream", False))
 
@@ -219,6 +237,13 @@ async def run_one(
     name = req_tpl.get("name", f"req_{req_index}")
     url_path = req_tpl.get("url_path", "/v1/chat/completions")
     body = dict(req_tpl.get("body", {}))
+
+    actual_injection_type = resolve_injection_type(
+        str(body.get("Injection_type", "text")),
+        req_index,
+    )
+    body["Injection_type"] = actual_injection_type
+
     url = base_url.rstrip("/") + url_path
 
     headers = {"Content-Type": "application/json"}
@@ -253,7 +278,7 @@ async def run_one(
         "kv_ready_kids": meta.get("kv_ready_kids", []) if isinstance(meta, dict) else [],
         "text_only_kids": meta.get("text_only_kids", []) if isinstance(meta, dict) else [],
         "error": meta.get("error") if isinstance(meta, dict) else None,
-        "injection_type": body.get("Injection_type"),
+        "injection_type": actual_injection_type,
         "rag": body.get("RAG"),
         "stream": body.get("stream"),
         "request_body": body,
@@ -272,6 +297,14 @@ def summarize(
 ) -> None:
     def fmt(v: Any) -> str:
         return "N/A" if v is None else str(v)
+
+    def collect_metric(metric_key: str) -> List[int]:
+        vals: List[int] = []
+        for r in results:
+            v = r["metrics"].get(metric_key)
+            if isinstance(v, int):
+                vals.append(v)
+        return vals
 
     print("\n" + "=" * 160)
     print("Compact Request Performance Summary")
@@ -307,7 +340,7 @@ def summarize(
     print("=" * 160)
 
     metric_names = [
-        ("total_prefill_ms", "Average total prefill time"),
+        # ("total_prefill_ms", "Average total prefill time"),
         ("proxy_before_vllm_ms", "Average time inside proxy before vLLM"),
         ("proxy_queue_wait_ms", "Average queue waiting time inside proxy"),
         ("knowledge_fetch_ms", "Average knowledge fetch time"),
@@ -328,6 +361,12 @@ def summarize(
                 vals.append(v)
         if vals:
             print(f"{metric_label}: {int(statistics.mean(vals))} ms")
+
+    prefill_vals = collect_metric("total_prefill_ms")
+    if prefill_vals:
+        print(f"Prefill avg: {int(statistics.mean(prefill_vals))} ms")
+        print(f"Prefill min: {min(prefill_vals)} ms")
+        print(f"Prefill max: {max(prefill_vals)} ms")
 
     wall_vals = [r["wall_ms"] for r in results if isinstance(r.get("wall_ms"), int)]
     if wall_vals:
@@ -533,8 +572,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--injection-type",
+        choices=["text", "kvcache", "hybrid"],
         default="text",
-        help="injection type, e.g. text or kvcache",
+        help="injection type",
     )
     parser.add_argument(
         "--max-tokens",
