@@ -32,4 +32,15 @@ http://127.0.0.1:7001/v1/completions -H "Content-Type: application/json" -d '{"m
   
 <img width="553" height="73" alt="image" src="https://github.com/user-attachments/assets/3a6b3b0c-851a-44cf-8f62-d453b926b7c2" />
 
-使用方法：即将完成。
+使用方法：
+
+ - 并发模式：`--base-url`：scheduler服务地址，`--url-path`：vLLM后缀API路径默认“v1/chat/completions”，`--workload-file`：请求任务库的json文件路径，`--request`：发送的总请求数量，`--concurrency`：最大并发请求数量，`--allow-duplicate` 允许在任务集中重复抽取，`--seed`：相同的seed将抽样顺序固定，便于复现。
+```
+python3 perf_client.py --base-url http://127.0.0.1:7001 --workload-file taskset/workload_nq.json --model llama3-70b --stream true --rag true --injection-type text --max-tokens 64 --temperature 0.8 --top-p 1.0 --requests 20 --concurrency 4 --seed 42
+```
+ - RPS模式：以预设RPS发送数据包，完成Request个任务结束，统计任务平均性能。`rps`设置RPS模式，`injection-type`：设置任务的知识注入模式，支持‘text’‘kvcache’和‘hybrid’。
+```
+python3 perf_client.py --mode rps --base-url http://127.0.0.1:7001 --workload-file taskset/workload_nq.json --model llama3-70b --stream true --rag true --injection-type kvcache --requests 30 --rps 0.1 --seed 118
+```
+<img width="1200" height="1193" alt="image" src="https://github.com/user-attachments/assets/f74b8e51-c11b-408a-b422-021f967766ea" />
+
