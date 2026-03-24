@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import os
 import threading
+import logging
 from typing import Any, Dict, List, Optional, Tuple
 
 from .base import ProxySelectionStrategy
+
+logger = logging.getLogger("scheduler.strategy.cacheroute")
 
 
 class CacheRouteStrategy(ProxySelectionStrategy):
@@ -50,6 +53,8 @@ class CacheRouteStrategy(ProxySelectionStrategy):
         self._affinity_decay = float(os.environ.get("SCHEDULER_CACHEROUTE_AFFINITY_DECAY", "0.9").strip() or 0.9)
         # 每个 proxy 只保留最近最有价值的 top-k kid，避免状态无限增长
         self._affinity_topk = int(os.environ.get("SCHEDULER_CACHEROUTE_AFFINITY_TOPK", "256").strip() or 256)
+        # 输出简洁的一行决策日志，默认开启；设为 0 可关闭。
+        self._log_decision = bool(int(os.environ.get("SCHEDULER_CACHEROUTE_LOG_DECISION", "1").strip() or 0))
         # 记录最近一次决策快照，供 /debug/strategy 读取。
         self._last_decision: Dict[str, Any] = {}
         # 粗粒度知识历史偏好：proxy_id -> kid -> decayed_score
@@ -355,4 +360,18 @@ class CacheRouteStrategy(ProxySelectionStrategy):
             knowledge_list=knowledge_list,
             length_by_kid=length_by_kid,
         )
+        if self._log_decision:
+            try:
+                logger.info(
+                    "[CacheRoute] req=%s kdn=%s proxy=%s kids=%d kdn_candidates=%d proxy_candidates=%d",
+                    str(ctx.get("request_id", "")),
+                    str((chosen_kdn or {}).get("kdn_id", "")),
+                    str((chosen_proxy or {}).get("proxy_id", "")),
+                    len(knowledge_list),
+                    len(self._last_decision.get("kdn_candidates", []) or []),
+                    len(self._last_decision.get("proxy_candidates", []) or []),
+                )
+            except Exception:
+                # 日志失败不应影响调度路径
+                pass
         return chosen_kdn, chosen_proxy
