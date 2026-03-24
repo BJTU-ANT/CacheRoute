@@ -441,14 +441,37 @@ async def create_chat_completions(request: FastAPIRequest):
     # 构建内部 Request（包含 Prompt/Service/Task 等）
     pool = get_pool()
     proxy_infos = await pool.list(include_dead=False)
-    proxies = [{"proxy_id": p.proxy_id, "host": p.host, "port": p.port} for p in proxy_infos]
+    proxies = [
+        {
+            "proxy_id": p.proxy_id,
+            "host": p.host,
+            "port": p.port,
+            "inflight": p.load.inflight,
+            "qps_1m": p.load.qps_1m,
+            "gpu_util": p.load.gpu_util,
+            "meta": dict(p.meta or {}),
+        }
+        for p in proxy_infos
+    ]
 
     kdn_pool = get_kdn_pool()
     kdn_infos = await kdn_pool.list(include_dead=False)
-    kdns = [{"kdn_id": k.kdn_id, "host": k.host, "port": k.port} for k in kdn_infos]
+    kdns = [
+        {
+            "kdn_id": k.kdn_id,
+            "host": k.host,
+            "port": k.port,
+            "items": k.load.items,
+            "qps_1m": k.load.qps_1m,
+            "meta": dict(k.meta or {}),
+        }
+        for k in kdn_infos
+    ]
 
     strategy = getattr(request.app.state, "proxy_strategy", None)
-    req_obj = _handle_client(request.app, url_path, payload, client_ip, proxies=proxies, kdns=kdns, strategy=strategy,)
+    payload_for_build = dict(payload)
+    payload_for_build["_scheduler_kdn_knowledge_index"] = getattr(request.app.state, "kdn_knowledge_index", {})
+    req_obj = _handle_client(request.app, url_path, payload_for_build, client_ip, proxies=proxies, kdns=kdns, strategy=strategy,)
 
     if not req_obj.Task.KDN_server_addr or not req_obj.Task.P_proxy_addr or req_obj.Task.P_proxy_port <= 0:
         raise RuntimeError("Routing failed: missing KDN or Proxy selection")
@@ -531,14 +554,37 @@ async def create_completions(request: FastAPIRequest):
     # 构建内部 Request（包含 Prompt/Service/Task 等）
     pool = get_pool()
     proxy_infos = await pool.list(include_dead=False)
-    proxies = [{"proxy_id": p.proxy_id, "host": p.host, "port": p.port} for p in proxy_infos]
+    proxies = [
+        {
+            "proxy_id": p.proxy_id,
+            "host": p.host,
+            "port": p.port,
+            "inflight": p.load.inflight,
+            "qps_1m": p.load.qps_1m,
+            "gpu_util": p.load.gpu_util,
+            "meta": dict(p.meta or {}),
+        }
+        for p in proxy_infos
+    ]
 
     kdn_pool = get_kdn_pool()
     kdn_infos = await kdn_pool.list(include_dead=False)
-    kdns = [{"kdn_id": k.kdn_id, "host": k.host, "port": k.port} for k in kdn_infos]
+    kdns = [
+        {
+            "kdn_id": k.kdn_id,
+            "host": k.host,
+            "port": k.port,
+            "items": k.load.items,
+            "qps_1m": k.load.qps_1m,
+            "meta": dict(k.meta or {}),
+        }
+        for k in kdn_infos
+    ]
 
     strategy = getattr(request.app.state, "proxy_strategy", None)
-    req_obj = _handle_client(request.app, url_path, payload, client_ip, proxies=proxies, kdns=kdns, strategy=strategy,)
+    payload_for_build = dict(payload)
+    payload_for_build["_scheduler_kdn_knowledge_index"] = getattr(request.app.state, "kdn_knowledge_index", {})
+    req_obj = _handle_client(request.app, url_path, payload_for_build, client_ip, proxies=proxies, kdns=kdns, strategy=strategy,)
 
     if not req_obj.Task.KDN_server_addr or not req_obj.Task.P_proxy_addr or req_obj.Task.P_proxy_port <= 0:
         raise RuntimeError("Routing failed: missing KDN or Proxy selection")

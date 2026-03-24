@@ -19,6 +19,7 @@ KDN_BASE_URL = config.KDN_BASE_URL
 dp_port = config.SCHEDULER_DP_PORT
 dp_host = config.SCHEDULER_DP_HOST
 
+
 def main():
     # logging配置
     logging.basicConfig(
@@ -28,7 +29,14 @@ def main():
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--strategy", default="round_robin", help="proxy scheduling strategy")
+    parser.add_argument(
+        "--cacheroute",
+        action="store_true",
+        help="shortcut for --strategy cacheroute",
+    )
     args = parser.parse_args()
+
+    strategy_name = "cacheroute" if args.cacheroute else args.strategy
 
     # 把模型路径暴露给 scheduler（scheduler.py 里通过 os.getenv 读取）
     os.environ["SCHEDULER_MODEL_PATH"] = MODEL_PATH
@@ -38,8 +46,7 @@ def main():
     os.environ["SCHEDULER_EMBEDDING_MODEL"] = EMBEDDING_MODEL
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
-    os.environ["SCHEDULER_STRATEGY"] = args.strategy
-
+    os.environ["SCHEDULER_STRATEGY"] = strategy_name
 
     # 配置 uvicorn.Server
     config = uvicorn.Config(scheduler, host=dp_host, port=dp_port, reload=False)
@@ -50,4 +57,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
