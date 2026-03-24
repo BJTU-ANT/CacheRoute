@@ -317,6 +317,7 @@ class Request:
             proxies: Optional[List[Dict[str, Any]]] = None,
             kdns: Optional[List[Dict[str, Any]]] = None,
             strategy: Optional[Any] = None,
+            kdn_knowledge_index: Optional[Dict[str, Dict[str, Dict[str, Any]]]] = None,
     ) -> "Request":
         """
             将原始用户请求信息payload，以及转换为完整的 Request 对象。
@@ -527,12 +528,28 @@ class Request:
             if strategy and hasattr(strategy, "select"):
                 # 统一策略接口：要求策略提供 select(proxies, request_obj_like) 或 select(proxies, payload)
                 # 这里为了避免 build_request 依赖 scheduler 的 Request 类型，我们先把最小上下文传给策略：
+                request_ctx = {
+                    "request_id": request_id,
+                    "knowledge_list": list(service_obj.Knowledge_List or []),
+                    "knowledge_length": int(service_obj.Knowledge_length or 0),
+                    "endpoint_type": service_obj.Endpoint_type,
+                    # Injection_type 当前主要用于调试；正式策略不应依赖它做硬分支。
+                    "injection_type": service_obj.Injection_type,
+                    "rag_enabled": bool(service_obj.Enable_know_injection),
+                    "prompt_token_length": int(prompt_obj.token_length or 0),
+                    "user_prompt": user_prompt,
+                    # 下面两个上下文允许策略复用 scheduler 已维护的数据，
+                    # 避免重复做 embedding 或在线拼状态。
+                    "knowledge_table": knowledge_table,
+                    "kdn_knowledge_index": kdn_knowledge_index or {},
+                }
                 chosen_kdn, chosen_proxy = strategy.select(
                     kdns=kdns or [],
                     proxies=proxies or [],
                     payload=payload,
                     url_path=url_path,
                     user_addr=user_addr,
+                    request_ctx=request_ctx,
                 )
 
                 if chosen_kdn:

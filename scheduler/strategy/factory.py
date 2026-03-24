@@ -5,11 +5,14 @@ from typing import Dict
 
 from .base import ProxySelectionStrategy
 from .round_robin import RoundRobinStrategy
+from .cacheroute import CacheRouteStrategy
 
 
 _STRATEGIES: Dict[str, type[ProxySelectionStrategy]] = {
     "round_robin": RoundRobinStrategy,
+    "cacheroute": CacheRouteStrategy,
 }
+
 
 def create_strategy(name: str) -> ProxySelectionStrategy:
     key = (name or "").strip().lower()

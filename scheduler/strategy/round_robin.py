@@ -7,12 +7,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from .base import ProxySelectionStrategy
 
 
-
 class RoundRobinStrategy(ProxySelectionStrategy):
     """
     最简单的 round-robin：
     - 在“当前存活 proxy 列表”上做循环取模
     - 用 threading.Lock 保护 index，避免并发请求打乱顺序
+    - request_ctx 对该策略无用，但保留统一接口，方便 scheduler 无差别调用
     """
 
     name: str = "round_robin"
@@ -29,6 +29,7 @@ class RoundRobinStrategy(ProxySelectionStrategy):
         payload: Dict[str, Any],
         url_path: str,
         user_addr: str,
+        request_ctx: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
         chosen_kdn = None
         chosen_proxy = None

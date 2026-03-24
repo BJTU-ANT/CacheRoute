@@ -29,6 +29,58 @@ def _format_kdn_addr(host: str, port: int) -> str:
     return f"kdn://{host}:{int(port)}"
 
 
+async def refresh_kdn_knowledge_index(app) -> Dict[str, Dict[str, Dict[str, int]]]:
+    """
+    为 scheduler 构建一个轻量级 per-KDN 知识元数据索引。
+
+    返回结构：
+      {
+        <kdn_id>: {
+          <kid>: {"length": 123, "kv_ready": 1},
+          ...
+        },
+        "kdn://host:port": {...}  # 兼容地址查询
+      }
+
+    说明：
+    - 这里只拉 metadata，不拉 embedding，避免把知识表构建逻辑和 KDN 选择逻辑混在一起。
+    - 先顺序实现，保持最小改动；后续若 KDN 数量增多，可再并发化。
+    """
+    pool = getattr(app.state, "kdn_pool", None)
+    if pool is None:
+        app.state.kdn_knowledge_index = {}
+        return {}
+
+    alive = await pool.list(include_dead=False)
+    if not alive:
+        app.state.kdn_knowledge_index = {}
+        return {}
+
+    index: Dict[str, Dict[str, Dict[str, int]]] = {}
+    for info in alive:
+        base_url = f"http://{info.host}:{int(info.port)}"
+        items = await fetch_kdn_snapshot(
+            base_url=base_url,
+            need_fields=["kid", "length", "kv_ready"],
+        )
+
+        meta_by_kid: Dict[str, Dict[str, int]] = {}
+        for it in items:
+            kid = str(it.get("kid") or "").strip().lower()
+            if not kid:
+                continue
+            meta_by_kid[kid] = {
+                "length": int(it.get("length") or 0),
+                "kv_ready": int(it.get("kv_ready") or 0),
+            }
+
+        index[str(info.kdn_id)] = meta_by_kid
+        index[_format_kdn_addr(info.host, info.port)] = meta_by_kid
+
+    app.state.kdn_knowledge_index = index
+    return index
+
+
 async def select_kdn_base_url(app) -> tuple[str | None, list[str]]:
     """
     Select one alive KDN server from scheduler's kdn_pool.
@@ -125,6 +177,8 @@ async def kdn_refresh_once(app) -> dict:
         raise RuntimeError("scheduler.state._kdn_refresh_lock is not initialized")
 
     async with lock:
+        kdn_knowledge_index = await refresh_kdn_knowledge_index(app)
+
         kdn_base_url, alive_addrs = await select_kdn_base_url(app)
         if not kdn_base_url:
             app.state.kdn_last_refresh_ok = False
@@ -173,6 +227,8 @@ async def kdn_refresh_once(app) -> dict:
                 unit = KnowledgeUnit(
                     embedding=list(emb),
                     length=int(it.get("length") or 0),
+                    # 当前 KnowledgeTable 继续保留“哪些 KDN 可用”的全局视角；
+                    # 精确到每个 KDN 的覆盖信息由 kdn_knowledge_index 维护，供 cacheroute 使用。
                     avail_kdn_servers=list(alive_addrs),
                     kv_ready=int(it.get("kv_ready") or 0),
                     kv_rel_dir=it.get("kv_rel_dir"),
