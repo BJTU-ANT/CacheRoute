@@ -69,14 +69,21 @@ cd test
 python3 demo_scheduler.py --cacheroute
 ```
 可选附加参数（便于实验调参）：
-- `--kdn-pending-overload-th <int>`
-- `--kdn-active-overload-th <int>`
-- `--kdn-queue-ms-overload-th <float>`
-- `--cacheroute-log-decision {0|1}`
+- `--kdn-pending-overload-th <int>` KDN为排队任务设置的过载阈值判定，当pending_transfers>阈值时视为过载
+- `--kdn-active-overload-th <int>` KDN为活跃任务数设置的过载阈值判定
+- `--kdn-queue-ms-overload-th <float>` KDN为队列时延设置的过载阈值判定
+- `--cacheroute-log-decision {0|1}` 是否打印每个请求的一行决策日志。
+- 
+python3 test/demo_scheduler.py \
+  --cacheroute \
+  --kdn-pending-overload-th 8 \
+  --kdn-active-overload-th 4 \
+  --kdn-queue-ms-overload-th 30 \
+  --cacheroute-log-decision 1
+```
 
-说明：以上参数同时支持两种配置方式：
-1) 命令行 `--argument` 覆盖；
-2) 统一在 `core/config.py` 中设置默认值（demo 启动时自动读取）。
+说明：以上参数同时支持两种配置方式： 命令行 `--argument` 覆盖；或 统一在 `core/config.py` 中设置默认值（demo 启动时自动读取）。
+
 
 2) 启动 proxy 并注入拓扑 tier（可选，但建议用于验证第二阶段）：
 ```bash

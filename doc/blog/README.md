@@ -1,3 +1,5 @@
+**此处为cacheroute初始架构搭建相关更新日志。自260324起，系统调试与blog更新移至pull Requests内。**
+
 ### 260312 提升Perf_Client能力，修复KEYS失配问题，完善KDN能力
 
 (1)修改LMCache的keys生成规则，观察是否可以跨容器周期复用（有待观察）依旧失败，chunk hash值还在变化导致KEY不一致，依次排查过`NONE_HASH`,`model_name`等变量，最后发现确认是chunk_hash在变化，其根本原因在于chat-template中包含Today-Data信息，导致日期变化KVCache前缀失效。<br>
