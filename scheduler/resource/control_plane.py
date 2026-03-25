@@ -145,6 +145,9 @@ class KDNHeartbeatRequest(BaseModel):
     kdn_id: str
     items: Optional[int] = None
     qps_1m: Optional[float] = None
+    pending_transfers: Optional[int] = None
+    active_transfers: Optional[int] = None
+    network_queue_ms_ema: Optional[float] = None
 
 class KDNUnregisterRequest(BaseModel):
     kdn_id: str
@@ -159,6 +162,9 @@ class KDNInfoResponse(BaseModel):
     meta: Dict[str, Any]
     items: int
     qps_1m: float
+    pending_transfers: int
+    active_transfers: int
+    network_queue_ms_ema: float
     registered_at: float
     last_seen_at: float
     is_alive: bool
@@ -380,6 +386,9 @@ def _kdn_to_response(info: KDNInfo) -> KDNInfoResponse:
         meta=dict(info.meta),
         items=int(info.load.items),
         qps_1m=float(info.load.qps_1m),
+        pending_transfers=int(info.load.pending_transfers),
+        active_transfers=int(info.load.active_transfers),
+        network_queue_ms_ema=float(info.load.network_queue_ms_ema),
         registered_at=float(info.registered_at),
         last_seen_at=float(info.last_seen_at),
         is_alive=info.is_alive(pool.ttl_s),
@@ -417,8 +426,20 @@ async def kdn_register(req: KDNRegisterRequest):
 @control_plane.post("/v1/kdn/heartbeat")
 async def kdn_heartbeat(req: KDNHeartbeatRequest):
     load = None
-    if req.items is not None or req.qps_1m is not None:
-        load = KDNLoad(items=int(req.items or 0), qps_1m=float(req.qps_1m or 0.0))
+    if (
+        req.items is not None
+        or req.qps_1m is not None
+        or req.pending_transfers is not None
+        or req.active_transfers is not None
+        or req.network_queue_ms_ema is not None
+    ):
+        load = KDNLoad(
+            items=int(req.items or 0),
+            qps_1m=float(req.qps_1m or 0.0),
+            pending_transfers=int(req.pending_transfers or 0),
+            active_transfers=int(req.active_transfers or 0),
+            network_queue_ms_ema=float(req.network_queue_ms_ema or 0.0),
+        )
 
     pool = get_kdn_pool()
     ok = await pool.heartbeat(req.kdn_id, load=load)

@@ -29,25 +29,25 @@ def build_args():
     parser.add_argument(
         "--network-bw-mb-s",
         type=float,
-        default=125.0,
+        default=config.KDN_NETWORK_BW_MB_S,
         help="Total simulated network bandwidth in MB/s",
     )
     parser.add_argument(
         "--network-batch-window-ms",
         type=float,
-        default=10.0,
+        default=config.KDN_NETWORK_BATCH_WINDOW_MS,
         help="Batching window for simulated network scheduler in ms",
     )
     parser.add_argument(
         "--network-fixed-latency-ms",
         type=float,
-        default=10.0,
+        default=config.KDN_NETWORK_FIXED_LATENCY_MS,
         help="Fixed per-transfer latency in ms",
     )
     parser.add_argument(
         "--network-efficiency",
         type=float,
-        default=0.8,
+        default=config.KDN_NETWORK_EFFICIENCY,
         help="Bandwidth efficiency factor in (0, 1]",
     )
 

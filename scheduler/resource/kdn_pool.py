@@ -9,9 +9,13 @@ from typing import Any, Dict, List, Optional
 
 @dataclass
 class KDNLoad:
-    # 预留：未来 KDN 可上报自身负载（条目数、QPS、CPU等）
+    # 基础负载
     items: int = 0
     qps_1m: float = 0.0
+    # v0.1.7: KDN 网络/注入侧负载（用于 CacheRoute 过载判定）
+    pending_transfers: int = 0
+    active_transfers: int = 0
+    network_queue_ms_ema: float = 0.0
 
 
 @dataclass

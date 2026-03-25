@@ -312,9 +312,10 @@ async def lifespan(app: FastAPI):
     # ------------------------------------------
     # 调用具体scheduler策略
     # ------------------------------------------
-    strategy_name = os.environ.get("SCHEDULER_STRATEGY", "round_robin")
+    strategy_name = os.environ.get("SCHEDULER_STRATEGY", config.SCHEDULER_DEFAULT_STRATEGY)
     app.state.proxy_strategy = create_strategy(strategy_name)  # type: ignore
-    logger.info("[Scheduler] scheduler strategy=%s", strategy_name)
+    loaded_name = getattr(app.state.proxy_strategy, "name", strategy_name)
+    logger.info("[Scheduler] strategy loaded: %s", loaded_name)
 
     # 这里 yield 之后是正常服务期
     logger.info("[Scheduler] startup: 初始化完成，监听服务中")
@@ -364,6 +365,7 @@ def _handle_client(
     proxies: List[Dict[str, Any]] | None = None,
     kdns: List[Dict[str, Any]] | None = None,
     strategy: Any | None = None,
+    kdn_knowledge_index: Dict[str, Dict[str, Dict[str, Any]]] | None = None,
 ) -> SchedulerRequest:
     """
     根据 HTTP 请求信息
@@ -394,6 +396,7 @@ def _handle_client(
         proxies=proxies,
         kdns=kdns,
         strategy=strategy,
+        kdn_knowledge_index=kdn_knowledge_index,
     )
     if os.environ.get("SCHEDULER_VERBOSE_REQUEST_LOG", config.SCHEDULER_VERBOSE_REQUEST_LOG) == 1:
         print(f"[Scheduler] 构建内部 Request 成功: Request_ID={req_obj.Request_ID},\n"
@@ -441,14 +444,47 @@ async def create_chat_completions(request: FastAPIRequest):
     # 构建内部 Request（包含 Prompt/Service/Task 等）
     pool = get_pool()
     proxy_infos = await pool.list(include_dead=False)
-    proxies = [{"proxy_id": p.proxy_id, "host": p.host, "port": p.port} for p in proxy_infos]
+    proxies = [
+        {
+            "proxy_id": p.proxy_id,
+            "host": p.host,
+            "port": p.port,
+            "inflight": p.load.inflight,
+            "qps_1m": p.load.qps_1m,
+            "gpu_util": p.load.gpu_util,
+            "meta": dict(p.meta or {}),
+        }
+        for p in proxy_infos
+    ]
 
     kdn_pool = get_kdn_pool()
     kdn_infos = await kdn_pool.list(include_dead=False)
-    kdns = [{"kdn_id": k.kdn_id, "host": k.host, "port": k.port} for k in kdn_infos]
+    kdns = [
+        {
+            "kdn_id": k.kdn_id,
+            "host": k.host,
+            "port": k.port,
+            "items": k.load.items,
+            "qps_1m": k.load.qps_1m,
+            "pending_transfers": k.load.pending_transfers,
+            "active_transfers": k.load.active_transfers,
+            "network_queue_ms_ema": k.load.network_queue_ms_ema,
+            "meta": dict(k.meta or {}),
+        }
+        for k in kdn_infos
+    ]
 
     strategy = getattr(request.app.state, "proxy_strategy", None)
-    req_obj = _handle_client(request.app, url_path, payload, client_ip, proxies=proxies, kdns=kdns, strategy=strategy,)
+    req_obj = _handle_client(
+        request.app,
+        url_path,
+        payload,
+        client_ip,
+        proxies=proxies,
+        kdns=kdns,
+        strategy=strategy,
+        kdn_knowledge_index=getattr(request.app.state, "kdn_knowledge_index", {}),
+    )
 
     if not req_obj.Task.KDN_server_addr or not req_obj.Task.P_proxy_addr or req_obj.Task.P_proxy_port <= 0:
         raise RuntimeError("Routing failed: missing KDN or Proxy selection")
@@ -531,14 +567,47 @@ async def create_completions(request: FastAPIRequest):
     # 构建内部 Request（包含 Prompt/Service/Task 等）
     pool = get_pool()
     proxy_infos = await pool.list(include_dead=False)
-    proxies = [{"proxy_id": p.proxy_id, "host": p.host, "port": p.port} for p in proxy_infos]
+    proxies = [
+        {
+            "proxy_id": p.proxy_id,
+            "host": p.host,
+            "port": p.port,
+            "inflight": p.load.inflight,
+            "qps_1m": p.load.qps_1m,
+            "gpu_util": p.load.gpu_util,
+            "meta": dict(p.meta or {}),
+        }
+        for p in proxy_infos
+    ]
 
     kdn_pool = get_kdn_pool()
     kdn_infos = await kdn_pool.list(include_dead=False)
-    kdns = [{"kdn_id": k.kdn_id, "host": k.host, "port": k.port} for k in kdn_infos]
+    kdns = [
+        {
+            "kdn_id": k.kdn_id,
+            "host": k.host,
+            "port": k.port,
+            "items": k.load.items,
+            "qps_1m": k.load.qps_1m,
+            "pending_transfers": k.load.pending_transfers,
+            "active_transfers": k.load.active_transfers,
+            "network_queue_ms_ema": k.load.network_queue_ms_ema,
+            "meta": dict(k.meta or {}),
+        }
+        for k in kdn_infos
+    ]
 
     strategy = getattr(request.app.state, "proxy_strategy", None)
-    req_obj = _handle_client(request.app, url_path, payload, client_ip, proxies=proxies, kdns=kdns, strategy=strategy,)
+    req_obj = _handle_client(
+        request.app,
+        url_path,
+        payload,
+        client_ip,
+        proxies=proxies,
+        kdns=kdns,
+        strategy=strategy,
+        kdn_knowledge_index=getattr(request.app.state, "kdn_knowledge_index", {}),
+    )
 
     if not req_obj.Task.KDN_server_addr or not req_obj.Task.P_proxy_addr or req_obj.Task.P_proxy_port <= 0:
         raise RuntimeError("Routing failed: missing KDN or Proxy selection")
@@ -615,6 +684,10 @@ async def debug_status() -> Dict[str, Any]:
 
     pool = get_pool()
     proxy_infos = await pool.list(include_dead=False)
+    kdn_pool = get_kdn_pool()
+    kdn_infos = await kdn_pool.list(include_dead=False)
+    strategy = getattr(scheduler.state, "proxy_strategy", None)  # type: ignore
+    strategy_name = getattr(strategy, "name", None) or (type(strategy).__name__ if strategy else None)
 
     proxy_states = []
     for p in proxy_infos:
@@ -631,10 +704,23 @@ async def debug_status() -> Dict[str, Any]:
             "qps_1m": p.load.qps_1m,
             "gpu_util": p.load.gpu_util,
         })
+    kdn_states = []
+    for k in kdn_infos:
+        kdn_states.append({
+            "kdn_id": k.kdn_id,
+            "host": k.host,
+            "port": k.port,
+            "items": k.load.items,
+            "qps_1m": k.load.qps_1m,
+            "pending_transfers": k.load.pending_transfers,
+            "active_transfers": k.load.active_transfers,
+            "network_queue_ms_ema": k.load.network_queue_ms_ema,
+        })
 
     if table is None:
 
         return {
+            "strategy": strategy_name,
             "knowledge_loaded": False,
             "entries": 0,
             "dim": None,
@@ -650,6 +736,7 @@ async def debug_status() -> Dict[str, Any]:
             "kdn_last_refresh_ok": False,
             "kdn_last_refresh_reason": "",
             "kdn_last_refresh_ts": 0,
+            "kdns": kdn_states,
             "proxies": proxy_states,
         }
 
@@ -681,6 +768,7 @@ async def debug_status() -> Dict[str, Any]:
             unit_fields = [x for x in dir(u0) if not x.startswith("_")]
 
     return {
+        "strategy": strategy_name,
         "knowledge_loaded": True,
         "entries": len(units),
         "dim": dim,
@@ -696,6 +784,7 @@ async def debug_status() -> Dict[str, Any]:
         "kdn_last_refresh_ok": kdn_last_refresh_ok,
         "kdn_last_refresh_reason": kdn_last_refresh_reason,
         "kdn_last_refresh_ts": kdn_last_refresh_ts,
+        "kdns": kdn_states,
         "proxies": proxy_states,
     }
 
@@ -772,11 +861,17 @@ async def debug_strategy() -> Dict[str, Any]:
         "is_alive": True,  # list(include_dead=False) 已保证 alive
     } for p in proxy_infos[:10]]
 
-    return {
+    out = {
         "strategy": getattr(strategy, "name", None) or type(strategy).__name__ if strategy else None,
         "proxy_count": len(proxy_infos),
         "proxies_sample": sample,
     }
+    if strategy is not None and hasattr(strategy, "get_debug_snapshot"):
+        try:
+            out["strategy_debug"] = strategy.get_debug_snapshot()  # type: ignore
+        except Exception:
+            out["strategy_debug"] = {"error": "strategy debug snapshot unavailable"}
+    return out
 
 # 预留：/knowledge/update 等路由以后再加
 # @api.post("/knowledge/update")
@@ -785,5 +880,3 @@ async def debug_strategy() -> Dict[str, Any]:
 #     client_ip = request.client.host if request.client else "unknown"
 #     ...
 #     return JSONResponse(content={"status": "ok"})
-
-

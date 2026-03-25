@@ -38,9 +38,28 @@ class SchedulerClient:
         r.raise_for_status()
         return r.json()
 
-    async def heartbeat(self, kdn_id: str) -> Dict[str, Any]:
+    async def heartbeat(
+        self,
+        kdn_id: str,
+        items: Optional[int] = None,
+        qps_1m: Optional[float] = None,
+        pending_transfers: Optional[int] = None,
+        active_transfers: Optional[int] = None,
+        network_queue_ms_ema: Optional[float] = None,
+    ) -> Dict[str, Any]:
         url = f"{self.base}/v1/kdn/heartbeat"
-        r = await self._cli.post(url, json={"kdn_id": kdn_id})
+        payload: Dict[str, Any] = {"kdn_id": kdn_id}
+        if items is not None:
+            payload["items"] = int(items)
+        if qps_1m is not None:
+            payload["qps_1m"] = float(qps_1m)
+        if pending_transfers is not None:
+            payload["pending_transfers"] = int(pending_transfers)
+        if active_transfers is not None:
+            payload["active_transfers"] = int(active_transfers)
+        if network_queue_ms_ema is not None:
+            payload["network_queue_ms_ema"] = float(network_queue_ms_ema)
+        r = await self._cli.post(url, json=payload)
         r.raise_for_status()
         return r.json()
 

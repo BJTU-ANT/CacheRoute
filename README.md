@@ -219,9 +219,25 @@ vLLM+LMCache复用实例
 客户端响应
 <img width="1200" height="374" alt="image" src="https://github.com/user-attachments/assets/5c2c891b-8eeb-4a69-85f9-f7bc588f38bc" />
 
+---
+
+### 阶段说明（Scheduler / CacheRoute）
+
+当前阶段已支持通过 `cacheroute` 在 Scheduler 侧完成：
+- 基于知识覆盖与过载过滤的 KDN 选择；
+- 基于拓扑分层、负载安全窗口与知识历史偏好的 Proxy 选择（非加权词典序）；
+- `/debug/status` 与 `/debug/strategy` 的策略观测。
+
+建议的最小验证命令：
+```bash
+cd test
+python3 demo_scheduler.py --cacheroute
+curl -s http://127.0.0.1:7001/debug/status
+curl -s http://127.0.0.1:7001/debug/strategy
+```
+
 
 
 
 
   
-

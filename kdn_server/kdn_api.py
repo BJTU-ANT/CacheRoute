@@ -83,6 +83,10 @@ class NetworkSimulator:
         self.batch_seq = 0
         self.running = True
         self.worker_task: Optional[asyncio.Task] = None
+        # 用于心跳上报的轻量统计
+        self._active_transfers = 0
+        self._queue_ms_ema = 0.0
+        self._ema_alpha = 0.2
 
     async def start(self) -> None:
         if self.worker_task is None:
@@ -157,6 +161,7 @@ class NetworkSimulator:
 
         latest_ack_time = batch_start
 
+        self._active_transfers = batch_size
         for task in batch_tasks:
             transfer_s = float(task.payload_bytes) / per_task_bandwidth
             total_net_s = self.fixed_latency_ms / 1000.0 + transfer_s
@@ -169,6 +174,8 @@ class NetworkSimulator:
             task.batch_start_time = batch_start
             task.ack_time = ack_time
             task.network_queue_ms = queue_s * 1000.0
+            # 维护 queue 时延 EMA，供 scheduler 过载判断（无需引入重度统计）
+            self._queue_ms_ema = (1.0 - self._ema_alpha) * self._queue_ms_ema + self._ema_alpha * task.network_queue_ms
             task.network_transfer_ms = total_net_s * 1000.0
             task.network_total_ms = max(0.0, ack_time - float(task.ready_time)) * 1000.0
 
@@ -179,6 +186,15 @@ class NetworkSimulator:
         remain = latest_ack_time - time.perf_counter()
         if remain > 0:
             await asyncio.sleep(remain)
+        self._active_transfers = 0
+
+    def get_runtime_stats(self) -> Dict[str, Any]:
+        """返回用于 scheduler heartbeat 的运行时统计。"""
+        return {
+            "pending_transfers": int(self.pending.qsize()),
+            "active_transfers": int(self._active_transfers),
+            "network_queue_ms_ema": float(round(self._queue_ms_ema, 3)),
+        }
 
     async def _finish_task(self, task: TransferTask) -> None:
         remain = task.ack_time - time.perf_counter()
@@ -302,7 +318,10 @@ async def _startup():
         assert _SCHED_CLI is not None
         while not _HB_STOP.is_set():
             try:
-                await _SCHED_CLI.heartbeat(_KDN_ID)
+                hb_payload: Dict[str, Any] = {}
+                if _NETWORK_SIM is not None:
+                    hb_payload.update(_NETWORK_SIM.get_runtime_stats())
+                await _SCHED_CLI.heartbeat(_KDN_ID, **hb_payload)
             except Exception as e:
                 print(f"[KDN] heartbeat failed: {e}")
             try:

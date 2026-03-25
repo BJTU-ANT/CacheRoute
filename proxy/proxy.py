@@ -137,12 +137,28 @@ async def lifespan(app: FastAPI):
 
     # 1) register（失败不应阻塞业务启动：允许 proxy 单独跑）
     try:
+        # CacheRoute 第二阶段：
+        # 可选注入 KDN->Proxy 静态拓扑信息，供 Scheduler 词典序策略使用。
+        # 环境变量示例：
+        # PROXY_KDN_LINKS_JSON='{"kdn_a":{"bandwidth_tier":3,"latency_tier":1}}'
+        proxy_meta: Dict[str, Any] = {"version": "proxy_v1"}
+        raw_links = os.environ.get("PROXY_KDN_LINKS_JSON", "").strip()
+        if raw_links:
+            try:
+                parsed = json.loads(raw_links)
+                if isinstance(parsed, dict):
+                    proxy_meta["kdn_links"] = parsed
+                else:
+                    logger.warning("[Proxy] PROXY_KDN_LINKS_JSON is not dict, ignored")
+            except Exception as e:
+                logger.warning("[Proxy] parse PROXY_KDN_LINKS_JSON failed: %s", e)
+
         reg = await client.register(
             proxy_id=PROXY_ID,
             host=PROXY_ADVERTISE_HOST,
             port=PROXY_ADVERTISE_PORT,
             endpoints=["chat/completions", "completions"],
-            meta={"version": "proxy_v1"},
+            meta=proxy_meta,
             max_capacity=PROXY_MAX_CAPACITY,
             instance_count=PROXY_INSTANCE_COUNT,
             kv_mem_per_instance_gb=PROXY_KV_MEM_PER_INSTANCE_GB,

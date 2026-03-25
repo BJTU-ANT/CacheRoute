@@ -48,3 +48,75 @@ User<br>
        &emsp;&emsp;&emsp;&emsp;├─ Knowledge Table (KDN / YAML)<br>
        &emsp;&emsp;&emsp;&emsp;└─ forward_request()<br>
        &emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;      └─> Proxy (900x)<br>
+
+---
+
+### CacheRoute 策略阶段总结（Scheduler 侧）
+
+当前 `cacheroute` 已完成以下调度流程（非加权、词典序）：
+
+1. **KDN 选择**：`text_full -> not_overloaded -> kv_cover_len -> load/tie-break`。<br>
+2. **Proxy 选择**：`topology_best_group -> load_safe_window -> knowledge_affinity -> load/tie-break`。<br>
+3. **观测接口**：`/debug/status` 与 `/debug/strategy` 可用于查看策略、资源池与最近决策快照。<br>
+
+---
+
+### 如何验证策略是否生效
+
+1) 启动 scheduler（可用快捷参数）：
+```bash
+cd test
+python3 demo_scheduler.py --cacheroute
+```
+可选附加参数（便于实验调参）：
+- `--kdn-pending-overload-th <int>`
+- `--kdn-active-overload-th <int>`
+- `--kdn-queue-ms-overload-th <float>`
+- `--cacheroute-log-decision {0|1}`
+
+说明：以上参数同时支持两种配置方式：
+1) 命令行 `--argument` 覆盖；
+2) 统一在 `core/config.py` 中设置默认值（demo 启动时自动读取）。
+
+2) 启动 proxy 并注入拓扑 tier（可选，但建议用于验证第二阶段）：
+```bash
+python3 demo_proxy.py --strategy least_inflight --kdn-links-json '{"kdn_a":{"bandwidth_tier":3,"latency_tier":1}}'
+```
+3) 如果要让 KDN 上报 runtime 负载（pending/active/queue_ema），建议打开网络模拟：
+```bash
+python3 demo_kdn.py --network --network-bw-mb-s 125 --network-batch-window-ms 10 --network-fixed-latency-ms 10 --network-efficiency 0.8
+```
+
+4) 查看 scheduler 状态（确认策略已加载）：
+```bash
+curl -s http://127.0.0.1:7001/debug/status | python3 -m json.tool
+```
+重点检查字段：
+- `strategy`：应为 `cacheroute`
+- `proxies`：查看 inflight/qps_1m/gpu_util
+- `kdns`：查看 items/pending_transfers/active_transfers/network_queue_ms_ema
+- `kdn_alive` 与 `kdn_alive_addrs`
+
+5) 查看策略最近决策（确认 CacheRoute 规则在执行）：
+```bash
+curl -s http://127.0.0.1:7001/debug/strategy | python3 -m json.tool
+```
+重点检查：
+- `strategy`：`cacheroute`
+- `strategy_debug.kdn_candidates`
+- `strategy_debug.proxy_candidates`
+- `strategy_debug.chosen_kdn_id / chosen_proxy_id`
+- `strategy_debug.counters`：请求总数、拓扑命中与负载安全过滤统计
+
+6) 观察简洁日志（每请求一行）：
+- 默认会输出：`[CacheRoute] req=... kdn=... proxy=... kids=...`
+- 若想关闭：`export SCHEDULER_CACHEROUTE_LOG_DECISION=0`
+
+---
+
+### Scheduler 如何维护 KDN 与 Proxy 资源
+
+- Scheduler 控制平面（7002）接收 `register / heartbeat / unregister`。<br>
+- Proxy 资源池维护：静态能力 + 动态负载（inflight/qps_1m/gpu_util）。<br>
+- KDN 资源池维护：可用节点存活 + 负载摘要（items/qps_1m + meta 扩展位）。<br>
+- 调度时读取池内“当前 alive 状态”，不会直接依赖一次性请求数据。<br>

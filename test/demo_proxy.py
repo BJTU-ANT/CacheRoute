@@ -30,10 +30,18 @@ if __name__ == "__main__":
         default=None,
         help="instance scheduling strategy (e.g., round_robin, least_inflight)",
     )
+    parser.add_argument(
+        "--kdn-links-json",
+        type=str,
+        default=config.PROXY_KDN_LINKS_JSON,
+        help="optional JSON string for PROXY_KDN_LINKS_JSON (CacheRoute topology tiers)",
+    )
     args = parser.parse_args()
 
     if args.strategy:
         os.environ["PROXY_INSTANCE_STRATEGY"] = args.strategy
+    if args.kdn_links_json and str(args.kdn_links_json).strip():
+        os.environ["PROXY_KDN_LINKS_JSON"] = args.kdn_links_json
 
     # 选择一个与 Scheduler 不同的端口，例如 8001
     uvicorn.run(proxy, host=config.PROXY_DP_HOST, port=config.PROXY_DP_PORT, reload=False)
