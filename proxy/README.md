@@ -19,7 +19,7 @@ proxy/<br>
 cd test
 python3 test/demo_proxy.py \
   --strategy round_robin \
-  --kdn-links-json '{"kdn_a":{"bandwidth_tier":3,"latency_tier":1},"kdn_b":{"bandwidth_tier":1,"latency_tier":3}}'
+  --kdn-links-json '{"kdn_local_1":{"bandwidth_tier":3,"latency_tier":1},"kdn_local_2":{"bandwidth_tier":1,"latency_tier":3}}'
 ```
 `--strategy <name>`:Proxy 内部 instance 策略（例如 least_inflight, cacheroute）<br>
 `--kdn-links-json '<json>'`:注入 PROXY_KDN_LINKS_JSON，用于 Scheduler 读取 meta.kdn_links 做拓扑分层（带宽tier/时延tier）<br>
