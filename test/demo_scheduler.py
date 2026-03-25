@@ -7,9 +7,9 @@ Scheduler_v1启动demo：
 import argparse
 import os, logging
 import uvicorn
-
-from scheduler import scheduler
 from core import config
+from scheduler import scheduler
+
 
 # 在 demo 里配置要预热的模型路径以及知识库路径
 MODEL_PATH = config.DEFAULT_MODEL
@@ -18,7 +18,11 @@ EMBEDDING_MODEL = config.EMBEDDING_MODEL
 KDN_BASE_URL = config.KDN_BASE_URL
 dp_port = config.SCHEDULER_DP_PORT
 dp_host = config.SCHEDULER_DP_HOST
-
+SCHEDULER_DEFAULT_STRATEGY = config.SCHEDULER_DEFAULT_STRATEGY
+SCHEDULER_CACHEROUTE_KDN_PENDING_OVERLOAD_TH = config.SCHEDULER_CACHEROUTE_KDN_PENDING_OVERLOAD_TH
+SCHEDULER_CACHEROUTE_KDN_ACTIVE_OVERLOAD_TH = config.SCHEDULER_CACHEROUTE_KDN_ACTIVE_OVERLOAD_TH
+SCHEDULER_CACHEROUTE_KDN_QUEUE_MS_OVERLOAD_TH = config.SCHEDULER_CACHEROUTE_KDN_QUEUE_MS_OVERLOAD_TH
+SCHEDULER_CACHEROUTE_LOG_DECISION = config.SCHEDULER_CACHEROUTE_LOG_DECISION
 
 def main():
     # logging配置
@@ -28,20 +32,20 @@ def main():
     )
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--strategy", default=config.SCHEDULER_DEFAULT_STRATEGY, help="proxy scheduling strategy")
+    parser.add_argument("--strategy", default=SCHEDULER_DEFAULT_STRATEGY, help="proxy scheduling strategy")
     parser.add_argument(
         "--cacheroute",
         action="store_true",
         help="shortcut for --strategy cacheroute",
     )
-    parser.add_argument("--kdn-pending-overload-th", type=int, default=config.SCHEDULER_CACHEROUTE_KDN_PENDING_OVERLOAD_TH, help="CacheRoute KDN pending overload threshold")
-    parser.add_argument("--kdn-active-overload-th", type=int, default=config.SCHEDULER_CACHEROUTE_KDN_ACTIVE_OVERLOAD_TH, help="CacheRoute KDN active overload threshold")
-    parser.add_argument("--kdn-queue-ms-overload-th", type=float, default=config.SCHEDULER_CACHEROUTE_KDN_QUEUE_MS_OVERLOAD_TH, help="CacheRoute KDN queue-ms overload threshold")
+    parser.add_argument("--kdn-pending-overload-th", type=int, default=SCHEDULER_CACHEROUTE_KDN_PENDING_OVERLOAD_TH, help="CacheRoute KDN pending overload threshold")
+    parser.add_argument("--kdn-active-overload-th", type=int, default=SCHEDULER_CACHEROUTE_KDN_ACTIVE_OVERLOAD_TH, help="CacheRoute KDN active overload threshold")
+    parser.add_argument("--kdn-queue-ms-overload-th", type=float, default=SCHEDULER_CACHEROUTE_KDN_QUEUE_MS_OVERLOAD_TH, help="CacheRoute KDN queue-ms overload threshold")
     parser.add_argument(
         "--cacheroute-log-decision",
         type=int,
         choices=[0, 1],
-        default=config.SCHEDULER_CACHEROUTE_LOG_DECISION,
+        default=SCHEDULER_CACHEROUTE_LOG_DECISION,
         help="CacheRoute one-line decision log switch: 1=on, 0=off",
     )
     args = parser.parse_args()
