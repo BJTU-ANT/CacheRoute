@@ -164,7 +164,7 @@ class CacheRouteStrategy(ProxySelectionStrategy):
             ranked = sorted(
                 kdns,
                 key=lambda k: (
-                    self._is_overloaded(k),
+                    self._is_overloaded_by_threshold(k),
                     self._kdn_qps(k),
                     self._kdn_items(k),
                     str(k.get('kdn_id', '')),

@@ -66,15 +66,29 @@ User<br>
 1) 启动 scheduler（可用快捷参数）：
 ```bash
 cd test
-python3 demo_scheduler.py --cacheroute
+python3 test/demo_scheduler.py \
+  --cacheroute \
+  --kdn-pending-overload-th 8 \
+  --kdn-active-overload-th 4 \
+  --kdn-queue-ms-overload-th 30 \
+  --cacheroute-log-decision 1
 ```
+可选附加参数（便于实验调参）：
+- `--kdn-pending-overload-th <int>` KDN为排队任务设置的过载阈值判定，当pending_transfers>阈值时视为过载
+- `--kdn-active-overload-th <int>` KDN为活跃任务数设置的过载阈值判定
+- `--kdn-queue-ms-overload-th <float>` KDN为队列时延设置的过载阈值判定
+- `--cacheroute-log-decision {0|1}` 是否打印每个请求的一行决策日志。
 
 2) 启动 proxy 并注入拓扑 tier（可选，但建议用于验证第二阶段）：
 ```bash
 python3 demo_proxy.py --strategy least_inflight --kdn-links-json '{"kdn_a":{"bandwidth_tier":3,"latency_tier":1}}'
 ```
+3) 如果要让 KDN 上报 runtime 负载（pending/active/queue_ema），建议打开网络模拟：
+```bash
+python3 demo_kdn.py --network --network-bw-mb-s 125 --network-batch-window-ms 10 --network-fixed-latency-ms 10 --network-efficiency 0.8
+```
 
-3) 查看 scheduler 状态（确认策略已加载）：
+4) 查看 scheduler 状态（确认策略已加载）：
 ```bash
 curl -s http://127.0.0.1:7001/debug/status | python3 -m json.tool
 ```
@@ -84,7 +98,7 @@ curl -s http://127.0.0.1:7001/debug/status | python3 -m json.tool
 - `kdns`：查看 items/pending_transfers/active_transfers/network_queue_ms_ema
 - `kdn_alive` 与 `kdn_alive_addrs`
 
-4) 查看策略最近决策（确认 CacheRoute 规则在执行）：
+5) 查看策略最近决策（确认 CacheRoute 规则在执行）：
 ```bash
 curl -s http://127.0.0.1:7001/debug/strategy | python3 -m json.tool
 ```
@@ -95,7 +109,7 @@ curl -s http://127.0.0.1:7001/debug/strategy | python3 -m json.tool
 - `strategy_debug.chosen_kdn_id / chosen_proxy_id`
 - `strategy_debug.counters`：请求总数、拓扑命中与负载安全过滤统计
 
-5) 观察简洁日志（每请求一行）：
+6) 观察简洁日志（每请求一行）：
 - 默认会输出：`[CacheRoute] req=... kdn=... proxy=... kids=...`
 - 若想关闭：`export SCHEDULER_CACHEROUTE_LOG_DECISION=0`
 
