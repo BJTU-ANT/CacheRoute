@@ -16,7 +16,17 @@ proxy/<br>
 
 ### 启动
 ```
-python3 proxy/proxy_cli.py --<option>
+cd test
+python3 test/demo_proxy.py \
+  --strategy round_robin \
+  --kdn-links-json '{"kdn_local_1":{"bandwidth_tier":3,"latency_tier":1},"kdn_local_2":{"bandwidth_tier":1,"latency_tier":3}}'
+```
+`--strategy <name>`:Proxy 内部 instance 策略（例如 least_inflight, cacheroute）<br>
+`--kdn-links-json '<json>'`:注入 PROXY_KDN_LINKS_JSON，用于 Scheduler 读取 meta.kdn_links 做拓扑分层（带宽tier/时延tier）<br>
+
+在启动proxy后，还支持CLI查看状态：
+```
+python3 proxy/proxy_cli.py
 ```
 支持argument形式，可选参数：<br>
 `--cp-url`: Proxy 控制平面 URL（默认 http://127.0.0.1:8002）<br>

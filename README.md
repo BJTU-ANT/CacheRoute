@@ -1,35 +1,17 @@
-### 260309 实现proxy并行处理任务队列，完善时间戳与client端发包器
-
-(1)支持多任务并行知识注入调度。目前`prepare-ready`处理是串行，同一个Instance只有一个`_prepare_worker_loop()`，它会在循环里等待一次完整的text获取、分类、可能的`kv_ack`，然后才处理下一个任务（串行）。而 instance_queues.py 目前也只有两个队列，没有并发控制器或活动任务计数。增加时间锚点给每个任务记录这些时间点，单位统一为 epoch_ms。<br>
-  (1.1)实现并行队列，现在只有两个队列。把它升级成“队列 + prepare 并发控制 + 活动计数”。<br>
-  (1.2)当前是从队列取一个任务，然后完整跑完的串行。改造增加dispatcher，为每个Instance启用多个worker来动态并发任务。<br>
-  (1.3)chat/completion在结果返回时附带一个_cacheroute_meta字段用于观察性能。新增chat SSE事件函数，用于chat流式结束后回复任务性能记录。<br>
-(2)新增`perf_client.py`，`workload.json`，来支持后续的持续发包压力测试。client在json里随机抓请求，一次发起多个请求，不打印具体生成内容，只打印性能状态和trace计算结果。示例如：<br>
-```
-python3 perf_client.py --base-url http://127.0.0.1:7001 --workload-file workload.json --requests 2 --concurrency 8 --allow-duplicate --seed 7
-```
-其中`--allow-duplicate`：是否允许重复抽样，`--seed`：相同的seed将抽样顺序固定，便于复现。<br>
-(3)透传client字段支持写入Injection_type字段，作为在proxy目前缺少调度策略时的调试控制。<br>
-(4)修改LMCache的keys生成规则，观察是否可以跨容器周期复用（有待观察）<br>
-
-一些提上日程的工作：<br>
-(1)KDN服务器的UI搭建，重点是知识可读性（_TODO. chen_）<br>
-(2)instance侧需要搭建一个灵活的资源检索平台(主要是基于vllm平台抓取信息)，使得instance面向proxy暴露动态更新的实例负载信息，便于proxy抓取（_TODO. sihan_）<br>
-(3)双inflight对池级业务流状态维护(_TODO. heyao_)<br>
-(4)知识清单中可用LLM系统的状态更新<br>
-
-
-更多日志及其修改详情：https://github.com/BJTU-ANT/CacheRoute/tree/main/doc/blog
-
----
 
 <img width="1400" height="369" alt="CacheRoute" src="https://github.com/user-attachments/assets/6050e71f-0e37-4cf9-b712-26e11242c9cd" />
+
+[![Version](https://img.shields.io/badge/version-0.1.6-blue)](https://github.com/BJTU-ANT/CacheRoute/releases)
+[![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/BJTU-ANT/CacheRoute?style=social)](https://github.com/BJTU-ANT/CacheRoute)
 
 CacheRoute是一种基于vLLM和LMCache开发的新型跨LLM系统任务调度平台。考虑到大语言模型的知识密集型业务（如浏览器AI、知识问答AI）涉及大量知识重用，而现有方法主要通过将知识的长文本片段放在问题前作为prompt一同送入模型进行重计算；尽管这种方法能够有效避免模型幻觉提升回复质量，但长知识文本为系统带来了额外的Prefill计算压力，且高重复度的知识片段使得系统产生了大量冗余计算。为此，CacheRoute部署独立服务器保留热门知识的KVCache块，旨在任务需要时直接注入KVCache块进行知识重用。CacheRoute在本地资源池构建了一种任务调度模型，能够动态衡量任务队列情况以及网络和算力的资源负载，为每个任务动态地调整知识注入策略（基于文本的，基于KVCache的）。CacheRoute通过将任务的知识注入成本动态地分摊至网络和计算资源，有效提升了任务性能和系统吞吐量。有关CacheRoute的具体动机和内容见xxx。
 
  - 特色1——基于算网协同的动态知识注入策略：
 
  - 特色2——面向知识的跨LLM系统任务路由：
+
+更多日志及其修改详情：https://github.com/BJTU-ANT/CacheRoute/tree/main/doc/blog
 
 ---
 
@@ -171,7 +153,7 @@ Python版本：3.12.11<br>
     ```
     cd test
     ./quick_start_docker.sh
-    python3 demo_scheduler.py --strategy <option,round_robin>
+    python3 demo_scheduler.py --strategy <option,round_robin, **cacheroute**>
     ```
 10. 预热KDN服务器，运行`demo_kdn.py`，启动通过`kdn_api`KDN服务器。启用新终端运行kdn_server下`kdn_register_cli.py`，这是一个封装好的交互式接口，通过送入知识块文本完成文本以及KVCache块的注册，形成知识库。具体方法见`kdn_server/README.md`
 11. 在完成KDN预热后，依次启动、代理、客户端和实例demo(在本地IDE调试可以直接用demo_run) **注意**：启动存在先后顺序，KDN，proxy启动会向scheduler注册，随后才会交互资源信息。Instance对proxy同理。错误的执行顺序可能导致资源池的不稳定。最为稳妥的启动顺序为：[Scheduler]-[KDN_Server]-[Proxy]-[Instance]
