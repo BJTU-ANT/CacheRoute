@@ -69,6 +69,7 @@ SCHEDULER_CACHEROUTE_KDN_ITEMS_OVERLOAD_TH = 0                 # CacheRoute: KDN
 SCHEDULER_CACHEROUTE_KDN_PENDING_OVERLOAD_TH = 0               # CacheRoute: KDN pending_transfers阈值，>0时启用
 SCHEDULER_CACHEROUTE_KDN_ACTIVE_OVERLOAD_TH = 0                # CacheRoute: KDN active_transfers阈值，>0时启用
 SCHEDULER_CACHEROUTE_KDN_QUEUE_MS_OVERLOAD_TH = 0.0            # CacheRoute: KDN queue EMA(ms)阈值，>0时启用
+SCHEDULER_CACHEROUTE_PROXY_LOAD_RATIO_DELTA = 0.1              # CacheRoute: proxy负载比例安全窗口delta（0~1）
 SCHEDULER_CACHEROUTE_PROXY_INFLIGHT_DELTA = 2                  # CacheRoute: proxy安全窗口（min_inflight + delta）
 SCHEDULER_CACHEROUTE_PROXY_GPU_DELTA = 0.0                     # CacheRoute: proxy GPU安全窗口（0表示不启用）
 SCHEDULER_CACHEROUTE_AFFINITY_DECAY = 0.9                      # CacheRoute: 知识亲和历史衰减系数

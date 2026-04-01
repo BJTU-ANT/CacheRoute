@@ -72,8 +72,13 @@ python3 demo_scheduler.py --cacheroute
 - `--kdn-pending-overload-th <int>` KDN为排队任务设置的过载阈值判定，当pending_transfers>阈值时视为过载
 - `--kdn-active-overload-th <int>` KDN为活跃任务数设置的过载阈值判定
 - `--kdn-queue-ms-overload-th <float>` KDN为队列时延设置的过载阈值判定
+- `--proxy-load-ratio-delta <float>` proxy安全负载范围（负载均衡调节值）
 - `--cacheroute-log-decision {0|1}` 是否打印每个请求的一行决策日志。
-- 
+
+说明：以上参数同时支持两种配置方式：
+1) 命令行 `--argument` 覆盖；
+2) 统一在 `core/config.py` 中设置默认值（demo 启动时自动读取）。
+ 
 python3 test/demo_scheduler.py \
   --cacheroute \
   --kdn-pending-overload-th 8 \

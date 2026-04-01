@@ -52,6 +52,8 @@ class CacheRouteStrategy(ProxySelectionStrategy):
         # Proxy 侧第二阶段参数：负载安全窗口（非加权过滤）
         self._proxy_inflight_delta = int(os.environ.get("SCHEDULER_CACHEROUTE_PROXY_INFLIGHT_DELTA", str(config.SCHEDULER_CACHEROUTE_PROXY_INFLIGHT_DELTA)).strip() or 0)
         self._proxy_gpu_delta = float(os.environ.get("SCHEDULER_CACHEROUTE_PROXY_GPU_DELTA", str(config.SCHEDULER_CACHEROUTE_PROXY_GPU_DELTA)).strip() or 0.0)
+        # Step2新增：基于负载比例(real_time_inflight/max_inflight)的安全窗口，delta范围建议[0,1]
+        self._proxy_load_ratio_delta = float(os.environ.get("SCHEDULER_CACHEROUTE_PROXY_LOAD_RATIO_DELTA", str(config.SCHEDULER_CACHEROUTE_PROXY_LOAD_RATIO_DELTA)).strip() or 0.0)
         # 历史偏好衰减（每次选择后应用），默认 0.9
         self._affinity_decay = float(os.environ.get("SCHEDULER_CACHEROUTE_AFFINITY_DECAY", str(config.SCHEDULER_CACHEROUTE_AFFINITY_DECAY)).strip() or 0.9)
         # 每个 proxy 只保留最近最有价值的 top-k kid，避免状态无限增长
@@ -86,6 +88,23 @@ class CacheRouteStrategy(ProxySelectionStrategy):
     @staticmethod
     def _proxy_gpu(proxy: Dict[str, Any]) -> float:
         return float(proxy.get('gpu_util', 0.0) or 0.0)
+
+    @staticmethod
+    def _proxy_max_inflight(proxy: Dict[str, Any]) -> int:
+        return int(proxy.get('max_inflight', 0) or 0)
+
+    def _proxy_load_ratio(self, proxy: Dict[str, Any]) -> float:
+        """
+        实时负载比例：
+          load_ratio = real_time_inflight / max_inflight
+        说明：
+        - max_inflight<=0 时视为不可归一化，返回 1.0（保守处理）
+        - 结果限制在 [0, +inf)，上层比较时只做相对大小
+        """
+        max_inflight = self._proxy_max_inflight(proxy)
+        if max_inflight <= 0:
+            return 1.0
+        return max(0.0, float(self._proxy_inflight(proxy)) / float(max_inflight))
 
     @staticmethod
     def _kdn_items(kdn: Dict[str, Any]) -> int:
@@ -175,6 +194,7 @@ class CacheRouteStrategy(ProxySelectionStrategy):
 
         ranked: List[Tuple[Tuple[Any, ...], Dict[str, Any]]] = []
         decision_rows: List[Dict[str, Any]] = []
+        usable_rows: List[Tuple[Tuple[Any, ...], Dict[str, Any]]] = []
         for kdn in kdns:
             kdn_id = str(kdn.get('kdn_id') or '')
             kdn_addr = self._kdn_addr(kdn)
@@ -222,12 +242,27 @@ class CacheRouteStrategy(ProxySelectionStrategy):
                     "items": self._kdn_items(kdn),
                 }
             )
+            # Step1目标语义：可用KDN = 文本完整覆盖 + 不过载
+            if text_full and (not self._is_overloaded_by_threshold(kdn)):
+                usable_key = (
+                    -kv_cover_len,           # 可复用KV覆盖长度越大越优
+                    self._kdn_qps(kdn),      # 并列时优先低负载
+                    self._kdn_items(kdn),
+                    kdn_id,
+                )
+                usable_rows.append((usable_key, kdn))
 
-        ranked.sort(key=lambda x: x[0])
-        chosen = ranked[0][1] if ranked else None
+        # Step1：优先从可用集合中选择；若为空再回退到原排序规则
+        if usable_rows:
+            usable_rows.sort(key=lambda x: x[0])
+            chosen = usable_rows[0][1]
+        else:
+            ranked.sort(key=lambda x: x[0])
+            chosen = ranked[0][1] if ranked else None
         overload_cnt = sum(1 for d in decision_rows if bool(d.get("overloaded")))
         with self._lock:
             self._last_decision["kdn_candidates"] = decision_rows
+            self._last_decision["usable_kdn_count"] = len(usable_rows)
             self._last_decision["chosen_kdn_id"] = str((chosen or {}).get("kdn_id", ""))
             self._counters["kdn_overload_filtered"] += overload_cnt
         return chosen
@@ -256,26 +291,34 @@ class CacheRouteStrategy(ProxySelectionStrategy):
     ) -> Optional[Dict[str, Any]]:
         if not proxies:
             return None
-        # Step1: 以 chosen_kdn 为锚点选拓扑最优组（无 chosen_kdn 时退化为全量候选）
-        topology_rows: List[Tuple[Tuple[int, int], Dict[str, Any]]] = []
-        for p in proxies:
-            bw_tier, lat_tier = self._topology_tiers_for_proxy(p, chosen_kdn) if chosen_kdn else (0, 999)
-            # 词典序：带宽 tier 越大越好，时延 tier 越小越好
-            topology_rows.append(((-bw_tier, lat_tier), p))
-        topology_rows.sort(key=lambda x: x[0])
-        best_topo = topology_rows[0][0]
-        topo_group = [p for key, p in topology_rows if key == best_topo]
-        if len(topo_group) < len(proxies):
-            with self._lock:
-                self._counters["proxy_topology_hits"] += 1
+        # Step2语义对齐：
+        #  0) 仅在 chosen_kdn 可连接的LLM系统中选择
+        #  1) 负载安全窗口（load_ratio最小 + delta）
+        #  2) 历史知识偏好
+        #  3) 链路带宽更优
+        #  4) 负载更低
+        if chosen_kdn:
+            connectable = [
+                p for p in proxies
+                if self._topology_tiers_for_proxy(p, chosen_kdn) != (0, 999)
+            ]
+            proxy_pool = connectable if connectable else proxies
+        else:
+            proxy_pool = proxies
 
-        # Step2: 负载安全窗口过滤（避免把知识亲和性放在过载 proxy 上）
-        min_inflight = min(self._proxy_inflight(p) for p in topo_group)
+        # Step1: 负载安全（优先使用 load_ratio；无max_inflight时回退inflight窗口）
+        min_ratio = min(self._proxy_load_ratio(p) for p in proxy_pool)
         safe_group = [
-            p for p in topo_group
-            if self._proxy_inflight(p) <= (min_inflight + max(0, self._proxy_inflight_delta))
+            p for p in proxy_pool
+            if self._proxy_load_ratio(p) <= (min_ratio + max(0.0, self._proxy_load_ratio_delta))
         ]
-        if len(safe_group) < len(topo_group):
+        if not safe_group:
+            min_inflight = min(self._proxy_inflight(p) for p in proxy_pool)
+            safe_group = [
+                p for p in proxy_pool
+                if self._proxy_inflight(p) <= (min_inflight + max(0, self._proxy_inflight_delta))
+            ]
+        if len(safe_group) < len(proxy_pool):
             with self._lock:
                 self._counters["proxy_loadsafe_filtered"] += 1
         if self._proxy_gpu_delta > 0 and safe_group:
@@ -285,7 +328,7 @@ class CacheRouteStrategy(ProxySelectionStrategy):
                 if self._proxy_gpu(p) <= (min_gpu + self._proxy_gpu_delta)
             ] or safe_group
 
-        # Step3: 在安全窗口内按知识历史偏好选最优
+        # Step2: 历史偏好（累积kid + 衰减）
         affinity_rows: List[Tuple[float, Dict[str, Any]]] = []
         for p in safe_group:
             pid = str(p.get("proxy_id", ""))
@@ -296,19 +339,42 @@ class CacheRouteStrategy(ProxySelectionStrategy):
             with self._lock:
                 self._counters["proxy_affinity_hits"] += 1
 
-        # Step4: 按当前负载打破并列，再用 cursor 稳定轮换
+        # Step3+Step4: 带宽更优 -> 负载更低
         ranked = sorted(
             aff_group,
             key=lambda p: (
+                -self._topology_tiers_for_proxy(p, chosen_kdn)[0] if chosen_kdn else 0,
+                self._topology_tiers_for_proxy(p, chosen_kdn)[1] if chosen_kdn else 999,
+                self._proxy_load_ratio(p),
                 self._proxy_inflight(p),
                 self._proxy_qps(p),
                 self._proxy_gpu(p),
                 str(p.get('proxy_id', '')),
             ),
         )
+        if len(aff_group) > 1:
+            with self._lock:
+                self._counters["proxy_topology_hits"] += 1
         best = ranked[0]
-        best_key = (self._proxy_inflight(best), self._proxy_qps(best), self._proxy_gpu(best))
-        tied = [p for p in ranked if (self._proxy_inflight(p), self._proxy_qps(p), self._proxy_gpu(p)) == best_key]
+        best_key = (
+            self._topology_tiers_for_proxy(best, chosen_kdn)[0] if chosen_kdn else 0,
+            self._topology_tiers_for_proxy(best, chosen_kdn)[1] if chosen_kdn else 999,
+            self._proxy_load_ratio(best),
+            self._proxy_inflight(best),
+            self._proxy_qps(best),
+            self._proxy_gpu(best),
+        )
+        tied = [
+            p for p in ranked
+            if (
+                self._topology_tiers_for_proxy(p, chosen_kdn)[0] if chosen_kdn else 0,
+                self._topology_tiers_for_proxy(p, chosen_kdn)[1] if chosen_kdn else 999,
+                self._proxy_load_ratio(p),
+                self._proxy_inflight(p),
+                self._proxy_qps(p),
+                self._proxy_gpu(p),
+            ) == best_key
+        ]
 
         # 更新亲和性：选中 proxy 对本次知识集合增益；其他 proxy 衰减
         chosen = best
@@ -341,6 +407,8 @@ class CacheRouteStrategy(ProxySelectionStrategy):
                 {
                     "proxy_id": str(p.get("proxy_id", "")),
                     "inflight": self._proxy_inflight(p),
+                    "max_inflight": self._proxy_max_inflight(p),
+                    "load_ratio": self._proxy_load_ratio(p),
                     "qps_1m": self._proxy_qps(p),
                     "gpu_util": self._proxy_gpu(p),
                     "topology_tier": {
@@ -351,6 +419,7 @@ class CacheRouteStrategy(ProxySelectionStrategy):
                 }
                 for p in proxies
             ]
+            self._last_decision["connectable_proxy_count"] = len(proxy_pool)
             self._last_decision["chosen_proxy_id"] = chosen_pid
         return chosen
 

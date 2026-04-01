@@ -7,9 +7,9 @@ Scheduler_v1启动demo：
 import argparse
 import os, logging
 import uvicorn
-from core import config
-from scheduler import scheduler
 
+from scheduler import scheduler
+from core import config
 
 # 在 demo 里配置要预热的模型路径以及知识库路径
 MODEL_PATH = config.DEFAULT_MODEL
@@ -41,6 +41,7 @@ def main():
     parser.add_argument("--kdn-pending-overload-th", type=int, default=SCHEDULER_CACHEROUTE_KDN_PENDING_OVERLOAD_TH, help="CacheRoute KDN pending overload threshold")
     parser.add_argument("--kdn-active-overload-th", type=int, default=SCHEDULER_CACHEROUTE_KDN_ACTIVE_OVERLOAD_TH, help="CacheRoute KDN active overload threshold")
     parser.add_argument("--kdn-queue-ms-overload-th", type=float, default=SCHEDULER_CACHEROUTE_KDN_QUEUE_MS_OVERLOAD_TH, help="CacheRoute KDN queue-ms overload threshold")
+    parser.add_argument("--proxy-load-ratio-delta", type=float, default=config.SCHEDULER_CACHEROUTE_PROXY_LOAD_RATIO_DELTA, help="CacheRoute proxy load-ratio safety delta in [0,1]")
     parser.add_argument(
         "--cacheroute-log-decision",
         type=int,
@@ -64,6 +65,7 @@ def main():
     os.environ["SCHEDULER_CACHEROUTE_KDN_PENDING_OVERLOAD_TH"] = str(args.kdn_pending_overload_th)
     os.environ["SCHEDULER_CACHEROUTE_KDN_ACTIVE_OVERLOAD_TH"] = str(args.kdn_active_overload_th)
     os.environ["SCHEDULER_CACHEROUTE_KDN_QUEUE_MS_OVERLOAD_TH"] = str(args.kdn_queue_ms_overload_th)
+    os.environ["SCHEDULER_CACHEROUTE_PROXY_LOAD_RATIO_DELTA"] = str(args.proxy_load_ratio_delta)
     os.environ["SCHEDULER_CACHEROUTE_LOG_DECISION"] = str(args.cacheroute_log_decision)
 
     # 配置 uvicorn.Server
