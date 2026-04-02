@@ -2,15 +2,30 @@ import asyncio
 import aiohttp
 from transformers import AutoTokenizer
 from typing import Optional
+from uuid import uuid4
 
 def generate_prompt_with_tokens(tokenizer, target_token_count: int) -> str:
     """使用指定的 tokenizer 生成一个包含大致数量 token 的 prompt。"""
-    if target_token_count <= 0: return ""
+    if target_token_count <= 0:
+        return ""
+
+    # 为每次请求加入唯一前缀，降低长 prompt 场景下的前缀重用概率。
+    uuid_prefix = f"request_uuid={uuid4()} "
+    prefix_token_ids = tokenizer.encode(uuid_prefix, add_special_tokens=False)
+    if not prefix_token_ids:
+        return "Error"
+
+    if len(prefix_token_ids) >= target_token_count:
+        return tokenizer.decode(prefix_token_ids[:target_token_count])
+
     base_text = "This is a long context test to measure the performance of the system. "
     base_token_ids = tokenizer.encode(base_text, add_special_tokens=False)
-    if not base_token_ids: return "Error"
-    estimated_repeats = (target_token_count // len(base_token_ids)) + 1
-    prompt_ids = (base_token_ids * estimated_repeats)[:target_token_count]
+    if not base_token_ids:
+        return "Error"
+
+    remain_token_count = target_token_count - len(prefix_token_ids)
+    estimated_repeats = (remain_token_count // len(base_token_ids)) + 1
+    prompt_ids = prefix_token_ids + (base_token_ids * estimated_repeats)[:remain_token_count]
     return tokenizer.decode(prompt_ids)
 
 async def send_test_request(
