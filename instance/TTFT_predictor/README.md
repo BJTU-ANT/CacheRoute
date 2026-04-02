@@ -14,11 +14,11 @@
 
 ## 目录结构
 
-- `[prefill_regressor.py](/d:/研/代码/PD分离推理调度代码/BurstGPT/example/scheduler/TTFT_predictor/prefill_regressor.py)`：线性回归器，负责收集训练数据、拟合模型、发起 warmup 请求和执行预测。
-- `[prefill_predictor.py](/d:/研/代码/PD分离推理调度代码/BurstGPT/example/scheduler/TTFT_predictor/prefill_predictor.py)`：对外提供异步接口，管理单例回归器，支持预测、数据回流和详细 warmup。
-- `[prefill_prediction_server.py](/d:/研/代码/PD分离推理调度代码/BurstGPT/example/scheduler/TTFT_predictor/prefill_prediction_server.py)`：FastAPI 服务，对外暴露 HTTP 接口。
-- `[request_generator.py](/d:/研/代码/PD分离推理调度代码/BurstGPT/example/scheduler/TTFT_predictor/request_generator.py)`：根据目标 token 数生成 prompt，并向 vLLM 发送测试请求。
-- `[local_test.py](/d:/研/代码/PD分离推理调度代码/BurstGPT/example/scheduler/TTFT_predictor/local_test.py)`：本地测量 TTFT 的辅助函数。
+- `[prefill_regressor.py]`：线性回归器，负责收集训练数据、拟合模型、发起 warmup 请求和执行预测。
+- `[prefill_predictor.py]`：对外提供异步接口，管理单例回归器，支持预测、数据回流和详细 warmup。
+- `[prefill_prediction_server.py]`：FastAPI 服务，对外暴露 HTTP 接口。
+- `[request_generator.py]`：根据目标 token 数生成 prompt，并向 vLLM 发送测试请求。
+- `[local_test.py]`：本地测量 TTFT 的辅助函数。
 
 ## 核心思路
 
@@ -42,7 +42,7 @@
 
 函数调用关系、服务启动链路、后台预热线路、`/predict` 与 `/report_prefill` 的触发路径，已经单独整理在：
 
-`[WORKFLOW.md](/d:/研/代码/PD分离推理调度代码/BurstGPT/example/scheduler/TTFT_predictor/WORKFLOW.md)`
+`[WORKFLOW.md]`
 
 ## 依赖
 
@@ -61,7 +61,7 @@ pip install numpy aiohttp scikit-learn transformers fastapi uvicorn pydantic
 
 ### 方式 1：作为 Python 模块直接调用
 
-最常用的接口在 `[prefill_predictor.py](/d:/研/代码/PD分离推理调度代码/BurstGPT/example/scheduler/TTFT_predictor/prefill_predictor.py)`。
+最常用的接口在 `[prefill_predictor.py]`。
 
 可用接口：
 
@@ -198,7 +198,7 @@ python prefill_prediction_server.py
 3. 等待外部将真实 prefill 时间回流到回归器
 4. 用采集到的数据重新拟合模型
 
-默认测试范围定义在 `[prefill_predictor.py](/d:/研/代码/PD分离推理调度代码/BurstGPT/example/scheduler/TTFT_predictor/prefill_predictor.py)`：
+默认测试范围定义在 `[prefill_predictor.py]`：
 
 - `BATCH_SIZES_TO_TEST = range(1, 9)`
 - `TOKEN_LENGTHS_TO_TEST = range(64, 2048, 64)`
@@ -215,7 +215,7 @@ python prefill_prediction_server.py
 
 ### `VLLM_CONFIG_DEFAULT`
 
-位于 `[prefill_predictor.py](/d:/研/代码/PD分离推理调度代码/BurstGPT/example/scheduler/TTFT_predictor/prefill_predictor.py)`。
+位于 `[prefill_predictor.py]`。
 
 主要字段：
 
