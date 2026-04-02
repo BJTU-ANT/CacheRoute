@@ -121,9 +121,10 @@ class PrefillTimeRegressor:
                 # 打印当前正在触发的配置
                 print(f"   >> Firing: BatchSize={bs}, PromptLen={pl} (x{repeats_per_config})")
                 
-                prompts = [generate_prompt_with_tokens(tokenizer, pl) for _ in range(bs)]
-                
                 for i in range(repeats_per_config):
+
+                    prompts = [generate_prompt_with_tokens(tokenizer, pl) for _ in range(bs)]
+                    
                     # 并发发送请求
                     tasks = [
                         send_test_request(
