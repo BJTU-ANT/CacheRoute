@@ -61,6 +61,29 @@ INSTANCE_PORT = int(os.environ.get("INSTANCE_PORT", "9001"))
 logger = logging.getLogger("proxy")
 logging.basicConfig(level=logging.INFO)
 
+
+def _load_static_kdn_links() -> Dict[str, Any]:
+    raw_links = os.environ.get("PROXY_KDN_LINKS_JSON", "").strip()
+    if not raw_links:
+        return {}
+    try:
+        parsed = json.loads(raw_links)
+        if isinstance(parsed, dict):
+            return parsed
+        logger.warning("[Proxy] PROXY_KDN_LINKS_JSON is not dict, ignored")
+    except Exception as e:
+        logger.warning("[Proxy] parse PROXY_KDN_LINKS_JSON failed: %s", e)
+    return {}
+
+
+async def _build_proxy_topology_meta() -> Dict[str, Any]:
+    static_links = _load_static_kdn_links()
+    dynamic_links = await p_control_plane.get_kdn_links_snapshot()
+    merged_links = dict(static_links)
+    merged_links.update(dynamic_links)
+    return {"kdn_links": merged_links} if merged_links else {}
+
+
 def _squelch_noisy_loggers():
     # http client
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -142,16 +165,7 @@ async def lifespan(app: FastAPI):
         # 环境变量示例：
         # PROXY_KDN_LINKS_JSON='{"kdn_a":{"bandwidth_tier":3,"latency_tier":1}}'
         proxy_meta: Dict[str, Any] = {"version": "proxy_v1"}
-        raw_links = os.environ.get("PROXY_KDN_LINKS_JSON", "").strip()
-        if raw_links:
-            try:
-                parsed = json.loads(raw_links)
-                if isinstance(parsed, dict):
-                    proxy_meta["kdn_links"] = parsed
-                else:
-                    logger.warning("[Proxy] PROXY_KDN_LINKS_JSON is not dict, ignored")
-            except Exception as e:
-                logger.warning("[Proxy] parse PROXY_KDN_LINKS_JSON failed: %s", e)
+        proxy_meta.update(await _build_proxy_topology_meta())
 
         reg = await client.register(
             proxy_id=PROXY_ID,
@@ -179,7 +193,10 @@ async def lifespan(app: FastAPI):
         reporter: HeartbeatReporter = app.state._hb_reporter  # type: ignore
         while not app.state._hb_stop.is_set():  # type: ignore
             try:
-                await client.heartbeat(proxy_id=PROXY_ID)  # 原功能不变 :contentReference[oaicite:3]{index=3}
+                await client.heartbeat(
+                    proxy_id=PROXY_ID,
+                    meta_patch=await _build_proxy_topology_meta(),
+                )
                 await reporter.record(ok=True)
             except Exception as e:
                 # 不逐条 warning，避免刷屏；只记录窗口统计

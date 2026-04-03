@@ -53,3 +53,9 @@ class ProxyControlClient:
     async def unregister(self, instance_id: str) -> None:
         r = await self._client.post(f"{self.base_url}/v1/instance/unregister", json={"instance_id": instance_id})
         r.raise_for_status()
+
+    async def report_kdn_topology(self, instance_id: str, links: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+        payload = {"instance_id": instance_id, "links": links}
+        r = await self._client.post(f"{self.base_url}/v1/topology/report", json=payload)
+        r.raise_for_status()
+        return r.json()

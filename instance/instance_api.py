@@ -19,10 +19,12 @@ import uvicorn,logging
 import os
 import asyncio
 import json
+import subprocess
 # import time
 
-from typing import Any, AsyncGenerator, Dict
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 from fastapi import FastAPI, Request as FastAPIRequest
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -43,6 +45,122 @@ INSTANCE_ID = os.environ.get("INSTANCE_ID", f"hp_{INSTANCE_ADVERTISE_HOST}:{INST
 
 vllm_base_url = config.VLLM_BASE_URL.rstrip("/")
 use_mock = True if config.USE_MOCK else False
+
+
+def _norm_http_base(raw: str) -> str:
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    if "://" not in s:
+        s = f"http://{s}"
+    p = urlparse(s)
+    if not p.hostname or not p.port:
+        return ""
+    return f"{p.scheme or 'http'}://{p.hostname}:{p.port}"
+
+
+def _discover_iface_for_host(host: str) -> Optional[str]:
+    try:
+        out = subprocess.check_output(["ip", "route", "get", host], text=True, stderr=subprocess.STDOUT)
+        toks = out.strip().split()
+        if "dev" in toks:
+            idx = toks.index("dev")
+            if idx + 1 < len(toks):
+                return toks[idx + 1]
+    except Exception:
+        return None
+    return None
+
+
+def _read_iface_speed_mbps(iface: str) -> Optional[float]:
+    if not iface:
+        return None
+    speed_path = f"/sys/class/net/{iface}/speed"
+    try:
+        with open(speed_path, "r", encoding="utf-8") as f:
+            raw = f.read().strip()
+        speed = float(raw)
+        return speed if speed > 0 else None
+    except Exception:
+        return None
+
+
+async def _probe_kdn_link(client: ProxyControlClient, instance_id: str, target: str, logger: logging.Logger) -> Optional[Tuple[str, Dict[str, Any]]]:
+    base = _norm_http_base(target)
+    if not base:
+        return None
+    parsed = urlparse(base)
+    host = str(parsed.hostname or "")
+    port = int(parsed.port or 0)
+    if not host or port <= 0:
+        return None
+
+    import httpx
+    timeout = httpx.Timeout(2.0, connect=2.0)
+    async with httpx.AsyncClient(timeout=timeout) as hc:
+        try:
+            hello = await hc.post(
+                f"{base}/v1/topology/hello",
+                json={
+                    "instance_id": instance_id,
+                    "instance_host": INSTANCE_ADVERTISE_HOST,
+                    "instance_port": INSTANCE_ADVERTISE_PORT,
+                },
+            )
+            hello.raise_for_status()
+            hj = hello.json()
+        except Exception as e:
+            logger.warning("[Instance] topology hello failed target=%s err=%s", base, e)
+            return None
+
+        rtts: List[float] = []
+        for _ in range(3):
+            t0 = asyncio.get_running_loop().time()
+            ping = await hc.get(f"{base}/v1/topology/ping")
+            ping.raise_for_status()
+            rtts.append((asyncio.get_running_loop().time() - t0) * 1000.0)
+        latency_ms = sum(rtts) / len(rtts) if rtts else 0.0
+
+    iface = _discover_iface_for_host(host) or ""
+    bw = _read_iface_speed_mbps(iface)
+    if bw is None:
+        bw = float(os.environ.get("INSTANCE_DEFAULT_LINK_BW_MBPS", str(getattr(config, "INSTANCE_DEFAULT_LINK_BW_MBPS", 1000.0))) or 1000.0)
+    kdn_id = str(hj.get("kdn_id") or f"kdn://{host}:{port}")
+    metrics = {
+        "bandwidth_mbps": round(float(bw), 3),
+        "latency_ms": round(float(latency_ms), 3),
+        "iface": iface or None,
+        "measured_by": instance_id,
+    }
+    return kdn_id, metrics
+
+
+async def _run_topology_discovery(client: ProxyControlClient, instance_id: str, logger: logging.Logger) -> None:
+    raw_targets = os.environ.get("INSTANCE_TOPOLOGY_KDN_TARGETS", getattr(config, "INSTANCE_TOPOLOGY_KDN_TARGETS", "")).strip()
+    if not raw_targets:
+        return
+    targets = [x.strip() for x in raw_targets.split(",") if x.strip()]
+    if not targets:
+        return
+
+    links: Dict[str, Dict[str, Any]] = {}
+    for t in targets:
+        result = await _probe_kdn_link(client, instance_id=instance_id, target=t, logger=logger)
+        if result is None:
+            continue
+        kdn_id, metrics = result
+        links[kdn_id] = metrics
+        parsed = urlparse(_norm_http_base(t))
+        links[f"kdn://{parsed.hostname}:{parsed.port}"] = dict(metrics)
+
+    if not links:
+        return
+    try:
+        resp = await client.report_kdn_topology(instance_id=instance_id, links=links)
+        logger.info("[Instance] topology report ok links=%s resp=%s", len(links), resp)
+    except Exception as e:
+        logger.warning("[Instance] topology report failed links=%s err=%s", len(links), e)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -105,6 +223,9 @@ async def lifespan(app: FastAPI):
 
     task = asyncio.create_task(_hb())
     app.state._hb_task = task # type: ignore
+    app.state._topology_task = asyncio.create_task(  # type: ignore
+        _run_topology_discovery(client=client, instance_id=runtime_instance_id, logger=logger)
+    )
 
     try:
         yield
@@ -112,6 +233,12 @@ async def lifespan(app: FastAPI):
         stop.set()
         try:
             task.cancel()
+        except Exception:
+            pass
+        try:
+            topo_task = getattr(app.state, "_topology_task", None)  # type: ignore
+            if topo_task is not None:
+                topo_task.cancel()
         except Exception:
             pass
         try:
