@@ -3,6 +3,7 @@
 import numpy as np
 import asyncio
 import aiohttp
+import time
 from transformers import AutoTokenizer
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
@@ -120,21 +121,38 @@ class PrefillTimeRegressor:
             for bs, pl in test_configs:
                 # 打印当前正在触发的配置
                 print(f"   >> Firing: BatchSize={bs}, PromptLen={pl} (x{repeats_per_config})")
-                
-                for i in range(repeats_per_config):
 
+                for i in range(repeats_per_config):
+                    # 每一轮都重新生成 prompt，避免 repeats 轮次重复发送完全相同上下文导致缓存命中偏高
                     prompts = [generate_prompt_with_tokens(tokenizer, pl) for _ in range(bs)]
-                    
+
                     # 并发发送请求
-                    tasks = [
-                        send_test_request(
-                            session, 
-                            vllm_config["host"], 
-                            vllm_config["port"], 
-                            vllm_config["model_id"], 
-                            p
-                        ) for p in prompts
-                    ]
+                    dispatch_ts = []
+                    tasks = []
+                    for p in prompts:
+                        dispatch_ts.append(time.perf_counter())
+                        tasks.append(
+                            send_test_request(
+                                session,
+                                vllm_config["host"],
+                                vllm_config["port"],
+                                vllm_config["model_id"],
+                                p,
+                            )
+                        )
+
+                    # 记录同一轮中 prompt 投递的时间间隔；若超过 10ms 可能影响同批次聚合
+                    if len(dispatch_ts) > 1:
+                        gaps_ms = [
+                            (dispatch_ts[j] - dispatch_ts[j - 1]) * 1000
+                            for j in range(1, len(dispatch_ts))
+                        ]
+                        max_gap_ms = max(gaps_ms)
+                        if max_gap_ms > 10:
+                            print(
+                                f"[WARN] Dispatch gap too large: "
+                                f"BS={bs}, PL={pl}, repeat={i+1}, max_gap={max_gap_ms:.2f}ms"
+                            )
                     
                     await asyncio.gather(*tasks)
                     
