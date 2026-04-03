@@ -114,4 +114,4 @@ if __name__ == "__main__":
     logger.info("正在启动 uvicorn 服务器...")
     # 注意：在生产环境中通常不建议在代码里直接 run，而是用命令行启动
     # 这里为了方便保留
-    uvicorn.run("prefill_prediction_server:app", host="172.18.0.250", port=9000, reload=True)
+    uvicorn.run("prefill_prediction_server:app", host="172.18.0.250", port=9003, reload=True)

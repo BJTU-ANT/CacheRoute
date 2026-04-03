@@ -13,8 +13,8 @@ from prefill_regressor import PrefillTimeRegressor
 VLLM_CONFIG_DEFAULT = {
     "host": "172.18.0.250",
     "port": 8000,
-    "model_id": "../workspace/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
-    "tokenizer_path": "/home/dell/vLLM/workspace/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B/"
+    "model_id": "llama3-70b",
+    "tokenizer_path": "/workspace/llm-stack/models/LLM-Research/Meta-Llama-3-70B-Instruct/"
 }
 
 BATCH_SIZES_TO_TEST = range(1, 9)

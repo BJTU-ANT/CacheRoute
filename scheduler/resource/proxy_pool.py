@@ -126,7 +126,12 @@ class ProxyPool:
             info.registered_at = old.registered_at
             self._data[info.proxy_id] = info
 
-    async def heartbeat(self, proxy_id: str, load: Optional[ProxyLoad] = None) -> bool:
+    async def heartbeat(
+        self,
+        proxy_id: str,
+        load: Optional[ProxyLoad] = None,
+        meta_patch: Optional[Dict[str, Any]] = None,
+    ) -> bool:
         """
         proxy 心跳。
         - 成功：刷新 last_seen_at；如果提供 load，则一并更新
@@ -142,6 +147,8 @@ class ProxyPool:
                 p.load.inflight = int(load.inflight)
                 p.load.qps_1m = float(load.qps_1m)
                 p.load.gpu_util = float(load.gpu_util)
+            if meta_patch:
+                p.meta.update(dict(meta_patch))
             return True
 
     async def remove(self, proxy_id: str) -> None:

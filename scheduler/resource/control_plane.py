@@ -93,6 +93,7 @@ class ProxyHeartbeatRequest(BaseModel):
     inflight: Optional[int] = None
     qps_1m: Optional[float] = None
     gpu_util: Optional[float] = None
+    meta_patch: Optional[Dict[str, Any]] = None
 
 
 class ProxyUnregisterRequest(BaseModel):
@@ -333,7 +334,7 @@ async def proxy_heartbeat(req: ProxyHeartbeatRequest):
         )
 
     pool = get_pool()
-    ok = await pool.heartbeat(req.proxy_id, load=load)
+    ok = await pool.heartbeat(req.proxy_id, load=load, meta_patch=req.meta_patch)
     if not ok:
         # 失败：立刻输出（并计入 err）
         await _hb_agg.record_proxy(req.proxy_id, ok=False)
