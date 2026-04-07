@@ -11,10 +11,13 @@ from prefill_regressor import PrefillTimeRegressor
 # 1. 配置区域 (保持不变)
 # ==========================================
 VLLM_CONFIG_DEFAULT = {
-    "host": "172.18.0.250",
+    "host": "0.0.0.0",
     "port": 8000,
     "model_id": "llama3-70b",
     "tokenizer_path": "/workspace/llm-stack/models/LLM-Research/Meta-Llama-3-70B-Instruct/"
+    # 训练样本口径：
+    # mid_minmax(默认) / mean_ttft / max_arrival / max_ttft / min_ttft
+    "batch_sample_policy": "mid_minmax",
 }
 
 BATCH_SIZES_TO_TEST = range(1, 9)
@@ -82,6 +85,7 @@ async def perform_detailed_warmup(
     print("\n" + "="*50)
     print("🚀 [Detailed Warmup] Starting Step-by-Step Benchmark...")
     print(f"   Target: {vllm_config['host']}:{vllm_config['port']}")
+    print(f"   Batch Sample Policy: {vllm_config.get('batch_sample_policy', 'mid_minmax')}")
     print(f"   Total Configs: {len(WARM_UP_CONFIGS_DEFAULT)}")
     print("="*50)
     

@@ -83,6 +83,8 @@ async def send_test_request(
     try:
         async with session.post(api_url, headers=headers, json=payload) as resp:
             if resp.status != 200:
+                err_text = await resp.text()
+                print(f"[WARN] send_test_request non-200: status={resp.status}, body={err_text[:200]}")
                 return None
             
             # 等待并读取第一个 chunk，确保服务端已经完成了 Prefill
@@ -91,7 +93,12 @@ async def send_test_request(
                     # 收到首个 chunk，计算 TTFT
                     return time.perf_counter() - start_ts
             
+            # 某些服务实现可能不按 chunk 推送，兜底读取正文
+            fallback_text = await resp.text()
+            if fallback_text.strip():
+                return time.perf_counter() - start_ts
             return None
             
-    except Exception:
+    except Exception as e:
+        print(f"[WARN] send_test_request exception: {e}")
         return None

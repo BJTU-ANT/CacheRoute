@@ -157,16 +157,42 @@ class PrefillTimeRegressor:
                     
                     results = await asyncio.gather(*tasks)
 
-                    # 以“批次时间”口径采样：一轮内取最后一个首 token 到达时间（相对 round_start）
-                    # 这样每个 repeat 只落一个样本，避免把同一批次内的排队差异当作多个独立样本
-                    valid_batch_offsets = []
+                    # 记录同一轮内每个请求的 TTFT，并转成相对 round_start 的首 token 到达时刻。
+                    # 注意：arrival_offsets 主要用于观测是否出现“伪串行”，训练样本默认用请求 TTFT 的均值。
+                    valid_ttfts = []
+                    arrival_offsets = []
                     for idx, ttft in enumerate(results):
                         if ttft is not None and ttft > 0:
-                            valid_batch_offsets.append((dispatch_ts[idx] - round_start_ts) + ttft)
+                            valid_ttfts.append(ttft)
+                            arrival_offsets.append((dispatch_ts[idx] - round_start_ts) + ttft)
 
-                    if valid_batch_offsets:
-                        batch_time = max(valid_batch_offsets)
-                        self.add_data(bs, pl, batch_time)
+                    if valid_ttfts:
+                        ttft_min_ms = min(valid_ttfts) * 1000
+                        ttft_avg_ms = (sum(valid_ttfts) / len(valid_ttfts)) * 1000
+                        ttft_max_ms = max(valid_ttfts) * 1000
+                        arrival_span_ms = (max(arrival_offsets) - min(arrival_offsets)) * 1000 if len(arrival_offsets) > 1 else 0.0
+                        print(
+                            f"[INFO] Repeat TTFT stats: BS={bs}, PL={pl}, repeat={i+1}, "
+                            f"valid={len(valid_ttfts)}/{bs}, "
+                            f"min/avg/max={ttft_min_ms:.1f}/{ttft_avg_ms:.1f}/{ttft_max_ms:.1f}ms, "
+                            f"arrival_span={arrival_span_ms:.1f}ms"
+                        )
+
+                        # 支持不同口径采样。
+                        # 你当前实验口径建议使用 mid_minmax:
+                        # batch_time = (min_ttft + max_ttft) / 2
+                        sample_policy = str(vllm_config.get("batch_sample_policy", "mid_minmax")).lower()
+                        if sample_policy == "max_arrival":
+                            sample_value = max(arrival_offsets)
+                        elif sample_policy == "max_ttft":
+                            sample_value = max(valid_ttfts)
+                        elif sample_policy == "min_ttft":
+                            sample_value = min(valid_ttfts)
+                        elif sample_policy == "mid_minmax":
+                            sample_value = (min(valid_ttfts) + max(valid_ttfts)) / 2
+                        else:
+                            sample_value = sum(valid_ttfts) / len(valid_ttfts)
+                        self.add_data(bs, pl, sample_value)
                     else:
                         print(
                             f"[WARN] No valid TTFT collected in this repeat: "
