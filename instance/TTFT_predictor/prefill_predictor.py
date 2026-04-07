@@ -11,7 +11,7 @@ from prefill_regressor import PrefillTimeRegressor
 # 1. 配置区域 (保持不变)
 # ==========================================
 VLLM_CONFIG_DEFAULT = {
-    "host": "172.18.0.250",
+    "host": "0.0.0.0",
     "port": 8000,
     "model_id": "llama3-70b",
     "tokenizer_path": "/workspace/llm-stack/models/LLM-Research/Meta-Llama-3-70B-Instruct/"
