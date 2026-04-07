@@ -14,7 +14,10 @@ VLLM_CONFIG_DEFAULT = {
     "host": "172.18.0.250",
     "port": 8000,
     "model_id": "../workspace/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
-    "tokenizer_path": "/home/dell/vLLM/workspace/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B/"
+    "tokenizer_path": "/home/dell/vLLM/workspace/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B/",
+    # 训练样本口径：
+    # mid_minmax(默认) / mean_ttft / max_arrival / max_ttft / min_ttft
+    "batch_sample_policy": "mid_minmax",
 }
 
 BATCH_SIZES_TO_TEST = range(1, 9)
@@ -82,6 +85,7 @@ async def perform_detailed_warmup(
     print("\n" + "="*50)
     print("🚀 [Detailed Warmup] Starting Step-by-Step Benchmark...")
     print(f"   Target: {vllm_config['host']}:{vllm_config['port']}")
+    print(f"   Batch Sample Policy: {vllm_config.get('batch_sample_policy', 'mid_minmax')}")
     print(f"   Total Configs: {len(WARM_UP_CONFIGS_DEFAULT)}")
     print("="*50)
     
@@ -99,7 +103,8 @@ async def perform_detailed_warmup(
             
             # 记录当前缓冲区已有的大小，用于计算本次新增了多少数据
             start_data_count = len(regressor._training_data)
-            expected_new_points = bs * repeats
+            # trigger_warmup_requests 现在按“每个 repeat 一条批次样本”写入数据
+            expected_new_points = repeats
             
             # 2.1 触发当前配置的请求
             # 我们构造一个只包含当前配置的单元素列表

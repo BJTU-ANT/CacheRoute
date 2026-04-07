@@ -3,6 +3,7 @@
 import numpy as np
 import asyncio
 import aiohttp
+import time
 from transformers import AutoTokenizer
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
@@ -120,28 +121,89 @@ class PrefillTimeRegressor:
             for bs, pl in test_configs:
                 # 打印当前正在触发的配置
                 print(f"   >> Firing: BatchSize={bs}, PromptLen={pl} (x{repeats_per_config})")
-                
-                prompts = [generate_prompt_with_tokens(tokenizer, pl) for _ in range(bs)]
-                
+
                 for i in range(repeats_per_config):
+                    # 每一轮都重新生成 prompt，避免 repeats 轮次重复发送完全相同上下文导致缓存命中偏高
+                    prompts = [generate_prompt_with_tokens(tokenizer, pl) for _ in range(bs)]
+
                     # 并发发送请求
-                    tasks = [
-                        send_test_request(
-                            session, 
-                            vllm_config["host"], 
-                            vllm_config["port"], 
-                            vllm_config["model_id"], 
-                            p
-                        ) for p in prompts
-                    ]
+                    round_start_ts = time.perf_counter()
+                    dispatch_ts = []
+                    tasks = []
+                    for p in prompts:
+                        dispatch_ts.append(time.perf_counter())
+                        tasks.append(
+                            send_test_request(
+                                session,
+                                vllm_config["host"],
+                                vllm_config["port"],
+                                vllm_config["model_id"],
+                                p,
+                            )
+                        )
+
+                    # 记录同一轮中 prompt 投递的时间间隔；若超过 10ms 可能影响同批次聚合
+                    if len(dispatch_ts) > 1:
+                        gaps_ms = [
+                            (dispatch_ts[j] - dispatch_ts[j - 1]) * 1000
+                            for j in range(1, len(dispatch_ts))
+                        ]
+                        max_gap_ms = max(gaps_ms)
+                        if max_gap_ms > 10:
+                            print(
+                                f"[WARN] Dispatch gap too large: "
+                                f"BS={bs}, PL={pl}, repeat={i+1}, max_gap={max_gap_ms:.2f}ms"
+                            )
                     
-                    await asyncio.gather(*tasks)
+                    results = await asyncio.gather(*tasks)
+
+                    # 记录同一轮内每个请求的 TTFT，并转成相对 round_start 的首 token 到达时刻。
+                    # 注意：arrival_offsets 主要用于观测是否出现“伪串行”，训练样本默认用请求 TTFT 的均值。
+                    valid_ttfts = []
+                    arrival_offsets = []
+                    for idx, ttft in enumerate(results):
+                        if ttft is not None and ttft > 0:
+                            valid_ttfts.append(ttft)
+                            arrival_offsets.append((dispatch_ts[idx] - round_start_ts) + ttft)
+
+                    if valid_ttfts:
+                        ttft_min_ms = min(valid_ttfts) * 1000
+                        ttft_avg_ms = (sum(valid_ttfts) / len(valid_ttfts)) * 1000
+                        ttft_max_ms = max(valid_ttfts) * 1000
+                        arrival_span_ms = (max(arrival_offsets) - min(arrival_offsets)) * 1000 if len(arrival_offsets) > 1 else 0.0
+                        print(
+                            f"[INFO] Repeat TTFT stats: BS={bs}, PL={pl}, repeat={i+1}, "
+                            f"valid={len(valid_ttfts)}/{bs}, "
+                            f"min/avg/max={ttft_min_ms:.1f}/{ttft_avg_ms:.1f}/{ttft_max_ms:.1f}ms, "
+                            f"arrival_span={arrival_span_ms:.1f}ms"
+                        )
+
+                        # 支持不同口径采样。
+                        # 你当前实验口径建议使用 mid_minmax:
+                        # batch_time = (min_ttft + max_ttft) / 2
+                        sample_policy = str(vllm_config.get("batch_sample_policy", "mid_minmax")).lower()
+                        if sample_policy == "max_arrival":
+                            sample_value = max(arrival_offsets)
+                        elif sample_policy == "max_ttft":
+                            sample_value = max(valid_ttfts)
+                        elif sample_policy == "min_ttft":
+                            sample_value = min(valid_ttfts)
+                        elif sample_policy == "mid_minmax":
+                            sample_value = (min(valid_ttfts) + max(valid_ttfts)) / 2
+                        else:
+                            sample_value = sum(valid_ttfts) / len(valid_ttfts)
+                        self.add_data(bs, pl, sample_value)
+                    else:
+                        print(
+                            f"[WARN] No valid TTFT collected in this repeat: "
+                            f"BS={bs}, PL={pl}, repeat={i+1}"
+                        )
                     
                     # 适当的间隔
                     await asyncio.sleep(0.5) 
         
         print("\n--- 🏁 All Warmup Requests Sent ---")
-        print("[INFO] Waiting for data collection via 'update_prefill_data'...")
+        print("[INFO] Warmup TTFT data collected from request responses.")
 
     def predict(self, batchsize: int, prompt_length: int) -> float:
         if not self._is_fitted: return 0.0

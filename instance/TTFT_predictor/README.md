@@ -99,7 +99,7 @@ asyncio.run(main())
 如果你希望调度器通过 HTTP 调用预测服务，直接运行：
 
 ```bash
-cd example/scheduler/TTFT_predictor
+cd instance/TTFT_predictor
 python prefill_prediction_server.py
 ```
 
