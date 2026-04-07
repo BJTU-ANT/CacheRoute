@@ -41,6 +41,12 @@ class InjectReadyKVReq(BaseModel):
     redis_password: Optional[str] = None
 
 
+class TopologyHelloReq(BaseModel):
+    instance_id: str
+    instance_host: str
+    instance_port: int
+
+
 @dataclass
 class TransferTask:
     task_id: str
@@ -330,6 +336,22 @@ async def _startup():
                 pass
 
     _HB_TASK = asyncio.create_task(_hb_loop())
+
+
+@kdn.post("/v1/topology/hello")
+async def topology_hello(req: TopologyHelloReq) -> Dict[str, Any]:
+    return {
+        "ok": True,
+        "kdn_id": _KDN_ID or None,
+        "kdn_host": os.getenv("KDN_ADVERTISE_HOST", "").strip() or None,
+        "kdn_port": int(os.getenv("KDN_ADVERTISE_PORT", "0") or 0),
+        "echo_instance_id": req.instance_id,
+    }
+
+
+@kdn.get("/v1/topology/ping")
+async def topology_ping() -> Dict[str, Any]:
+    return {"ok": True, "ts_ms": int(time.time() * 1000)}
 
 
 @kdn.post("/knowledge/snapshot")

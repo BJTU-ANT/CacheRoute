@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI
@@ -15,6 +16,8 @@ logger = logging.getLogger("proxy.p_control_plane")
 
 _control_plane = FastAPI(title="CacheRoute Proxy Control Plane", version="v1")
 _pool: Optional[InstancePool] = None
+_kdn_links: Dict[str, Dict[str, Any]] = {}
+_kdn_links_lock = asyncio.Lock()
 
 
 def set_pool(pool: InstancePool) -> None:
@@ -47,6 +50,16 @@ class InstanceHeartbeatReq(BaseModel):
 
 class InstanceUnregisterReq(BaseModel):
     instance_id: str
+
+
+class TopologyReportReq(BaseModel):
+    instance_id: str
+    links: Dict[str, Dict[str, Any]]
+
+
+async def get_kdn_links_snapshot() -> Dict[str, Dict[str, Any]]:
+    async with _kdn_links_lock:
+        return {k: dict(v) for k, v in _kdn_links.items()}
 
 
 @_control_plane.get("/healthz")
@@ -131,6 +144,27 @@ async def list_instances(include_dead: bool = False) -> List[Dict[str, Any]]:
             "is_alive": True if not include_dead else None,
         })
     return out
+
+
+@_control_plane.post("/v1/topology/report")
+async def report_topology(req: TopologyReportReq) -> Dict[str, Any]:
+    merged = 0
+    async with _kdn_links_lock:
+        for kdn_key, metrics in (req.links or {}).items():
+            if not isinstance(metrics, dict):
+                continue
+            item = dict(_kdn_links.get(kdn_key, {}))
+            item.update(metrics)
+            item["reported_by"] = req.instance_id
+            _kdn_links[kdn_key] = item
+            merged += 1
+    logger.info("[ProxyCP] topology report: instance_id=%s links=%s", req.instance_id, merged)
+    return {"ok": True, "merged_links": merged}
+
+
+@_control_plane.get("/v1/topology/kdn_links")
+async def list_topology_links() -> Dict[str, Any]:
+    return {"kdn_links": await get_kdn_links_snapshot()}
 
 
 # 对外导出 app

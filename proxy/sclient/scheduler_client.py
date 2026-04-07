@@ -71,6 +71,7 @@ class SchedulerControlClient:
         inflight: Optional[int] = None,
         qps_1m: Optional[float] = None,
         gpu_util: Optional[float] = None,
+        meta_patch: Optional[Dict[str, Any]] = None,
     ) -> None:
         payload: Dict[str, Any] = {"proxy_id": proxy_id}
         # 只在有值时携带，避免触发服务端“全量覆盖为 0”
@@ -80,6 +81,8 @@ class SchedulerControlClient:
             payload["qps_1m"] = qps_1m
         if gpu_util is not None:
             payload["gpu_util"] = gpu_util
+        if meta_patch:
+            payload["meta_patch"] = meta_patch
 
         r = await self._client.post(f"{self.base_url}/v1/proxy/heartbeat", json=payload)
         r.raise_for_status()

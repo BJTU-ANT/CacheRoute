@@ -140,6 +140,27 @@ class CacheRouteStrategy(ProxySelectionStrategy):
             return 0, 999
         bw_tier = int(item.get("bandwidth_tier", 0) or 0)
         lat_tier = int(item.get("latency_tier", 999) or 999)
+        # 新的自动拓扑数据：优先把真实值映射到 tier 语义，兼容旧字段。
+        bw_mbps = float(item.get("bandwidth_mbps", 0.0) or 0.0)
+        lat_ms = float(item.get("latency_ms", 0.0) or 0.0)
+        if bw_tier <= 0 and bw_mbps > 0:
+            if bw_mbps >= 10000:
+                bw_tier = 4
+            elif bw_mbps >= 1000:
+                bw_tier = 3
+            elif bw_mbps >= 100:
+                bw_tier = 2
+            else:
+                bw_tier = 1
+        if lat_tier >= 999 and lat_ms > 0:
+            if lat_ms <= 1:
+                lat_tier = 1
+            elif lat_ms <= 5:
+                lat_tier = 2
+            elif lat_ms <= 20:
+                lat_tier = 3
+            else:
+                lat_tier = 4
         return bw_tier, lat_tier
 
     def _is_overloaded_by_threshold(self, kdn: Dict[str, Any]) -> bool:
