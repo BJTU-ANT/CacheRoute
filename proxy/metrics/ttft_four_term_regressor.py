@@ -15,9 +15,11 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
+
+DEFAULT_COEFF_PATH = Path(__file__).with_name("ttft_coefficients.json")
 
 
 @dataclass
@@ -114,6 +116,28 @@ class TTFTFourTermRegressor:
         )
         return self._coeffs
 
+    def save_coefficients_json(
+        self,
+        coeff_path: str | Path = DEFAULT_COEFF_PATH,
+        *,
+        unit: str = "seconds",
+    ) -> Path:
+        """Persist current coefficients to JSON for runtime queue prediction."""
+        if self._coeffs is None:
+            raise RuntimeError("regressor is not fitted yet")
+
+        path = Path(coeff_path)
+        payload = {
+            "a": self._coeffs.a,
+            "b": self._coeffs.b,
+            "c": self._coeffs.c,
+            "d": self._coeffs.d,
+            "unit": unit,
+            "source": "TTFTFourTermRegressor",
+        }
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return path
+
     def predict(self, batch_size: int, prompt_length: int) -> float:
         if self._coeffs is None:
             raise RuntimeError("regressor is not fitted yet")
@@ -147,9 +171,11 @@ if __name__ == "__main__":
     regressor = TTFTFourTermRegressor()
     loaded = regressor.load_from_json(data_file)
     coeffs = regressor.fit()
+    coeff_file = regressor.save_coefficients_json()
 
     print(f"[TTFT4] loaded points: {loaded}")
     print(
         "[TTFT4] coeffs (seconds): "
         f"a={coeffs.a:.6e}, b={coeffs.b:.6e}, c={coeffs.c:.6e}, d={coeffs.d:.6e}"
     )
+    print(f"[TTFT4] coefficients saved to: {coeff_file}")
