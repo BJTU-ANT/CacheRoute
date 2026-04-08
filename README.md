@@ -98,6 +98,7 @@ Python版本：3.12.11<br>
     ```
    此外，还有许多参数配置，其详细说明可见`core/config.py`,其具体使用方式见`test/demo_***`。<br>
    4.2 为实现跨容器KVCache复用，需要抛弃`builtin+SEED`的不稳定KEY生成方法，采用`sha256_cbor`方法，但由于output格式不对齐问题，CacheRoute对`token_database.py`进行了补丁更新。因此需要将lmcache源码中的`lmcache/v1/token_database.py和memory_management.py`文件替换为`CacheRoute/env/token_database.py和memory_management.py`
+5. proxy为启用TTFT预测器，还需要完成预归回（即在不同bs和length下，模型处理任务表现）和并配置预测器参数，快速获取模型的回归数据见`/instance/TTFT_predictor/README.md`，进行proxy预测器回归见`proxy/metric`。
 6. 启动vLLM0.13+LMCache3.11服务(非PD分离)，指令启动的是TP8下运行LLaMA-70B模型，自行根据需求调整，同时确保CacheRoute/core/config.py内 `USE_MOCK = False`
     ```
    export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
