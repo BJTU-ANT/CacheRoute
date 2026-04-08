@@ -20,7 +20,7 @@ def _timehash_uuid() -> str:
     return str(uuid.UUID(digest32))
 
 def generate_prompt_with_tokens(tokenizer, target_token_count: int) -> str:
-    """使用指定的 tokenizer 生成一个包含大致数量 token 的 prompt。"""
+    """使用指定的 tokenizer 生成一个 token 数不小于目标值的 prompt。"""
     if target_token_count <= 0:
         return ""
 
@@ -53,7 +53,19 @@ def generate_prompt_with_tokens(tokenizer, target_token_count: int) -> str:
                 body_token_ids.extend(noise_token_ids)
 
     prompt_ids = prefix_token_ids + body_token_ids[:remain_token_count]
-    return tokenizer.decode(prompt_ids)
+    prompt = tokenizer.decode(prompt_ids, skip_special_tokens=False)
+
+    # decode 后重新 tokenize 时，token 数可能因分词边界变化略小于 target。
+    # 这里做二次补齐，保证最终 prompt 的 token 数 >= target_token_count（允许略超）。
+    final_token_ids = tokenizer.encode(prompt, add_special_tokens=False)
+    if len(final_token_ids) >= target_token_count:
+        return prompt
+
+    padding_text = " padding_chunk_for_ttft_measurement."
+    while len(final_token_ids) < target_token_count:
+        prompt += padding_text
+        final_token_ids = tokenizer.encode(prompt, add_special_tokens=False)
+    return prompt
 
 async def send_test_request(
     session: aiohttp.ClientSession, 
