@@ -60,6 +60,8 @@ class KnowledgeUnit:
     kv_rel_dir: Optional[str] = None
     kv_dumped_keys: Optional[int] = None
     kv_updated_at: Optional[int] = None
+    # 可选：保存完整正文，供 scheduler 按目标模型 tokenizer 估 token 长度。
+    full_content: Optional[str] = None
 
 
 class KnowledgeTable:

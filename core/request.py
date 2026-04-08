@@ -171,6 +171,7 @@ class Service:
             knowledge_block_num: int,
             embedder: EmbeddingModel,
             knowledge_table: KnowledgeTable,
+            model_name: str,
     ) -> Tuple[List[str], int]:
         """
             根据用户问题，从知识库中检索出最相关的知识清单。
@@ -183,7 +184,7 @@ class Service:
 
             输出：
                 knowledge_ids: 检索到的知识块 ID 列表（长度 <= knowledge_block_num）
-                total_knowledge_length: 这些知识块 length 字段的总和
+                total_knowledge_length: 这些知识块 token 长度总和
         """
         user_prompt = (user_prompt or "").strip()
         if not user_prompt:
@@ -211,8 +212,28 @@ class Service:
         total_len = 0
         for kid, unit, score in results:
             knowledge_ids.append(kid)
-            # length 字段在你构建 knowledge_base.yaml 时已经写好
-            total_len += int(getattr(unit, "length", 0))
+            stored_len = int(getattr(unit, "length", 0) or 0)
+            full_content = str(getattr(unit, "full_content", "") or "")
+            raw_text = full_content if full_content else str(getattr(unit, "text_abstract", "") or "")
+
+            # 兼容两类来源：
+            # 1) KDN 同步路径：full_content 会放入完整 content，length 通常是字符长度
+            # 2) 本地 YAML 路径：text_abstract 可能仅摘要，不能直接分词
+            #
+            # 若存在 full_content，直接按 tokenizer 分词；否则保留兼容判断。
+            if full_content:
+                looks_like_full_content = True
+            elif raw_text and stored_len > 0:
+                length_gap = abs(len(raw_text) - stored_len)
+                looks_like_full_content = length_gap <= max(32, int(stored_len * 0.1))
+            else:
+                looks_like_full_content = False
+
+            if looks_like_full_content:
+                token_len = Prompt.extract_prompt_info(model=model_name, user_prompt=raw_text)
+                total_len += int(token_len)
+            else:
+                total_len += stored_len
 
         # 简单 debug
         print(
@@ -486,6 +507,7 @@ class Request:
                     knowledge_block_num=service_obj.Knowledge_block_num,
                     embedder=embedder,
                     knowledge_table=knowledge_table,
+                    model_name=model,
                 )
 
                 service_obj.Knowledge_List = knowledge_ids
