@@ -230,6 +230,9 @@ async def kdn_refresh_once(app) -> dict:
                     # 当前 KnowledgeTable 继续保留“哪些 KDN 可用”的全局视角；
                     # 精确到每个 KDN 的覆盖信息由 kdn_knowledge_index 维护，供 cacheroute 使用。
                     avail_kdn_servers=list(alive_addrs),
+                    # 这里保留完整正文，供 scheduler 侧按目标模型 tokenizer 估算 token 长度。
+                    text_abstract=str(it.get("content") or ""),
+                    full_content=str(it.get("content") or ""),
                     kv_ready=int(it.get("kv_ready") or 0),
                     kv_rel_dir=it.get("kv_rel_dir"),
                     kv_dumped_keys=it.get("kv_dumped_keys"),
@@ -343,4 +346,3 @@ def diff_kdn_meta(items: list) -> tuple[list[str], list[str], list[str]]:
         _kdn_meta_cache.pop(k, None)
 
     return added, updated, removed
-
