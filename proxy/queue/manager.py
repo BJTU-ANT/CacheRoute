@@ -9,6 +9,7 @@ import logging
 from typing import Dict, Optional, AsyncGenerator, Any
 
 from core import forward_request,config
+from proxy.metrics.queue_predictor import queue_predictor
 
 from .task import ProxyTask
 from .instance_queues import PerInstanceQueueMap
@@ -48,6 +49,65 @@ class QueueManager:
         self._workers_started = False
         self._worker_tasks: Dict[str, asyncio.Task] = {}
         self._http_timeout_s = 60.0
+        # per-instance 预计空闲时间戳（seconds since epoch）
+        self._instance_expected_idle_ts_s: Dict[str, float] = {}
+        self._predict_lock = asyncio.Lock()
+
+    @staticmethod
+    def _estimate_request_length(task: ProxyTask) -> int:
+        """
+        用于 TTFT 预测的长度口径：
+          total_length = prompt_token_length + knowledge_length
+        """
+        prompt = getattr(task.req_obj, "Prompt", None)
+        service = getattr(task.req_obj, "Service", None)
+
+        prompt_len = int(getattr(prompt, "token_length", 0) or 0)
+        know_len = int(getattr(service, "Knowledge_length", 0) or 0)
+        total_len = prompt_len + know_len
+        return max(1, total_len)
+
+    async def _predict_and_reserve_slot(self, task: ProxyTask) -> None:
+        """
+        在任务进入队列时做一次时间预测并更新 instance 的预计空闲时间。
+
+        约定：
+        - bs 当前固定按 1 预测（后续可扩展）。
+        - wait_time = max(0, expected_idle - now)
+        - compute_time = queue_predictor(bs=1, length=prompt+knowledge)
+        - total_time = wait_time + compute_time
+        """
+        now_s = time.time()
+        length = self._estimate_request_length(task)
+        bs = 1
+
+        async with self._predict_lock:
+            expected_idle_s = self._instance_expected_idle_ts_s.get(task.instance_id, now_s)
+            wait_s = max(0.0, expected_idle_s - now_s)
+            compute_s = max(0.0, queue_predictor(length=length, bs=bs))
+            total_s = wait_s + compute_s
+            new_idle_s = max(expected_idle_s, now_s) + compute_s
+            self._instance_expected_idle_ts_s[task.instance_id] = new_idle_s
+
+        # 统一放在 trace，便于现有 meta 返回链路直接观测
+        task.trace["predict_length_tokens"] = int(length)
+        task.trace["predict_bs"] = int(bs)
+        task.trace["predict_wait_ms"] = int(wait_s * 1000)
+        task.trace["predict_compute_ms"] = int(compute_s * 1000)
+        task.trace["predict_total_ms"] = int(total_s * 1000)
+        task.trace["predict_expected_idle_before_ms"] = int(expected_idle_s * 1000)
+        task.trace["predict_expected_idle_after_ms"] = int(new_idle_s * 1000)
+
+        logger.info(
+            "[Predict] rid=%s instance=%s len=%s bs=%s wait=%.2fms compute=%.2fms total=%.2fms",
+            task.request_id,
+            task.instance_id,
+            length,
+            bs,
+            wait_s * 1000.0,
+            compute_s * 1000.0,
+            total_s * 1000.0,
+        )
 
     def ensure_workers_started(self, instance_ids: Optional[list[str]] = None) -> None:
         """
@@ -83,6 +143,12 @@ class QueueManager:
         """
         # 懒启动该 instance 的 workers
         self._start_workers_for_instance(task.instance_id)
+
+        # 预测总处理时间 = 等待时间 + 处理时间（bs 当前固定 1）
+        try:
+            await self._predict_and_reserve_slot(task)
+        except Exception as e:
+            logger.warning("[Predict] rid=%s failed: %s", task.request_id, e)
 
         q = self._qmap.get(task.instance_id)
         task.trace["proxy_enqueue_ms"] = _now_ms()
