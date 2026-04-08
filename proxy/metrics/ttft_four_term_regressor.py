@@ -174,7 +174,6 @@ if __name__ == "__main__":
     coeff_file = regressor.save_coefficients_json()
 
     print(f"[TTFT4] loaded points: {loaded}")
-    print("ttft = a * (batch_size * prompt_length) + b * prompt_length + c * batch_size + d")
     print(
         "[TTFT4] coeffs (seconds): "
         f"a={coeffs.a:.6e}, b={coeffs.b:.6e}, c={coeffs.c:.6e}, d={coeffs.d:.6e}"

@@ -12,6 +12,7 @@ Coefficient source priority:
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 from typing import Dict, Optional
@@ -70,3 +71,39 @@ def queue_predictor(
         + float(c["d"])
     )
     return max(0.0, pred)
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Predict TTFT by length and batch-size.")
+    parser.add_argument("--length", type=int, required=True, help="prompt length")
+    parser.add_argument("--bs", type=int, default=1, help="batch size, default=1")
+    parser.add_argument(
+        "--coeff-path",
+        type=str,
+        default=str(DEFAULT_COEFF_PATH),
+        help="coefficient json path",
+    )
+    parser.add_argument(
+        "--ms",
+        action="store_true",
+        help="also print milliseconds for convenience",
+    )
+    return parser
+
+
+def main() -> None:
+    parser = _build_arg_parser()
+    args = parser.parse_args()
+
+    pred_seconds = queue_predictor(
+        length=args.length,
+        bs=args.bs,
+        coeff_path=args.coeff_path,
+    )
+    print(f"predicted_ttft_seconds={pred_seconds:.6f}")
+    if args.ms:
+        print(f"predicted_ttft_ms={pred_seconds * 1000:.3f}")
+
+
+if __name__ == "__main__":
+    main()
