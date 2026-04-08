@@ -130,6 +130,7 @@ async def lifespan(app: FastAPI):
         host=cp_host,
         port=cp_port,
         log_level="info",
+        access_log=False,
         # 重要：不要启用 reload / workers，embedded 场景保持单进程单实例
     )
     cp_server = uvicorn.Server(cp_config)
