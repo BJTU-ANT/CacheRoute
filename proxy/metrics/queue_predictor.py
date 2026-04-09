@@ -20,30 +20,33 @@ from typing import Dict, Optional
 
 DEFAULT_COEFF_PATH = Path(__file__).with_name("ttft_coefficients.json")
 
-def _short_length_compensation_seconds(length: int, bs: int) -> float:
+def _short_length_floor_seconds(length: int, bs: int) -> float:
     """
-    短请求补偿项（经验值）：
+    短请求最小时延曲线（经验值）：
     - 解决四项式在小长度区间低估/裁零的问题。
-    - 当前先按 bs=1 的实验现象补偿；bs>1 时默认不额外补偿。
+    - 返回“该长度下建议的最小总时延（秒）”。
+    - 当前先按 bs=1 的实验曲线生效；bs>1 暂不启用该下限。
     """
     if bs != 1:
         return 0.0
 
-    # 用“分段线性插值”做连续补偿，避免分段跳变导致的非单调现象。
     # 锚点单位：token / ms
+    # 来自实测关键点：
+    # 10 -> 60ms, 79 -> 78ms, 89 -> 88ms, 303 -> 396ms, 345 -> 472ms
     anchors = [
-        (0, 60.0),     # very short: 约 60ms 基线
-        (64, 58.0),    # 接近你观测到的 64 token 区间
-        (96, 32.0),    # 从短请求向中短请求平滑衰减
-        (160, 24.0),
-        (384, 24.0),   # 345 token 左右仍保留约 24ms 补偿
-        (512, 0.0),    # 长请求逐步回归四项式主导
+        (0, 60.0),
+        (10, 60.0),
+        (79, 78.0),
+        (89, 88.0),
+        (303, 396.0),
+        (345, 472.0),
     ]
 
     if length <= anchors[0][0]:
         return anchors[0][1] / 1000.0
-    if length >= anchors[-1][0]:
-        return anchors[-1][1] / 1000.0
+    # 仅对中短长度启用下限；更长长度仍由四项式主导
+    if length > anchors[-1][0]:
+        return 0.0
 
     for i in range(1, len(anchors)):
         x0, y0 = anchors[i - 1]
@@ -107,8 +110,8 @@ def queue_predictor(
     )
     # 先裁零再补偿，避免短请求在 base_pred<0 时被“抵消”成过小值。
     pred = max(0.0, base_pred)
-    pred += _short_length_compensation_seconds(length=int(length), bs=batch_size)
-    return pred
+    floor_pred = _short_length_floor_seconds(length=int(length), bs=batch_size)
+    return max(pred, floor_pred)
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
