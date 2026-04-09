@@ -20,6 +20,27 @@ from typing import Dict, Optional
 
 DEFAULT_COEFF_PATH = Path(__file__).with_name("ttft_coefficients.json")
 
+def _short_length_compensation_seconds(length: int, bs: int) -> float:
+    """
+    短请求补偿项（经验值）：
+    - 解决四项式在小长度区间低估/裁零的问题。
+    - 当前先按 bs=1 的实验现象补偿；bs>1 时默认不额外补偿。
+    """
+    if bs != 1:
+        return 0.0
+
+    # 经验点：
+    # - very short（~10 token）：实际约 60ms
+    # - short（~89 token）：需补约 20ms
+    # - mid-short（~345 token）：需补约 24ms
+    if length <= 80:
+        return 0.060
+    if length <= 160:
+        return 0.020
+    if length <= 384:
+        return 0.024
+    return 0.0
+
 
 def load_ttft_coefficients(coeff_path: str | Path = DEFAULT_COEFF_PATH) -> Dict[str, float]:
     """Load a/b/c/d coefficients from JSON file."""
@@ -70,6 +91,7 @@ def queue_predictor(
         + float(c["c"]) * batch_size
         + float(c["d"])
     )
+    pred += _short_length_compensation_seconds(length=int(length), bs=batch_size)
     return max(0.0, pred)
 
 
