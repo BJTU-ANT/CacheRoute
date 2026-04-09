@@ -29,16 +29,30 @@ def _short_length_compensation_seconds(length: int, bs: int) -> float:
     if bs != 1:
         return 0.0
 
-    # 经验点：
-    # - very short（~10 token）：实际约 60ms
-    # - short（~89 token）：需补约 20ms
-    # - mid-short（~345 token）：需补约 24ms
-    if length <= 80:
-        return 0.060
-    if length <= 160:
-        return 0.020
-    if length <= 384:
-        return 0.024
+    # 用“分段线性插值”做连续补偿，避免分段跳变导致的非单调现象。
+    # 锚点单位：token / ms
+    anchors = [
+        (0, 60.0),     # very short: 约 60ms 基线
+        (64, 58.0),    # 接近你观测到的 64 token 区间
+        (96, 32.0),    # 从短请求向中短请求平滑衰减
+        (160, 24.0),
+        (384, 24.0),   # 345 token 左右仍保留约 24ms 补偿
+        (512, 0.0),    # 长请求逐步回归四项式主导
+    ]
+
+    if length <= anchors[0][0]:
+        return anchors[0][1] / 1000.0
+    if length >= anchors[-1][0]:
+        return anchors[-1][1] / 1000.0
+
+    for i in range(1, len(anchors)):
+        x0, y0 = anchors[i - 1]
+        x1, y1 = anchors[i]
+        if length <= x1:
+            ratio = (length - x0) / float(x1 - x0)
+            y = y0 + ratio * (y1 - y0)
+            return max(0.0, y / 1000.0)
+
     return 0.0
 
 
@@ -85,14 +99,16 @@ def queue_predictor(
         raise ValueError("bs must be positive")
 
     c = coeffs or load_ttft_coefficients(coeff_path)
-    pred = (
+    base_pred = (
         float(c["a"]) * (batch_size * int(length))
         + float(c["b"]) * int(length)
         + float(c["c"]) * batch_size
         + float(c["d"])
     )
+    # 先裁零再补偿，避免短请求在 base_pred<0 时被“抵消”成过小值。
+    pred = max(0.0, base_pred)
     pred += _short_length_compensation_seconds(length=int(length), bs=batch_size)
-    return max(0.0, pred)
+    return pred
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
