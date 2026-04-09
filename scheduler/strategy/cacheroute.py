@@ -121,47 +121,27 @@ class CacheRouteStrategy(ProxySelectionStrategy):
         return bool(meta.get('overloaded', False))
 
     @staticmethod
-    def _topology_tiers_for_proxy(proxy: Dict[str, Any], chosen_kdn: Dict[str, Any]) -> Tuple[int, int]:
+    def _topology_link_for_proxy(proxy: Dict[str, Any], chosen_kdn: Dict[str, Any]) -> Tuple[float, float]:
         """
-        从 proxy.meta.kdn_links 中读取 chosen_kdn 的拓扑分层：
-        - bandwidth_tier: 越大越好（默认 0）
-        - latency_tier: 越小越好（默认 999）
+        从 proxy.meta.kdn_links 中读取 chosen_kdn 的链路信息：
+        - bandwidth_mbps: 越大越好（默认 0.0）
+        - latency_ms: 越小越好（默认 +inf）
         支持 key 为 kdn_id 或 kdn://host:port。
         """
         meta = proxy.get("meta") or {}
         links = meta.get("kdn_links") or {}
         if not isinstance(links, dict):
-            return 0, 999
+            return 0.0, 1e9
 
         kdn_id = str(chosen_kdn.get("kdn_id") or "")
         kdn_addr = f"kdn://{chosen_kdn.get('host')}:{int(chosen_kdn.get('port') or 0)}"
         item = links.get(kdn_id) or links.get(kdn_addr) or {}
         if not isinstance(item, dict):
-            return 0, 999
-        bw_tier = int(item.get("bandwidth_tier", 0) or 0)
-        lat_tier = int(item.get("latency_tier", 999) or 999)
-        # 新的自动拓扑数据：优先把真实值映射到 tier 语义，兼容旧字段。
+            return 0.0, 1e9
         bw_mbps = float(item.get("bandwidth_mbps", 0.0) or 0.0)
-        lat_ms = float(item.get("latency_ms", 0.0) or 0.0)
-        if bw_tier <= 0 and bw_mbps > 0:
-            if bw_mbps >= 10000:
-                bw_tier = 4
-            elif bw_mbps >= 1000:
-                bw_tier = 3
-            elif bw_mbps >= 100:
-                bw_tier = 2
-            else:
-                bw_tier = 1
-        if lat_tier >= 999 and lat_ms > 0:
-            if lat_ms <= 1:
-                lat_tier = 1
-            elif lat_ms <= 5:
-                lat_tier = 2
-            elif lat_ms <= 20:
-                lat_tier = 3
-            else:
-                lat_tier = 4
-        return bw_tier, lat_tier
+        lat_ms_raw = item.get("latency_ms", None)
+        lat_ms = float(lat_ms_raw) if lat_ms_raw is not None else 1e9
+        return bw_mbps, lat_ms
 
     def _is_overloaded_by_threshold(self, kdn: Dict[str, Any]) -> bool:
         """
@@ -321,7 +301,7 @@ class CacheRouteStrategy(ProxySelectionStrategy):
         if chosen_kdn:
             connectable = [
                 p for p in proxies
-                if self._topology_tiers_for_proxy(p, chosen_kdn) != (0, 999)
+                if self._topology_link_for_proxy(p, chosen_kdn)[0] > 0.0
             ]
             proxy_pool = connectable if connectable else proxies
         else:
@@ -364,8 +344,8 @@ class CacheRouteStrategy(ProxySelectionStrategy):
         ranked = sorted(
             aff_group,
             key=lambda p: (
-                -self._topology_tiers_for_proxy(p, chosen_kdn)[0] if chosen_kdn else 0,
-                self._topology_tiers_for_proxy(p, chosen_kdn)[1] if chosen_kdn else 999,
+                -self._topology_link_for_proxy(p, chosen_kdn)[0] if chosen_kdn else 0.0,
+                self._topology_link_for_proxy(p, chosen_kdn)[1] if chosen_kdn else 1e9,
                 self._proxy_load_ratio(p),
                 self._proxy_inflight(p),
                 self._proxy_qps(p),
@@ -373,13 +353,13 @@ class CacheRouteStrategy(ProxySelectionStrategy):
                 str(p.get('proxy_id', '')),
             ),
         )
-        if len(aff_group) > 1:
+        if len(aff_group) > 1 and chosen_kdn:
             with self._lock:
                 self._counters["proxy_topology_hits"] += 1
         best = ranked[0]
         best_key = (
-            self._topology_tiers_for_proxy(best, chosen_kdn)[0] if chosen_kdn else 0,
-            self._topology_tiers_for_proxy(best, chosen_kdn)[1] if chosen_kdn else 999,
+            self._topology_link_for_proxy(best, chosen_kdn)[0] if chosen_kdn else 0.0,
+            self._topology_link_for_proxy(best, chosen_kdn)[1] if chosen_kdn else 1e9,
             self._proxy_load_ratio(best),
             self._proxy_inflight(best),
             self._proxy_qps(best),
@@ -388,8 +368,8 @@ class CacheRouteStrategy(ProxySelectionStrategy):
         tied = [
             p for p in ranked
             if (
-                self._topology_tiers_for_proxy(p, chosen_kdn)[0] if chosen_kdn else 0,
-                self._topology_tiers_for_proxy(p, chosen_kdn)[1] if chosen_kdn else 999,
+                self._topology_link_for_proxy(p, chosen_kdn)[0] if chosen_kdn else 0.0,
+                self._topology_link_for_proxy(p, chosen_kdn)[1] if chosen_kdn else 1e9,
                 self._proxy_load_ratio(p),
                 self._proxy_inflight(p),
                 self._proxy_qps(p),
@@ -432,9 +412,9 @@ class CacheRouteStrategy(ProxySelectionStrategy):
                     "load_ratio": self._proxy_load_ratio(p),
                     "qps_1m": self._proxy_qps(p),
                     "gpu_util": self._proxy_gpu(p),
-                    "topology_tier": {
-                        "bandwidth_tier": self._topology_tiers_for_proxy(p, chosen_kdn)[0] if chosen_kdn else 0,
-                        "latency_tier": self._topology_tiers_for_proxy(p, chosen_kdn)[1] if chosen_kdn else 999,
+                    "topology_link": {
+                        "bandwidth_mbps": self._topology_link_for_proxy(p, chosen_kdn)[0] if chosen_kdn else 0.0,
+                        "latency_ms": self._topology_link_for_proxy(p, chosen_kdn)[1] if chosen_kdn else 1e9,
                     },
                     "affinity_score": self._affinity_score(str(p.get("proxy_id", "")), knowledge_list, length_by_kid),
                 }

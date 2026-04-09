@@ -1,0 +1,2228 @@
+ 
+2026-04-07 03:40:13,555 - __main__ - INFO - 正在启动 uvicorn 服务器...
+INFO:     Will watch for changes in these directories: ['/workspace/llm-stack/CacheRoute/instance/TTFT_predictor']
+INFO:     Uvicorn running on http://127.0.0.1:9003 (Press CTRL+C to quit)
+INFO:     Started reloader process [5892] using WatchFiles
+INFO:     Started server process [5989]
+INFO:     Waiting for application startup.
+2026-04-07 03:40:17,305 - prefill_prediction_server - INFO - 服务器正在启动... 
+[TTFT Predictor] Initializing Regressor...
+[TTFT Predictor] Seeding with dummy data for fast start...
+
+--- 📊 Data Collection Summary ---
+   Config (BS=1, PL=100): Count=1, Avg=40.00ms (Min=40.0, Max=40.0)
+   Config (BS=1, PL=1000): Count=1, Avg=220.00ms (Min=220.0, Max=220.0)
+   Config (BS=4, PL=500): Count=1, Avg=120.00ms (Min=120.0, Max=120.0)
+   Config (BS=8, PL=100): Count=1, Avg=60.00ms (Min=60.0, Max=60.0)
+   Config (BS=8, PL=1000): Count=1, Avg=350.00ms (Min=350.0, Max=350.0)
+----------------------------------
+
+[Regressor] Fitting model with 5 samples...
+✅ Model fitted successfully.
+   Coeffs: a=1.74e-05, b=1.84e-04, c=1.38e-03, d=0.011
+2026-04-07 03:40:17,307 - prefill_prediction_server - INFO - 基础模型实例已就绪 (Dummy Init)。
+2026-04-07 03:40:17,308 - prefill_prediction_server - INFO - 后台 Warmup 任务已调度。
+2026-04-07 03:40:17,308 - prefill_prediction_server - INFO - >>> [Background] 等待 5秒 确保 HTTP 服务完全就绪...
+INFO:     Application startup complete.
+2026-04-07 03:40:22,308 - prefill_prediction_server - INFO - >>> [Background] 开始执行真实 Warmup...
+
+==================================================
+🚀 [Detailed Warmup] Starting Step-by-Step Benchmark...
+   Target: 0.0.0.0:8000
+   Batch Sample Policy: mid_minmax
+   Total Configs: 88
+==================================================
+
+[1/88] Testing: BatchSize=1, PromptLen=64 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+You are using the default legacy behaviour of the <class 'transformers.models.llama.tokenization_llama_fast.LlamaTokenizerFast'>. This is expected, and simply means that the `legacy` (previous) behavior will be used so nothing changes for you. If you want to use the new behaviour, set `legacy=False`. This should only be set if you understand what it means, and thoroughly read the reason why this was added as explained in https://github.com/huggingface/transformers/pull/24565 - if you loaded a llama tokenizer from a GGUF file you can ignore this message.
+   >> Firing: BatchSize=1, PromptLen=64 (x3)
+[TTFT] BS=1, PL=64, repeat=1, task=1/1, ttft=801.15ms
+[INFO] Repeat TTFT stats: BS=1, PL=64, repeat=1, valid=1/1, min/avg/max=801.1/801.1/801.1ms, arrival_span=0.0ms
+[TTFT] BS=1, PL=64, repeat=2, task=1/1, ttft=80.20ms
+[INFO] Repeat TTFT stats: BS=1, PL=64, repeat=2, valid=1/1, min/avg/max=80.2/80.2/80.2ms, arrival_span=0.0ms
+[TTFT] BS=1, PL=64, repeat=3, task=1/1, ttft=78.22ms
+[INFO] Repeat TTFT stats: BS=1, PL=64, repeat=3, valid=1/1, min/avg/max=78.2/78.2/78.2ms, arrival_span=0.0ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 319.86 ms (3 samples)
+
+[2/88] Testing: BatchSize=1, PromptLen=320 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=1, PromptLen=320 (x3)
+[TTFT] BS=1, PL=320, repeat=1, task=1/1, ttft=461.29ms
+[INFO] Repeat TTFT stats: BS=1, PL=320, repeat=1, valid=1/1, min/avg/max=461.3/461.3/461.3ms, arrival_span=0.0ms
+[TTFT] BS=1, PL=320, repeat=2, task=1/1, ttft=403.35ms
+[INFO] Repeat TTFT stats: BS=1, PL=320, repeat=2, valid=1/1, min/avg/max=403.3/403.3/403.3ms, arrival_span=0.0ms
+[TTFT] BS=1, PL=320, repeat=3, task=1/1, ttft=398.39ms
+[INFO] Repeat TTFT stats: BS=1, PL=320, repeat=3, valid=1/1, min/avg/max=398.4/398.4/398.4ms, arrival_span=0.0ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 421.01 ms (3 samples)
+
+[3/88] Testing: BatchSize=1, PromptLen=576 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=1, PromptLen=576 (x3)
+[TTFT] BS=1, PL=576, repeat=1, task=1/1, ttft=772.22ms
+[INFO] Repeat TTFT stats: BS=1, PL=576, repeat=1, valid=1/1, min/avg/max=772.2/772.2/772.2ms, arrival_span=0.0ms
+[TTFT] BS=1, PL=576, repeat=2, task=1/1, ttft=767.51ms
+[INFO] Repeat TTFT stats: BS=1, PL=576, repeat=2, valid=1/1, min/avg/max=767.5/767.5/767.5ms, arrival_span=0.0ms
+[TTFT] BS=1, PL=576, repeat=3, task=1/1, ttft=773.17ms
+[INFO] Repeat TTFT stats: BS=1, PL=576, repeat=3, valid=1/1, min/avg/max=773.2/773.2/773.2ms, arrival_span=0.0ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 770.97 ms (3 samples)
+
+[4/88] Testing: BatchSize=1, PromptLen=832 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=1, PromptLen=832 (x3)
+[TTFT] BS=1, PL=832, repeat=1, task=1/1, ttft=1129.21ms
+[INFO] Repeat TTFT stats: BS=1, PL=832, repeat=1, valid=1/1, min/avg/max=1129.2/1129.2/1129.2ms, arrival_span=0.0ms
+[TTFT] BS=1, PL=832, repeat=2, task=1/1, ttft=1125.64ms
+[INFO] Repeat TTFT stats: BS=1, PL=832, repeat=2, valid=1/1, min/avg/max=1125.6/1125.6/1125.6ms, arrival_span=0.0ms
+[TTFT] BS=1, PL=832, repeat=3, task=1/1, ttft=1125.20ms
+[INFO] Repeat TTFT stats: BS=1, PL=832, repeat=3, valid=1/1, min/avg/max=1125.2/1125.2/1125.2ms, arrival_span=0.0ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 1126.68 ms (3 samples)
+
+[5/88] Testing: BatchSize=1, PromptLen=1088 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=1, PromptLen=1088 (x3)
+[TTFT] BS=1, PL=1088, repeat=1, task=1/1, ttft=1472.80ms
+[INFO] Repeat TTFT stats: BS=1, PL=1088, repeat=1, valid=1/1, min/avg/max=1472.8/1472.8/1472.8ms, arrival_span=0.0ms
+[TTFT] BS=1, PL=1088, repeat=2, task=1/1, ttft=1463.69ms
+[INFO] Repeat TTFT stats: BS=1, PL=1088, repeat=2, valid=1/1, min/avg/max=1463.7/1463.7/1463.7ms, arrival_span=0.0ms
+[TTFT] BS=1, PL=1088, repeat=3, task=1/1, ttft=1470.86ms
+[INFO] Repeat TTFT stats: BS=1, PL=1088, repeat=3, valid=1/1, min/avg/max=1470.9/1470.9/1470.9ms, arrival_span=0.0ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 1469.11 ms (3 samples)
+
+[6/88] Testing: BatchSize=1, PromptLen=1344 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=1, PromptLen=1344 (x3)
+[TTFT] BS=1, PL=1344, repeat=1, task=1/1, ttft=1787.01ms
+[INFO] Repeat TTFT stats: BS=1, PL=1344, repeat=1, valid=1/1, min/avg/max=1787.0/1787.0/1787.0ms, arrival_span=0.0ms
+[TTFT] BS=1, PL=1344, repeat=2, task=1/1, ttft=1792.64ms
+[INFO] Repeat TTFT stats: BS=1, PL=1344, repeat=2, valid=1/1, min/avg/max=1792.6/1792.6/1792.6ms, arrival_span=0.0ms
+[TTFT] BS=1, PL=1344, repeat=3, task=1/1, ttft=1789.24ms
+[INFO] Repeat TTFT stats: BS=1, PL=1344, repeat=3, valid=1/1, min/avg/max=1789.2/1789.2/1789.2ms, arrival_span=0.0ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 1789.63 ms (3 samples)
+
+[7/88] Testing: BatchSize=1, PromptLen=1600 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=1, PromptLen=1600 (x3)
+[TTFT] BS=1, PL=1600, repeat=1, task=1/1, ttft=2133.62ms
+[INFO] Repeat TTFT stats: BS=1, PL=1600, repeat=1, valid=1/1, min/avg/max=2133.6/2133.6/2133.6ms, arrival_span=0.0ms
+[TTFT] BS=1, PL=1600, repeat=2, task=1/1, ttft=2131.73ms
+[INFO] Repeat TTFT stats: BS=1, PL=1600, repeat=2, valid=1/1, min/avg/max=2131.7/2131.7/2131.7ms, arrival_span=0.0ms
+[TTFT] BS=1, PL=1600, repeat=3, task=1/1, ttft=2131.23ms
+[INFO] Repeat TTFT stats: BS=1, PL=1600, repeat=3, valid=1/1, min/avg/max=2131.2/2131.2/2131.2ms, arrival_span=0.0ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 2132.20 ms (3 samples)
+
+[8/88] Testing: BatchSize=1, PromptLen=1856 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=1, PromptLen=1856 (x3)
+[TTFT] BS=1, PL=1856, repeat=1, task=1/1, ttft=2486.50ms
+[INFO] Repeat TTFT stats: BS=1, PL=1856, repeat=1, valid=1/1, min/avg/max=2486.5/2486.5/2486.5ms, arrival_span=0.0ms
+[TTFT] BS=1, PL=1856, repeat=2, task=1/1, ttft=2489.49ms
+[INFO] Repeat TTFT stats: BS=1, PL=1856, repeat=2, valid=1/1, min/avg/max=2489.5/2489.5/2489.5ms, arrival_span=0.0ms
+[TTFT] BS=1, PL=1856, repeat=3, task=1/1, ttft=2487.58ms
+[INFO] Repeat TTFT stats: BS=1, PL=1856, repeat=3, valid=1/1, min/avg/max=2487.6/2487.6/2487.6ms, arrival_span=0.0ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 2487.86 ms (3 samples)
+
+[9/88] Testing: BatchSize=1, PromptLen=2112 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=1, PromptLen=2112 (x3)
+[TTFT] BS=1, PL=2112, repeat=1, task=1/1, ttft=2819.80ms
+[INFO] Repeat TTFT stats: BS=1, PL=2112, repeat=1, valid=1/1, min/avg/max=2819.8/2819.8/2819.8ms, arrival_span=0.0ms
+[TTFT] BS=1, PL=2112, repeat=2, task=1/1, ttft=2831.11ms
+[INFO] Repeat TTFT stats: BS=1, PL=2112, repeat=2, valid=1/1, min/avg/max=2831.1/2831.1/2831.1ms, arrival_span=0.0ms
+[TTFT] BS=1, PL=2112, repeat=3, task=1/1, ttft=2824.05ms
+[INFO] Repeat TTFT stats: BS=1, PL=2112, repeat=3, valid=1/1, min/avg/max=2824.1/2824.1/2824.1ms, arrival_span=0.0ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 2824.99 ms (3 samples)
+
+[10/88] Testing: BatchSize=1, PromptLen=2368 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=1, PromptLen=2368 (x3)
+[TTFT] BS=1, PL=2368, repeat=1, task=1/1, ttft=3156.27ms
+[INFO] Repeat TTFT stats: BS=1, PL=2368, repeat=1, valid=1/1, min/avg/max=3156.3/3156.3/3156.3ms, arrival_span=0.0ms
+[TTFT] BS=1, PL=2368, repeat=2, task=1/1, ttft=3152.62ms
+[INFO] Repeat TTFT stats: BS=1, PL=2368, repeat=2, valid=1/1, min/avg/max=3152.6/3152.6/3152.6ms, arrival_span=0.0ms
+[TTFT] BS=1, PL=2368, repeat=3, task=1/1, ttft=3157.01ms
+[INFO] Repeat TTFT stats: BS=1, PL=2368, repeat=3, valid=1/1, min/avg/max=3157.0/3157.0/3157.0ms, arrival_span=0.0ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 3155.30 ms (3 samples)
+
+[11/88] Testing: BatchSize=1, PromptLen=2624 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=1, PromptLen=2624 (x3)
+[TTFT] BS=1, PL=2624, repeat=1, task=1/1, ttft=3517.98ms
+[INFO] Repeat TTFT stats: BS=1, PL=2624, repeat=1, valid=1/1, min/avg/max=3518.0/3518.0/3518.0ms, arrival_span=0.0ms
+[TTFT] BS=1, PL=2624, repeat=2, task=1/1, ttft=3522.63ms
+[INFO] Repeat TTFT stats: BS=1, PL=2624, repeat=2, valid=1/1, min/avg/max=3522.6/3522.6/3522.6ms, arrival_span=0.0ms
+[TTFT] BS=1, PL=2624, repeat=3, task=1/1, ttft=3514.22ms
+[INFO] Repeat TTFT stats: BS=1, PL=2624, repeat=3, valid=1/1, min/avg/max=3514.2/3514.2/3514.2ms, arrival_span=0.0ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 3518.28 ms (3 samples)
+
+[12/88] Testing: BatchSize=1, PromptLen=2880 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=1, PromptLen=2880 (x3)
+[TTFT] BS=1, PL=2880, repeat=1, task=1/1, ttft=3858.44ms
+[INFO] Repeat TTFT stats: BS=1, PL=2880, repeat=1, valid=1/1, min/avg/max=3858.4/3858.4/3858.4ms, arrival_span=0.0ms
+[TTFT] BS=1, PL=2880, repeat=2, task=1/1, ttft=3859.93ms
+[INFO] Repeat TTFT stats: BS=1, PL=2880, repeat=2, valid=1/1, min/avg/max=3859.9/3859.9/3859.9ms, arrival_span=0.0ms
+[TTFT] BS=1, PL=2880, repeat=3, task=1/1, ttft=3847.48ms
+[INFO] Repeat TTFT stats: BS=1, PL=2880, repeat=3, valid=1/1, min/avg/max=3847.5/3847.5/3847.5ms, arrival_span=0.0ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 3855.28 ms (3 samples)
+
+[13/88] Testing: BatchSize=2, PromptLen=64 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=2, PromptLen=64 (x3)
+[TTFT] BS=2, PL=64, repeat=1, task=1/2, ttft=82.63ms
+[TTFT] BS=2, PL=64, repeat=1, task=2/2, ttft=149.11ms
+[INFO] Repeat TTFT stats: BS=2, PL=64, repeat=1, valid=2/2, min/avg/max=82.6/115.9/149.1ms, arrival_span=66.5ms
+[TTFT] BS=2, PL=64, repeat=2, task=1/2, ttft=77.58ms
+[TTFT] BS=2, PL=64, repeat=2, task=2/2, ttft=144.06ms
+[INFO] Repeat TTFT stats: BS=2, PL=64, repeat=2, valid=2/2, min/avg/max=77.6/110.8/144.1ms, arrival_span=66.5ms
+[TTFT] BS=2, PL=64, repeat=3, task=1/2, ttft=78.72ms
+[TTFT] BS=2, PL=64, repeat=3, task=2/2, ttft=145.42ms
+[INFO] Repeat TTFT stats: BS=2, PL=64, repeat=3, valid=2/2, min/avg/max=78.7/112.1/145.4ms, arrival_span=66.7ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 112.92 ms (3 samples)
+
+[14/88] Testing: BatchSize=2, PromptLen=320 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=2, PromptLen=320 (x3)
+[TTFT] BS=2, PL=320, repeat=1, task=1/2, ttft=794.00ms
+[TTFT] BS=2, PL=320, repeat=1, task=2/2, ttft=402.51ms
+[INFO] Repeat TTFT stats: BS=2, PL=320, repeat=1, valid=2/2, min/avg/max=402.5/598.3/794.0ms, arrival_span=391.5ms
+[TTFT] BS=2, PL=320, repeat=2, task=1/2, ttft=858.77ms
+[TTFT] BS=2, PL=320, repeat=2, task=2/2, ttft=858.21ms
+[INFO] Repeat TTFT stats: BS=2, PL=320, repeat=2, valid=2/2, min/avg/max=858.2/858.5/858.8ms, arrival_span=0.6ms
+[TTFT] BS=2, PL=320, repeat=3, task=1/2, ttft=794.19ms
+[TTFT] BS=2, PL=320, repeat=3, task=2/2, ttft=399.09ms
+[INFO] Repeat TTFT stats: BS=2, PL=320, repeat=3, valid=2/2, min/avg/max=399.1/596.6/794.2ms, arrival_span=395.1ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 684.46 ms (3 samples)
+
+[15/88] Testing: BatchSize=2, PromptLen=576 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=2, PromptLen=576 (x3)
+[TTFT] BS=2, PL=576, repeat=1, task=1/2, ttft=769.09ms
+[TTFT] BS=2, PL=576, repeat=1, task=2/2, ttft=1549.33ms
+[INFO] Repeat TTFT stats: BS=2, PL=576, repeat=1, valid=2/2, min/avg/max=769.1/1159.2/1549.3ms, arrival_span=780.2ms
+[TTFT] BS=2, PL=576, repeat=2, task=1/2, ttft=764.14ms
+[TTFT] BS=2, PL=576, repeat=2, task=2/2, ttft=1539.86ms
+[INFO] Repeat TTFT stats: BS=2, PL=576, repeat=2, valid=2/2, min/avg/max=764.1/1152.0/1539.9ms, arrival_span=775.7ms
+[TTFT] BS=2, PL=576, repeat=3, task=1/2, ttft=773.51ms
+[TTFT] BS=2, PL=576, repeat=3, task=2/2, ttft=1545.48ms
+[INFO] Repeat TTFT stats: BS=2, PL=576, repeat=3, valid=2/2, min/avg/max=773.5/1159.5/1545.5ms, arrival_span=772.0ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 1156.90 ms (3 samples)
+
+[16/88] Testing: BatchSize=2, PromptLen=832 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=2, PromptLen=832 (x3)
+[TTFT] BS=2, PL=832, repeat=1, task=1/2, ttft=2274.13ms
+[TTFT] BS=2, PL=832, repeat=1, task=2/2, ttft=2273.75ms
+[INFO] Repeat TTFT stats: BS=2, PL=832, repeat=1, valid=2/2, min/avg/max=2273.7/2273.9/2274.1ms, arrival_span=0.4ms
+[TTFT] BS=2, PL=832, repeat=2, task=1/2, ttft=2270.88ms
+[TTFT] BS=2, PL=832, repeat=2, task=2/2, ttft=2270.70ms
+[INFO] Repeat TTFT stats: BS=2, PL=832, repeat=2, valid=2/2, min/avg/max=2270.7/2270.8/2270.9ms, arrival_span=0.2ms
+[TTFT] BS=2, PL=832, repeat=3, task=1/2, ttft=2270.20ms
+[TTFT] BS=2, PL=832, repeat=3, task=2/2, ttft=2269.94ms
+[INFO] Repeat TTFT stats: BS=2, PL=832, repeat=3, valid=2/2, min/avg/max=2269.9/2270.1/2270.2ms, arrival_span=0.3ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 2271.60 ms (3 samples)
+
+[17/88] Testing: BatchSize=2, PromptLen=1088 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=2, PromptLen=1088 (x3)
+[TTFT] BS=2, PL=1088, repeat=1, task=1/2, ttft=1472.59ms
+[TTFT] BS=2, PL=1088, repeat=1, task=2/2, ttft=2978.76ms
+[INFO] Repeat TTFT stats: BS=2, PL=1088, repeat=1, valid=2/2, min/avg/max=1472.6/2225.7/2978.8ms, arrival_span=1506.2ms
+[TTFT] BS=2, PL=1088, repeat=2, task=1/2, ttft=2972.00ms
+[TTFT] BS=2, PL=1088, repeat=2, task=2/2, ttft=1474.43ms
+[INFO] Repeat TTFT stats: BS=2, PL=1088, repeat=2, valid=2/2, min/avg/max=1474.4/2223.2/2972.0ms, arrival_span=1497.6ms
+[TTFT] BS=2, PL=1088, repeat=3, task=1/2, ttft=1471.38ms
+[TTFT] BS=2, PL=1088, repeat=3, task=2/2, ttft=2975.64ms
+[INFO] Repeat TTFT stats: BS=2, PL=1088, repeat=3, valid=2/2, min/avg/max=1471.4/2223.5/2975.6ms, arrival_span=1504.3ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 2224.13 ms (3 samples)
+
+[18/88] Testing: BatchSize=2, PromptLen=1344 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=2, PromptLen=1344 (x3)
+[TTFT] BS=2, PL=1344, repeat=1, task=1/2, ttft=3640.18ms
+[TTFT] BS=2, PL=1344, repeat=1, task=2/2, ttft=1802.76ms
+[INFO] Repeat TTFT stats: BS=2, PL=1344, repeat=1, valid=2/2, min/avg/max=1802.8/2721.5/3640.2ms, arrival_span=1837.4ms
+[TTFT] BS=2, PL=1344, repeat=2, task=1/2, ttft=1792.69ms
+[TTFT] BS=2, PL=1344, repeat=2, task=2/2, ttft=3612.02ms
+[INFO] Repeat TTFT stats: BS=2, PL=1344, repeat=2, valid=2/2, min/avg/max=1792.7/2702.4/3612.0ms, arrival_span=1819.3ms
+[TTFT] BS=2, PL=1344, repeat=3, task=1/2, ttft=1796.77ms
+[TTFT] BS=2, PL=1344, repeat=3, task=2/2, ttft=3609.81ms
+[INFO] Repeat TTFT stats: BS=2, PL=1344, repeat=3, valid=2/2, min/avg/max=1796.8/2703.3/3609.8ms, arrival_span=1813.0ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 2709.04 ms (3 samples)
+
+[19/88] Testing: BatchSize=2, PromptLen=1600 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=2, PromptLen=1600 (x3)
+[TTFT] BS=2, PL=1600, repeat=1, task=1/2, ttft=2147.60ms
+[TTFT] BS=2, PL=1600, repeat=1, task=2/2, ttft=4309.22ms
+[INFO] Repeat TTFT stats: BS=2, PL=1600, repeat=1, valid=2/2, min/avg/max=2147.6/3228.4/4309.2ms, arrival_span=2161.6ms
+[TTFT] BS=2, PL=1600, repeat=2, task=1/2, ttft=4319.28ms
+[TTFT] BS=2, PL=1600, repeat=2, task=2/2, ttft=2136.93ms
+[INFO] Repeat TTFT stats: BS=2, PL=1600, repeat=2, valid=2/2, min/avg/max=2136.9/3228.1/4319.3ms, arrival_span=2182.3ms
+[TTFT] BS=2, PL=1600, repeat=3, task=1/2, ttft=4302.18ms
+[TTFT] BS=2, PL=1600, repeat=3, task=2/2, ttft=4301.97ms
+[INFO] Repeat TTFT stats: BS=2, PL=1600, repeat=3, valid=2/2, min/avg/max=4302.0/4302.1/4302.2ms, arrival_span=0.2ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 3586.20 ms (3 samples)
+
+[20/88] Testing: BatchSize=2, PromptLen=1856 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=2, PromptLen=1856 (x3)
+[TTFT] BS=2, PL=1856, repeat=1, task=1/2, ttft=5003.69ms
+[TTFT] BS=2, PL=1856, repeat=1, task=2/2, ttft=5003.25ms
+[INFO] Repeat TTFT stats: BS=2, PL=1856, repeat=1, valid=2/2, min/avg/max=5003.3/5003.5/5003.7ms, arrival_span=0.4ms
+[TTFT] BS=2, PL=1856, repeat=2, task=1/2, ttft=5011.41ms
+[TTFT] BS=2, PL=1856, repeat=2, task=2/2, ttft=2490.15ms
+[INFO] Repeat TTFT stats: BS=2, PL=1856, repeat=2, valid=2/2, min/avg/max=2490.1/3750.8/5011.4ms, arrival_span=2521.3ms
+[TTFT] BS=2, PL=1856, repeat=3, task=1/2, ttft=2474.32ms
+[TTFT] BS=2, PL=1856, repeat=3, task=2/2, ttft=5010.83ms
+[INFO] Repeat TTFT stats: BS=2, PL=1856, repeat=3, valid=2/2, min/avg/max=2474.3/3742.6/5010.8ms, arrival_span=2536.5ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 4165.61 ms (3 samples)
+
+[21/88] Testing: BatchSize=2, PromptLen=2112 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=2, PromptLen=2112 (x3)
+[TTFT] BS=2, PL=2112, repeat=1, task=1/2, ttft=2834.60ms
+[TTFT] BS=2, PL=2112, repeat=1, task=2/2, ttft=5718.71ms
+[INFO] Repeat TTFT stats: BS=2, PL=2112, repeat=1, valid=2/2, min/avg/max=2834.6/4276.7/5718.7ms, arrival_span=2884.1ms
+[TTFT] BS=2, PL=2112, repeat=2, task=1/2, ttft=2826.59ms
+[TTFT] BS=2, PL=2112, repeat=2, task=2/2, ttft=5670.75ms
+[INFO] Repeat TTFT stats: BS=2, PL=2112, repeat=2, valid=2/2, min/avg/max=2826.6/4248.7/5670.7ms, arrival_span=2844.2ms
+[TTFT] BS=2, PL=2112, repeat=3, task=1/2, ttft=2824.76ms
+[TTFT] BS=2, PL=2112, repeat=3, task=2/2, ttft=5729.77ms
+[INFO] Repeat TTFT stats: BS=2, PL=2112, repeat=3, valid=2/2, min/avg/max=2824.8/4277.3/5729.8ms, arrival_span=2905.0ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 4267.53 ms (3 samples)
+
+[22/88] Testing: BatchSize=2, PromptLen=2368 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=2, PromptLen=2368 (x3)
+[TTFT] BS=2, PL=2368, repeat=1, task=1/2, ttft=3158.27ms
+[TTFT] BS=2, PL=2368, repeat=1, task=2/2, ttft=6336.21ms
+[INFO] Repeat TTFT stats: BS=2, PL=2368, repeat=1, valid=2/2, min/avg/max=3158.3/4747.2/6336.2ms, arrival_span=3177.9ms
+[TTFT] BS=2, PL=2368, repeat=2, task=1/2, ttft=3151.23ms
+[TTFT] BS=2, PL=2368, repeat=2, task=2/2, ttft=6366.28ms
+[INFO] Repeat TTFT stats: BS=2, PL=2368, repeat=2, valid=2/2, min/avg/max=3151.2/4758.8/6366.3ms, arrival_span=3215.0ms
+[TTFT] BS=2, PL=2368, repeat=3, task=1/2, ttft=3159.41ms
+[TTFT] BS=2, PL=2368, repeat=3, task=2/2, ttft=6372.88ms
+[INFO] Repeat TTFT stats: BS=2, PL=2368, repeat=3, valid=2/2, min/avg/max=3159.4/4766.1/6372.9ms, arrival_span=3213.5ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 4757.38 ms (3 samples)
+
+[23/88] Testing: BatchSize=2, PromptLen=2624 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=2, PromptLen=2624 (x3)
+[TTFT] BS=2, PL=2624, repeat=1, task=1/2, ttft=3539.87ms
+[TTFT] BS=2, PL=2624, repeat=1, task=2/2, ttft=7085.01ms
+[INFO] Repeat TTFT stats: BS=2, PL=2624, repeat=1, valid=2/2, min/avg/max=3539.9/5312.4/7085.0ms, arrival_span=3545.1ms
+[TTFT] BS=2, PL=2624, repeat=2, task=1/2, ttft=7069.23ms
+[TTFT] BS=2, PL=2624, repeat=2, task=2/2, ttft=7069.06ms
+[INFO] Repeat TTFT stats: BS=2, PL=2624, repeat=2, valid=2/2, min/avg/max=7069.1/7069.1/7069.2ms, arrival_span=0.2ms
+[TTFT] BS=2, PL=2624, repeat=3, task=1/2, ttft=3509.67ms
+[TTFT] BS=2, PL=2624, repeat=3, task=2/2, ttft=7051.07ms
+[INFO] Repeat TTFT stats: BS=2, PL=2624, repeat=3, valid=2/2, min/avg/max=3509.7/5280.4/7051.1ms, arrival_span=3541.4ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 5887.32 ms (3 samples)
+
+[24/88] Testing: BatchSize=2, PromptLen=2880 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=2, PromptLen=2880 (x3)
+[TTFT] BS=2, PL=2880, repeat=1, task=1/2, ttft=7727.68ms
+[TTFT] BS=2, PL=2880, repeat=1, task=2/2, ttft=7727.31ms
+[INFO] Repeat TTFT stats: BS=2, PL=2880, repeat=1, valid=2/2, min/avg/max=7727.3/7727.5/7727.7ms, arrival_span=0.4ms
+[TTFT] BS=2, PL=2880, repeat=2, task=1/2, ttft=7695.91ms
+[TTFT] BS=2, PL=2880, repeat=2, task=2/2, ttft=7695.69ms
+[INFO] Repeat TTFT stats: BS=2, PL=2880, repeat=2, valid=2/2, min/avg/max=7695.7/7695.8/7695.9ms, arrival_span=0.2ms
+[TTFT] BS=2, PL=2880, repeat=3, task=1/2, ttft=7723.12ms
+[TTFT] BS=2, PL=2880, repeat=3, task=2/2, ttft=3848.14ms
+[INFO] Repeat TTFT stats: BS=2, PL=2880, repeat=3, valid=2/2, min/avg/max=3848.1/5785.6/7723.1ms, arrival_span=3875.0ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 7069.64 ms (3 samples)
+
+[25/88] Testing: BatchSize=3, PromptLen=64 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=3, PromptLen=64 (x3)
+[TTFT] BS=3, PL=64, repeat=1, task=1/3, ttft=83.13ms
+[TTFT] BS=3, PL=64, repeat=1, task=2/3, ttft=214.32ms
+[TTFT] BS=3, PL=64, repeat=1, task=3/3, ttft=214.13ms
+[INFO] Repeat TTFT stats: BS=3, PL=64, repeat=1, valid=3/3, min/avg/max=83.1/170.5/214.3ms, arrival_span=131.2ms
+[TTFT] BS=3, PL=64, repeat=2, task=1/3, ttft=223.40ms
+[TTFT] BS=3, PL=64, repeat=2, task=2/3, ttft=223.30ms
+[TTFT] BS=3, PL=64, repeat=2, task=3/3, ttft=223.11ms
+[INFO] Repeat TTFT stats: BS=3, PL=64, repeat=2, valid=3/3, min/avg/max=223.1/223.3/223.4ms, arrival_span=0.3ms
+[TTFT] BS=3, PL=64, repeat=3, task=1/3, ttft=80.98ms
+[TTFT] BS=3, PL=64, repeat=3, task=2/3, ttft=211.02ms
+[TTFT] BS=3, PL=64, repeat=3, task=3/3, ttft=210.82ms
+[INFO] Repeat TTFT stats: BS=3, PL=64, repeat=3, valid=3/3, min/avg/max=81.0/167.6/211.0ms, arrival_span=130.0ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 172.66 ms (3 samples)
+
+[26/88] Testing: BatchSize=3, PromptLen=320 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=3, PromptLen=320 (x3)
+[TTFT] BS=3, PL=320, repeat=1, task=1/3, ttft=412.62ms
+[TTFT] BS=3, PL=320, repeat=1, task=2/3, ttft=1266.67ms
+[TTFT] BS=3, PL=320, repeat=1, task=3/3, ttft=1266.51ms
+[INFO] Repeat TTFT stats: BS=3, PL=320, repeat=1, valid=3/3, min/avg/max=412.6/981.9/1266.7ms, arrival_span=854.1ms
+[TTFT] BS=3, PL=320, repeat=2, task=1/3, ttft=403.60ms
+[TTFT] BS=3, PL=320, repeat=2, task=2/3, ttft=1256.44ms
+[TTFT] BS=3, PL=320, repeat=2, task=3/3, ttft=1256.31ms
+[INFO] Repeat TTFT stats: BS=3, PL=320, repeat=2, valid=3/3, min/avg/max=403.6/972.1/1256.4ms, arrival_span=852.8ms
+[TTFT] BS=3, PL=320, repeat=3, task=1/3, ttft=400.69ms
+[TTFT] BS=3, PL=320, repeat=3, task=2/3, ttft=1258.90ms
+[TTFT] BS=3, PL=320, repeat=3, task=3/3, ttft=1258.96ms
+[INFO] Repeat TTFT stats: BS=3, PL=320, repeat=3, valid=3/3, min/avg/max=400.7/972.9/1259.0ms, arrival_span=858.3ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 833.16 ms (3 samples)
+
+[27/88] Testing: BatchSize=3, PromptLen=576 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=3, PromptLen=576 (x3)
+[TTFT] BS=3, PL=576, repeat=1, task=1/3, ttft=2337.69ms
+[TTFT] BS=3, PL=576, repeat=1, task=2/3, ttft=769.08ms
+[TTFT] BS=3, PL=576, repeat=1, task=3/3, ttft=2337.18ms
+[INFO] Repeat TTFT stats: BS=3, PL=576, repeat=1, valid=3/3, min/avg/max=769.1/1814.7/2337.7ms, arrival_span=1568.6ms
+[TTFT] BS=3, PL=576, repeat=2, task=1/3, ttft=766.31ms
+[TTFT] BS=3, PL=576, repeat=2, task=2/3, ttft=2337.42ms
+[TTFT] BS=3, PL=576, repeat=2, task=3/3, ttft=2337.41ms
+[INFO] Repeat TTFT stats: BS=3, PL=576, repeat=2, valid=3/3, min/avg/max=766.3/1813.7/2337.4ms, arrival_span=1571.1ms
+[TTFT] BS=3, PL=576, repeat=3, task=1/3, ttft=1558.12ms
+[TTFT] BS=3, PL=576, repeat=3, task=2/3, ttft=1557.68ms
+[TTFT] BS=3, PL=576, repeat=3, task=3/3, ttft=2351.34ms
+[INFO] Repeat TTFT stats: BS=3, PL=576, repeat=3, valid=3/3, min/avg/max=1557.7/1822.4/2351.3ms, arrival_span=793.7ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 1686.59 ms (3 samples)
+
+[28/88] Testing: BatchSize=3, PromptLen=832 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=3, PromptLen=832 (x3)
+[TTFT] BS=3, PL=832, repeat=1, task=1/3, ttft=3411.62ms
+[TTFT] BS=3, PL=832, repeat=1, task=2/3, ttft=1141.97ms
+[TTFT] BS=3, PL=832, repeat=1, task=3/3, ttft=3411.18ms
+[INFO] Repeat TTFT stats: BS=3, PL=832, repeat=1, valid=3/3, min/avg/max=1142.0/2654.9/3411.6ms, arrival_span=2269.6ms
+[TTFT] BS=3, PL=832, repeat=2, task=1/3, ttft=3409.49ms
+[TTFT] BS=3, PL=832, repeat=2, task=2/3, ttft=1126.83ms
+[TTFT] BS=3, PL=832, repeat=2, task=3/3, ttft=3409.18ms
+[INFO] Repeat TTFT stats: BS=3, PL=832, repeat=2, valid=3/3, min/avg/max=1126.8/2648.5/3409.5ms, arrival_span=2282.7ms
+[TTFT] BS=3, PL=832, repeat=3, task=1/3, ttft=1133.31ms
+[TTFT] BS=3, PL=832, repeat=3, task=2/3, ttft=3434.26ms
+[TTFT] BS=3, PL=832, repeat=3, task=3/3, ttft=3434.30ms
+[INFO] Repeat TTFT stats: BS=3, PL=832, repeat=3, valid=3/3, min/avg/max=1133.3/2667.3/3434.3ms, arrival_span=2301.0ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 2276.25 ms (3 samples)
+
+[29/88] Testing: BatchSize=3, PromptLen=1088 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=3, PromptLen=1088 (x3)
+[TTFT] BS=3, PL=1088, repeat=1, task=1/3, ttft=4385.19ms
+[TTFT] BS=3, PL=1088, repeat=1, task=2/3, ttft=4384.99ms
+[TTFT] BS=3, PL=1088, repeat=1, task=3/3, ttft=4384.89ms
+[INFO] Repeat TTFT stats: BS=3, PL=1088, repeat=1, valid=3/3, min/avg/max=4384.9/4385.0/4385.2ms, arrival_span=0.3ms
+[TTFT] BS=3, PL=1088, repeat=2, task=1/3, ttft=1471.95ms
+[TTFT] BS=3, PL=1088, repeat=2, task=2/3, ttft=4406.18ms
+[TTFT] BS=3, PL=1088, repeat=2, task=3/3, ttft=4405.99ms
+[INFO] Repeat TTFT stats: BS=3, PL=1088, repeat=2, valid=3/3, min/avg/max=1471.9/3428.0/4406.2ms, arrival_span=2934.2ms
+[TTFT] BS=3, PL=1088, repeat=3, task=1/3, ttft=1462.83ms
+[TTFT] BS=3, PL=1088, repeat=3, task=2/3, ttft=4423.36ms
+[TTFT] BS=3, PL=1088, repeat=3, task=3/3, ttft=4423.39ms
+[INFO] Repeat TTFT stats: BS=3, PL=1088, repeat=3, valid=3/3, min/avg/max=1462.8/3436.5/4423.4ms, arrival_span=2960.6ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 3422.40 ms (3 samples)
+
+[30/88] Testing: BatchSize=3, PromptLen=1344 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=3, PromptLen=1344 (x3)
+[TTFT] BS=3, PL=1344, repeat=1, task=1/3, ttft=5441.83ms
+[TTFT] BS=3, PL=1344, repeat=1, task=2/3, ttft=1796.21ms
+[TTFT] BS=3, PL=1344, repeat=1, task=3/3, ttft=5441.53ms
+[INFO] Repeat TTFT stats: BS=3, PL=1344, repeat=1, valid=3/3, min/avg/max=1796.2/4226.5/5441.8ms, arrival_span=3645.6ms
+[TTFT] BS=3, PL=1344, repeat=2, task=1/3, ttft=5425.33ms
+[TTFT] BS=3, PL=1344, repeat=2, task=2/3, ttft=5425.02ms
+[TTFT] BS=3, PL=1344, repeat=2, task=3/3, ttft=1796.85ms
+[INFO] Repeat TTFT stats: BS=3, PL=1344, repeat=2, valid=3/3, min/avg/max=1796.9/4215.7/5425.3ms, arrival_span=3628.5ms
+[TTFT] BS=3, PL=1344, repeat=3, task=1/3, ttft=5424.67ms
+[TTFT] BS=3, PL=1344, repeat=3, task=2/3, ttft=5424.53ms
+[TTFT] BS=3, PL=1344, repeat=3, task=3/3, ttft=5424.40ms
+[INFO] Repeat TTFT stats: BS=3, PL=1344, repeat=3, valid=3/3, min/avg/max=5424.4/5424.5/5424.7ms, arrival_span=0.3ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 4218.22 ms (3 samples)
+
+[31/88] Testing: BatchSize=3, PromptLen=1600 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=3, PromptLen=1600 (x3)
+[TTFT] BS=3, PL=1600, repeat=1, task=1/3, ttft=2149.76ms
+[TTFT] BS=3, PL=1600, repeat=1, task=2/3, ttft=6508.72ms
+[TTFT] BS=3, PL=1600, repeat=1, task=3/3, ttft=6508.66ms
+[INFO] Repeat TTFT stats: BS=3, PL=1600, repeat=1, valid=3/3, min/avg/max=2149.8/5055.7/6508.7ms, arrival_span=4359.0ms
+[TTFT] BS=3, PL=1600, repeat=2, task=1/3, ttft=2149.44ms
+[TTFT] BS=3, PL=1600, repeat=2, task=2/3, ttft=6490.98ms
+[TTFT] BS=3, PL=1600, repeat=2, task=3/3, ttft=6490.93ms
+[INFO] Repeat TTFT stats: BS=3, PL=1600, repeat=2, valid=3/3, min/avg/max=2149.4/5043.8/6491.0ms, arrival_span=4341.5ms
+[TTFT] BS=3, PL=1600, repeat=3, task=1/3, ttft=6467.91ms
+[TTFT] BS=3, PL=1600, repeat=3, task=2/3, ttft=6467.54ms
+[TTFT] BS=3, PL=1600, repeat=3, task=3/3, ttft=6467.51ms
+[INFO] Repeat TTFT stats: BS=3, PL=1600, repeat=3, valid=3/3, min/avg/max=6467.5/6467.7/6467.9ms, arrival_span=0.4ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 5039.05 ms (3 samples)
+
+[32/88] Testing: BatchSize=3, PromptLen=1856 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=3, PromptLen=1856 (x3)
+[TTFT] BS=3, PL=1856, repeat=1, task=1/3, ttft=2510.12ms
+[TTFT] BS=3, PL=1856, repeat=1, task=2/3, ttft=7594.37ms
+[TTFT] BS=3, PL=1856, repeat=1, task=3/3, ttft=7594.31ms
+[INFO] Repeat TTFT stats: BS=3, PL=1856, repeat=1, valid=3/3, min/avg/max=2510.1/5899.6/7594.4ms, arrival_span=5084.2ms
+[TTFT] BS=3, PL=1856, repeat=2, task=1/3, ttft=7560.21ms
+[TTFT] BS=3, PL=1856, repeat=2, task=2/3, ttft=2518.37ms
+[TTFT] BS=3, PL=1856, repeat=2, task=3/3, ttft=7559.86ms
+[INFO] Repeat TTFT stats: BS=3, PL=1856, repeat=2, valid=3/3, min/avg/max=2518.4/5879.5/7560.2ms, arrival_span=5041.8ms
+[TTFT] BS=3, PL=1856, repeat=3, task=1/3, ttft=2503.51ms
+[TTFT] BS=3, PL=1856, repeat=3, task=2/3, ttft=7584.47ms
+[TTFT] BS=3, PL=1856, repeat=3, task=3/3, ttft=7584.27ms
+[INFO] Repeat TTFT stats: BS=3, PL=1856, repeat=3, valid=3/3, min/avg/max=2503.5/5890.8/7584.5ms, arrival_span=5081.0ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 5045.18 ms (3 samples)
+
+[33/88] Testing: BatchSize=3, PromptLen=2112 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=3, PromptLen=2112 (x3)
+[TTFT] BS=3, PL=2112, repeat=1, task=1/3, ttft=2857.08ms
+[TTFT] BS=3, PL=2112, repeat=1, task=2/3, ttft=8639.79ms
+[TTFT] BS=3, PL=2112, repeat=1, task=3/3, ttft=8639.83ms
+[INFO] Repeat TTFT stats: BS=3, PL=2112, repeat=1, valid=3/3, min/avg/max=2857.1/6712.2/8639.8ms, arrival_span=5782.8ms
+[TTFT] BS=3, PL=2112, repeat=2, task=1/3, ttft=8621.68ms
+[TTFT] BS=3, PL=2112, repeat=2, task=2/3, ttft=2841.87ms
+[TTFT] BS=3, PL=2112, repeat=2, task=3/3, ttft=8621.41ms
+[INFO] Repeat TTFT stats: BS=3, PL=2112, repeat=2, valid=3/3, min/avg/max=2841.9/6695.0/8621.7ms, arrival_span=5779.8ms
+[TTFT] BS=3, PL=2112, repeat=3, task=1/3, ttft=5715.40ms
+[TTFT] BS=3, PL=2112, repeat=3, task=2/3, ttft=5715.32ms
+[TTFT] BS=3, PL=2112, repeat=3, task=3/3, ttft=8631.44ms
+[INFO] Repeat TTFT stats: BS=3, PL=2112, repeat=3, valid=3/3, min/avg/max=5715.3/6687.4/8631.4ms, arrival_span=2916.1ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 6217.87 ms (3 samples)
+
+[34/88] Testing: BatchSize=3, PromptLen=2368 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=3, PromptLen=2368 (x3)
+[TTFT] BS=3, PL=2368, repeat=1, task=1/3, ttft=9542.50ms
+[TTFT] BS=3, PL=2368, repeat=1, task=2/3, ttft=9542.24ms
+[TTFT] BS=3, PL=2368, repeat=1, task=3/3, ttft=9541.95ms
+[INFO] Repeat TTFT stats: BS=3, PL=2368, repeat=1, valid=3/3, min/avg/max=9541.9/9542.2/9542.5ms, arrival_span=0.6ms
+[TTFT] BS=3, PL=2368, repeat=2, task=1/3, ttft=3148.57ms
+[TTFT] BS=3, PL=2368, repeat=2, task=2/3, ttft=9550.51ms
+[TTFT] BS=3, PL=2368, repeat=2, task=3/3, ttft=9550.31ms
+[INFO] Repeat TTFT stats: BS=3, PL=2368, repeat=2, valid=3/3, min/avg/max=3148.6/7416.5/9550.5ms, arrival_span=6401.9ms
+[TTFT] BS=3, PL=2368, repeat=3, task=1/3, ttft=3144.03ms
+[TTFT] BS=3, PL=2368, repeat=3, task=2/3, ttft=9559.95ms
+[TTFT] BS=3, PL=2368, repeat=3, task=3/3, ttft=9559.76ms
+[INFO] Repeat TTFT stats: BS=3, PL=2368, repeat=3, valid=3/3, min/avg/max=3144.0/7421.2/9559.9ms, arrival_span=6415.9ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 7414.59 ms (3 samples)
+
+[35/88] Testing: BatchSize=3, PromptLen=2624 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=3, PromptLen=2624 (x3)
+[TTFT] BS=3, PL=2624, repeat=1, task=1/3, ttft=10670.91ms
+[TTFT] BS=3, PL=2624, repeat=1, task=2/3, ttft=10670.57ms
+[TTFT] BS=3, PL=2624, repeat=1, task=3/3, ttft=3515.67ms
+[INFO] Repeat TTFT stats: BS=3, PL=2624, repeat=1, valid=3/3, min/avg/max=3515.7/8285.7/10670.9ms, arrival_span=7155.2ms
+[TTFT] BS=3, PL=2624, repeat=2, task=1/3, ttft=3505.64ms
+[TTFT] BS=3, PL=2624, repeat=2, task=2/3, ttft=10654.44ms
+[TTFT] BS=3, PL=2624, repeat=2, task=3/3, ttft=10654.23ms
+[INFO] Repeat TTFT stats: BS=3, PL=2624, repeat=2, valid=3/3, min/avg/max=3505.6/8271.4/10654.4ms, arrival_span=7148.8ms
+[TTFT] BS=3, PL=2624, repeat=3, task=1/3, ttft=10670.47ms
+[TTFT] BS=3, PL=2624, repeat=3, task=2/3, ttft=3538.57ms
+[TTFT] BS=3, PL=2624, repeat=3, task=3/3, ttft=10670.16ms
+[INFO] Repeat TTFT stats: BS=3, PL=2624, repeat=3, valid=3/3, min/avg/max=3538.6/8293.1/10670.5ms, arrival_span=7131.9ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 7092.61 ms (3 samples)
+
+[36/88] Testing: BatchSize=3, PromptLen=2880 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=3, PromptLen=2880 (x3)
+[TTFT] BS=3, PL=2880, repeat=1, task=1/3, ttft=3850.57ms
+[TTFT] BS=3, PL=2880, repeat=1, task=2/3, ttft=11687.71ms
+[TTFT] BS=3, PL=2880, repeat=1, task=3/3, ttft=11687.67ms
+[INFO] Repeat TTFT stats: BS=3, PL=2880, repeat=1, valid=3/3, min/avg/max=3850.6/9075.3/11687.7ms, arrival_span=7837.1ms
+[TTFT] BS=3, PL=2880, repeat=2, task=1/3, ttft=11630.97ms
+[TTFT] BS=3, PL=2880, repeat=2, task=2/3, ttft=11630.90ms
+[TTFT] BS=3, PL=2880, repeat=2, task=3/3, ttft=11630.82ms
+[INFO] Repeat TTFT stats: BS=3, PL=2880, repeat=2, valid=3/3, min/avg/max=11630.8/11630.9/11631.0ms, arrival_span=0.1ms
+[TTFT] BS=3, PL=2880, repeat=3, task=1/3, ttft=11597.79ms
+[TTFT] BS=3, PL=2880, repeat=3, task=2/3, ttft=11597.50ms
+[TTFT] BS=3, PL=2880, repeat=3, task=3/3, ttft=11597.29ms
+[INFO] Repeat TTFT stats: BS=3, PL=2880, repeat=3, valid=3/3, min/avg/max=11597.3/11597.5/11597.8ms, arrival_span=0.5ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 10332.53 ms (3 samples)
+
+[37/88] Testing: BatchSize=4, PromptLen=64 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=4, PromptLen=64 (x3)
+[TTFT] BS=4, PL=64, repeat=1, task=1/4, ttft=87.16ms
+[TTFT] BS=4, PL=64, repeat=1, task=2/4, ttft=300.16ms
+[TTFT] BS=4, PL=64, repeat=1, task=3/4, ttft=299.72ms
+[TTFT] BS=4, PL=64, repeat=1, task=4/4, ttft=299.94ms
+[INFO] Repeat TTFT stats: BS=4, PL=64, repeat=1, valid=4/4, min/avg/max=87.2/246.7/300.2ms, arrival_span=213.0ms
+[TTFT] BS=4, PL=64, repeat=2, task=1/4, ttft=81.23ms
+[TTFT] BS=4, PL=64, repeat=2, task=2/4, ttft=295.28ms
+[TTFT] BS=4, PL=64, repeat=2, task=3/4, ttft=295.34ms
+[TTFT] BS=4, PL=64, repeat=2, task=4/4, ttft=295.29ms
+[INFO] Repeat TTFT stats: BS=4, PL=64, repeat=2, valid=4/4, min/avg/max=81.2/241.8/295.3ms, arrival_span=214.1ms
+[TTFT] BS=4, PL=64, repeat=3, task=1/4, ttft=80.32ms
+[TTFT] BS=4, PL=64, repeat=3, task=2/4, ttft=292.61ms
+[TTFT] BS=4, PL=64, repeat=3, task=3/4, ttft=292.68ms
+[TTFT] BS=4, PL=64, repeat=3, task=4/4, ttft=292.62ms
+[INFO] Repeat TTFT stats: BS=4, PL=64, repeat=3, valid=4/4, min/avg/max=80.3/239.6/292.7ms, arrival_span=212.4ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 189.48 ms (3 samples)
+
+[38/88] Testing: BatchSize=4, PromptLen=320 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=4, PromptLen=320 (x3)
+[TTFT] BS=4, PL=320, repeat=1, task=1/4, ttft=405.61ms
+[TTFT] BS=4, PL=320, repeat=1, task=2/4, ttft=1732.74ms
+[TTFT] BS=4, PL=320, repeat=1, task=3/4, ttft=1732.73ms
+[TTFT] BS=4, PL=320, repeat=1, task=4/4, ttft=1732.62ms
+[INFO] Repeat TTFT stats: BS=4, PL=320, repeat=1, valid=4/4, min/avg/max=405.6/1400.9/1732.7ms, arrival_span=1327.1ms
+[TTFT] BS=4, PL=320, repeat=2, task=1/4, ttft=863.89ms
+[TTFT] BS=4, PL=320, repeat=2, task=2/4, ttft=1731.57ms
+[TTFT] BS=4, PL=320, repeat=2, task=3/4, ttft=1731.52ms
+[TTFT] BS=4, PL=320, repeat=2, task=4/4, ttft=863.51ms
+[INFO] Repeat TTFT stats: BS=4, PL=320, repeat=2, valid=4/4, min/avg/max=863.5/1297.6/1731.6ms, arrival_span=868.1ms
+[TTFT] BS=4, PL=320, repeat=3, task=1/4, ttft=859.82ms
+[TTFT] BS=4, PL=320, repeat=3, task=2/4, ttft=859.67ms
+[TTFT] BS=4, PL=320, repeat=3, task=3/4, ttft=1716.87ms
+[TTFT] BS=4, PL=320, repeat=3, task=4/4, ttft=1716.86ms
+[INFO] Repeat TTFT stats: BS=4, PL=320, repeat=3, valid=4/4, min/avg/max=859.7/1288.3/1716.9ms, arrival_span=857.2ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 1218.33 ms (3 samples)
+
+[39/88] Testing: BatchSize=4, PromptLen=576 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=4, PromptLen=576 (x3)
+[TTFT] BS=4, PL=576, repeat=1, task=1/4, ttft=3148.90ms
+[TTFT] BS=4, PL=576, repeat=1, task=2/4, ttft=773.13ms
+[TTFT] BS=4, PL=576, repeat=1, task=3/4, ttft=3148.49ms
+[TTFT] BS=4, PL=576, repeat=1, task=4/4, ttft=3148.25ms
+[INFO] Repeat TTFT stats: BS=4, PL=576, repeat=1, valid=4/4, min/avg/max=773.1/2554.7/3148.9ms, arrival_span=2375.8ms
+[TTFT] BS=4, PL=576, repeat=2, task=1/4, ttft=771.16ms
+[TTFT] BS=4, PL=576, repeat=2, task=2/4, ttft=3123.79ms
+[TTFT] BS=4, PL=576, repeat=2, task=3/4, ttft=3123.79ms
+[TTFT] BS=4, PL=576, repeat=2, task=4/4, ttft=3123.71ms
+[INFO] Repeat TTFT stats: BS=4, PL=576, repeat=2, valid=4/4, min/avg/max=771.2/2535.6/3123.8ms, arrival_span=2352.6ms
+[TTFT] BS=4, PL=576, repeat=3, task=1/4, ttft=772.86ms
+[TTFT] BS=4, PL=576, repeat=3, task=2/4, ttft=3130.69ms
+[TTFT] BS=4, PL=576, repeat=3, task=3/4, ttft=3130.76ms
+[TTFT] BS=4, PL=576, repeat=3, task=4/4, ttft=3130.71ms
+[INFO] Repeat TTFT stats: BS=4, PL=576, repeat=3, valid=4/4, min/avg/max=772.9/2541.3/3130.8ms, arrival_span=2357.9ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 1953.43 ms (3 samples)
+
+[40/88] Testing: BatchSize=4, PromptLen=832 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=4, PromptLen=832 (x3)
+[TTFT] BS=4, PL=832, repeat=1, task=1/4, ttft=4516.68ms
+[TTFT] BS=4, PL=832, repeat=1, task=2/4, ttft=1134.33ms
+[TTFT] BS=4, PL=832, repeat=1, task=3/4, ttft=4516.46ms
+[TTFT] BS=4, PL=832, repeat=1, task=4/4, ttft=4516.38ms
+[INFO] Repeat TTFT stats: BS=4, PL=832, repeat=1, valid=4/4, min/avg/max=1134.3/3671.0/4516.7ms, arrival_span=3382.3ms
+[TTFT] BS=4, PL=832, repeat=2, task=1/4, ttft=2262.67ms
+[TTFT] BS=4, PL=832, repeat=2, task=2/4, ttft=4568.42ms
+[TTFT] BS=4, PL=832, repeat=2, task=3/4, ttft=4568.38ms
+[TTFT] BS=4, PL=832, repeat=2, task=4/4, ttft=2262.32ms
+[INFO] Repeat TTFT stats: BS=4, PL=832, repeat=2, valid=4/4, min/avg/max=2262.3/3415.4/4568.4ms, arrival_span=2306.1ms
+[TTFT] BS=4, PL=832, repeat=3, task=1/4, ttft=1129.31ms
+[TTFT] BS=4, PL=832, repeat=3, task=2/4, ttft=4519.10ms
+[TTFT] BS=4, PL=832, repeat=3, task=3/4, ttft=4518.88ms
+[TTFT] BS=4, PL=832, repeat=3, task=4/4, ttft=4518.89ms
+[INFO] Repeat TTFT stats: BS=4, PL=832, repeat=3, valid=4/4, min/avg/max=1129.3/3671.5/4519.1ms, arrival_span=3389.8ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 3021.69 ms (3 samples)
+
+[41/88] Testing: BatchSize=4, PromptLen=1088 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=4, PromptLen=1088 (x3)
+[TTFT] BS=4, PL=1088, repeat=1, task=1/4, ttft=5877.54ms
+[TTFT] BS=4, PL=1088, repeat=1, task=2/4, ttft=5877.18ms
+[TTFT] BS=4, PL=1088, repeat=1, task=3/4, ttft=5877.08ms
+[TTFT] BS=4, PL=1088, repeat=1, task=4/4, ttft=5876.97ms
+[INFO] Repeat TTFT stats: BS=4, PL=1088, repeat=1, valid=4/4, min/avg/max=5877.0/5877.2/5877.5ms, arrival_span=0.6ms
+[TTFT] BS=4, PL=1088, repeat=2, task=1/4, ttft=5895.74ms
+[TTFT] BS=4, PL=1088, repeat=2, task=2/4, ttft=5895.56ms
+[TTFT] BS=4, PL=1088, repeat=2, task=3/4, ttft=5895.45ms
+[TTFT] BS=4, PL=1088, repeat=2, task=4/4, ttft=1479.90ms
+[INFO] Repeat TTFT stats: BS=4, PL=1088, repeat=2, valid=4/4, min/avg/max=1479.9/4791.7/5895.7ms, arrival_span=4415.8ms
+[TTFT] BS=4, PL=1088, repeat=3, task=1/4, ttft=1472.91ms
+[TTFT] BS=4, PL=1088, repeat=3, task=2/4, ttft=5915.76ms
+[TTFT] BS=4, PL=1088, repeat=3, task=3/4, ttft=5915.82ms
+[TTFT] BS=4, PL=1088, repeat=3, task=4/4, ttft=5915.76ms
+[INFO] Repeat TTFT stats: BS=4, PL=1088, repeat=3, valid=4/4, min/avg/max=1472.9/4805.1/5915.8ms, arrival_span=4442.9ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 4419.81 ms (3 samples)
+
+[42/88] Testing: BatchSize=4, PromptLen=1344 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=4, PromptLen=1344 (x3)
+[TTFT] BS=4, PL=1344, repeat=1, task=1/4, ttft=1797.34ms
+[TTFT] BS=4, PL=1344, repeat=1, task=2/4, ttft=7240.42ms
+[TTFT] BS=4, PL=1344, repeat=1, task=3/4, ttft=7240.41ms
+[TTFT] BS=4, PL=1344, repeat=1, task=4/4, ttft=7240.34ms
+[INFO] Repeat TTFT stats: BS=4, PL=1344, repeat=1, valid=4/4, min/avg/max=1797.3/5879.6/7240.4ms, arrival_span=5443.1ms
+[TTFT] BS=4, PL=1344, repeat=2, task=1/4, ttft=7201.62ms
+[TTFT] BS=4, PL=1344, repeat=2, task=2/4, ttft=7201.37ms
+[TTFT] BS=4, PL=1344, repeat=2, task=3/4, ttft=1783.76ms
+[TTFT] BS=4, PL=1344, repeat=2, task=4/4, ttft=7201.03ms
+[INFO] Repeat TTFT stats: BS=4, PL=1344, repeat=2, valid=4/4, min/avg/max=1783.8/5846.9/7201.6ms, arrival_span=5417.9ms
+[TTFT] BS=4, PL=1344, repeat=3, task=1/4, ttft=1803.53ms
+[TTFT] BS=4, PL=1344, repeat=3, task=2/4, ttft=7227.51ms
+[TTFT] BS=4, PL=1344, repeat=3, task=3/4, ttft=7227.43ms
+[TTFT] BS=4, PL=1344, repeat=3, task=4/4, ttft=7227.38ms
+[INFO] Repeat TTFT stats: BS=4, PL=1344, repeat=3, valid=4/4, min/avg/max=1803.5/5871.5/7227.5ms, arrival_span=5424.0ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 4509.03 ms (3 samples)
+
+[43/88] Testing: BatchSize=4, PromptLen=1600 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=4, PromptLen=1600 (x3)
+[TTFT] BS=4, PL=1600, repeat=1, task=1/4, ttft=8575.60ms
+[TTFT] BS=4, PL=1600, repeat=1, task=2/4, ttft=2130.68ms
+[TTFT] BS=4, PL=1600, repeat=1, task=3/4, ttft=8575.25ms
+[TTFT] BS=4, PL=1600, repeat=1, task=4/4, ttft=8575.08ms
+[INFO] Repeat TTFT stats: BS=4, PL=1600, repeat=1, valid=4/4, min/avg/max=2130.7/6964.2/8575.6ms, arrival_span=6444.9ms
+[TTFT] BS=4, PL=1600, repeat=2, task=1/4, ttft=8609.81ms
+[TTFT] BS=4, PL=1600, repeat=2, task=2/4, ttft=2142.05ms
+[TTFT] BS=4, PL=1600, repeat=2, task=3/4, ttft=8609.59ms
+[TTFT] BS=4, PL=1600, repeat=2, task=4/4, ttft=8609.53ms
+[INFO] Repeat TTFT stats: BS=4, PL=1600, repeat=2, valid=4/4, min/avg/max=2142.0/6992.7/8609.8ms, arrival_span=6467.8ms
+[TTFT] BS=4, PL=1600, repeat=3, task=1/4, ttft=2132.57ms
+[TTFT] BS=4, PL=1600, repeat=3, task=2/4, ttft=8607.30ms
+[TTFT] BS=4, PL=1600, repeat=3, task=3/4, ttft=8607.20ms
+[TTFT] BS=4, PL=1600, repeat=3, task=4/4, ttft=8607.01ms
+[INFO] Repeat TTFT stats: BS=4, PL=1600, repeat=3, valid=4/4, min/avg/max=2132.6/6988.5/8607.3ms, arrival_span=6474.7ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 5366.33 ms (3 samples)
+
+[44/88] Testing: BatchSize=4, PromptLen=1856 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=4, PromptLen=1856 (x3)
+[TTFT] BS=4, PL=1856, repeat=1, task=1/4, ttft=9993.80ms
+[TTFT] BS=4, PL=1856, repeat=1, task=2/4, ttft=2492.23ms
+[TTFT] BS=4, PL=1856, repeat=1, task=3/4, ttft=9993.44ms
+[TTFT] BS=4, PL=1856, repeat=1, task=4/4, ttft=9993.19ms
+[INFO] Repeat TTFT stats: BS=4, PL=1856, repeat=1, valid=4/4, min/avg/max=2492.2/8118.2/9993.8ms, arrival_span=7501.6ms
+[TTFT] BS=4, PL=1856, repeat=2, task=1/4, ttft=9979.68ms
+[TTFT] BS=4, PL=1856, repeat=2, task=2/4, ttft=9979.54ms
+[TTFT] BS=4, PL=1856, repeat=2, task=3/4, ttft=9979.44ms
+[TTFT] BS=4, PL=1856, repeat=2, task=4/4, ttft=9979.35ms
+[INFO] Repeat TTFT stats: BS=4, PL=1856, repeat=2, valid=4/4, min/avg/max=9979.4/9979.5/9979.7ms, arrival_span=0.3ms
+[TTFT] BS=4, PL=1856, repeat=3, task=1/4, ttft=2485.27ms
+[TTFT] BS=4, PL=1856, repeat=3, task=2/4, ttft=9994.04ms
+[TTFT] BS=4, PL=1856, repeat=3, task=3/4, ttft=9994.05ms
+[TTFT] BS=4, PL=1856, repeat=3, task=4/4, ttft=9993.97ms
+[INFO] Repeat TTFT stats: BS=4, PL=1856, repeat=3, valid=4/4, min/avg/max=2485.3/8116.8/9994.0ms, arrival_span=7508.8ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 7487.40 ms (3 samples)
+
+[45/88] Testing: BatchSize=4, PromptLen=2112 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=4, PromptLen=2112 (x3)
+[TTFT] BS=4, PL=2112, repeat=1, task=1/4, ttft=11392.91ms
+[TTFT] BS=4, PL=2112, repeat=1, task=2/4, ttft=2820.22ms
+[TTFT] BS=4, PL=2112, repeat=1, task=3/4, ttft=11392.26ms
+[TTFT] BS=4, PL=2112, repeat=1, task=4/4, ttft=11391.97ms
+[INFO] Repeat TTFT stats: BS=4, PL=2112, repeat=1, valid=4/4, min/avg/max=2820.2/9249.3/11392.9ms, arrival_span=8572.7ms
+[TTFT] BS=4, PL=2112, repeat=2, task=1/4, ttft=11328.44ms
+[TTFT] BS=4, PL=2112, repeat=2, task=2/4, ttft=11328.34ms
+[TTFT] BS=4, PL=2112, repeat=2, task=3/4, ttft=11328.25ms
+[TTFT] BS=4, PL=2112, repeat=2, task=4/4, ttft=11328.18ms
+[INFO] Repeat TTFT stats: BS=4, PL=2112, repeat=2, valid=4/4, min/avg/max=11328.2/11328.3/11328.4ms, arrival_span=0.3ms
+[TTFT] BS=4, PL=2112, repeat=3, task=1/4, ttft=11381.79ms
+[TTFT] BS=4, PL=2112, repeat=3, task=2/4, ttft=11381.63ms
+[TTFT] BS=4, PL=2112, repeat=3, task=3/4, ttft=11381.53ms
+[TTFT] BS=4, PL=2112, repeat=3, task=4/4, ttft=2818.86ms
+[INFO] Repeat TTFT stats: BS=4, PL=2112, repeat=3, valid=4/4, min/avg/max=2818.9/9241.0/11381.8ms, arrival_span=8562.9ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 8511.73 ms (3 samples)
+
+[46/88] Testing: BatchSize=4, PromptLen=2368 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=4, PromptLen=2368 (x3)
+[TTFT] BS=4, PL=2368, repeat=1, task=1/4, ttft=12779.11ms
+[TTFT] BS=4, PL=2368, repeat=1, task=2/4, ttft=3144.43ms
+[TTFT] BS=4, PL=2368, repeat=1, task=3/4, ttft=12778.46ms
+[TTFT] BS=4, PL=2368, repeat=1, task=4/4, ttft=12778.63ms
+[INFO] Repeat TTFT stats: BS=4, PL=2368, repeat=1, valid=4/4, min/avg/max=3144.4/10370.2/12779.1ms, arrival_span=9634.7ms
+[TTFT] BS=4, PL=2368, repeat=2, task=1/4, ttft=12834.54ms
+[TTFT] BS=4, PL=2368, repeat=2, task=2/4, ttft=12834.61ms
+[TTFT] BS=4, PL=2368, repeat=2, task=3/4, ttft=3161.29ms
+[TTFT] BS=4, PL=2368, repeat=2, task=4/4, ttft=12834.42ms
+[INFO] Repeat TTFT stats: BS=4, PL=2368, repeat=2, valid=4/4, min/avg/max=3161.3/10416.2/12834.6ms, arrival_span=9673.3ms
+[TTFT] BS=4, PL=2368, repeat=3, task=1/4, ttft=12883.02ms
+[TTFT] BS=4, PL=2368, repeat=3, task=2/4, ttft=6375.89ms
+[TTFT] BS=4, PL=2368, repeat=3, task=3/4, ttft=6375.86ms
+[TTFT] BS=4, PL=2368, repeat=3, task=4/4, ttft=12882.46ms
+[INFO] Repeat TTFT stats: BS=4, PL=2368, repeat=3, valid=4/4, min/avg/max=6375.9/9629.3/12883.0ms, arrival_span=6507.2ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 8529.72 ms (3 samples)
+
+[47/88] Testing: BatchSize=4, PromptLen=2624 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=4, PromptLen=2624 (x3)
+[TTFT] BS=4, PL=2624, repeat=1, task=1/4, ttft=14350.86ms
+[TTFT] BS=4, PL=2624, repeat=1, task=2/4, ttft=7099.73ms
+[TTFT] BS=4, PL=2624, repeat=1, task=3/4, ttft=7099.67ms
+[TTFT] BS=4, PL=2624, repeat=1, task=4/4, ttft=14350.16ms
+[INFO] Repeat TTFT stats: BS=4, PL=2624, repeat=1, valid=4/4, min/avg/max=7099.7/10725.1/14350.9ms, arrival_span=7251.2ms
+[TTFT] BS=4, PL=2624, repeat=2, task=1/4, ttft=10646.54ms
+[TTFT] BS=4, PL=2624, repeat=2, task=2/4, ttft=10646.42ms
+[TTFT] BS=4, PL=2624, repeat=2, task=3/4, ttft=10646.27ms
+[TTFT] BS=4, PL=2624, repeat=2, task=4/4, ttft=14390.43ms
+[INFO] Repeat TTFT stats: BS=4, PL=2624, repeat=2, valid=4/4, min/avg/max=10646.3/11582.4/14390.4ms, arrival_span=3744.2ms
+[TTFT] BS=4, PL=2624, repeat=3, task=1/4, ttft=14234.49ms
+[TTFT] BS=4, PL=2624, repeat=3, task=2/4, ttft=14234.35ms
+[TTFT] BS=4, PL=2624, repeat=3, task=3/4, ttft=14234.24ms
+[TTFT] BS=4, PL=2624, repeat=3, task=4/4, ttft=3539.00ms
+[INFO] Repeat TTFT stats: BS=4, PL=2624, repeat=3, valid=4/4, min/avg/max=3539.0/11560.5/14234.5ms, arrival_span=10695.5ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 10710.12 ms (3 samples)
+
+[48/88] Testing: BatchSize=4, PromptLen=2880 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=4, PromptLen=2880 (x3)
+[TTFT] BS=4, PL=2880, repeat=1, task=1/4, ttft=3844.74ms
+[TTFT] BS=4, PL=2880, repeat=1, task=2/4, ttft=15564.42ms
+[TTFT] BS=4, PL=2880, repeat=1, task=3/4, ttft=15564.26ms
+[TTFT] BS=4, PL=2880, repeat=1, task=4/4, ttft=15564.05ms
+[INFO] Repeat TTFT stats: BS=4, PL=2880, repeat=1, valid=4/4, min/avg/max=3844.7/12634.4/15564.4ms, arrival_span=11719.7ms
+[TTFT] BS=4, PL=2880, repeat=2, task=1/4, ttft=15454.15ms
+[TTFT] BS=4, PL=2880, repeat=2, task=2/4, ttft=15453.94ms
+[TTFT] BS=4, PL=2880, repeat=2, task=3/4, ttft=15453.82ms
+[TTFT] BS=4, PL=2880, repeat=2, task=4/4, ttft=15453.70ms
+[INFO] Repeat TTFT stats: BS=4, PL=2880, repeat=2, valid=4/4, min/avg/max=15453.7/15453.9/15454.1ms, arrival_span=0.4ms
+[TTFT] BS=4, PL=2880, repeat=3, task=1/4, ttft=15533.92ms
+[TTFT] BS=4, PL=2880, repeat=3, task=2/4, ttft=15533.77ms
+[TTFT] BS=4, PL=2880, repeat=3, task=3/4, ttft=3845.47ms
+[TTFT] BS=4, PL=2880, repeat=3, task=4/4, ttft=15533.61ms
+[INFO] Repeat TTFT stats: BS=4, PL=2880, repeat=3, valid=4/4, min/avg/max=3845.5/12611.7/15533.9ms, arrival_span=11688.5ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 11616.07 ms (3 samples)
+
+[49/88] Testing: BatchSize=5, PromptLen=64 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=5, PromptLen=64 (x3)
+[TTFT] BS=5, PL=64, repeat=1, task=1/5, ttft=425.69ms
+[TTFT] BS=5, PL=64, repeat=1, task=2/5, ttft=425.47ms
+[TTFT] BS=5, PL=64, repeat=1, task=3/5, ttft=425.14ms
+[TTFT] BS=5, PL=64, repeat=1, task=4/5, ttft=85.64ms
+[TTFT] BS=5, PL=64, repeat=1, task=5/5, ttft=425.22ms
+[INFO] Repeat TTFT stats: BS=5, PL=64, repeat=1, valid=5/5, min/avg/max=85.6/357.4/425.7ms, arrival_span=340.0ms
+[TTFT] BS=5, PL=64, repeat=2, task=1/5, ttft=82.31ms
+[TTFT] BS=5, PL=64, repeat=2, task=2/5, ttft=417.38ms
+[TTFT] BS=5, PL=64, repeat=2, task=3/5, ttft=417.46ms
+[TTFT] BS=5, PL=64, repeat=2, task=4/5, ttft=417.43ms
+[TTFT] BS=5, PL=64, repeat=2, task=5/5, ttft=417.39ms
+[INFO] Repeat TTFT stats: BS=5, PL=64, repeat=2, valid=5/5, min/avg/max=82.3/350.4/417.5ms, arrival_span=335.2ms
+[TTFT] BS=5, PL=64, repeat=3, task=1/5, ttft=81.86ms
+[TTFT] BS=5, PL=64, repeat=3, task=2/5, ttft=416.32ms
+[TTFT] BS=5, PL=64, repeat=3, task=3/5, ttft=416.24ms
+[TTFT] BS=5, PL=64, repeat=3, task=4/5, ttft=416.12ms
+[TTFT] BS=5, PL=64, repeat=3, task=5/5, ttft=416.03ms
+[INFO] Repeat TTFT stats: BS=5, PL=64, repeat=3, valid=5/5, min/avg/max=81.9/349.3/416.3ms, arrival_span=334.5ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 251.55 ms (3 samples)
+
+[50/88] Testing: BatchSize=5, PromptLen=320 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=5, PromptLen=320 (x3)
+[TTFT] BS=5, PL=320, repeat=1, task=1/5, ttft=2202.37ms
+[TTFT] BS=5, PL=320, repeat=1, task=2/5, ttft=865.36ms
+[TTFT] BS=5, PL=320, repeat=1, task=3/5, ttft=2202.05ms
+[TTFT] BS=5, PL=320, repeat=1, task=4/5, ttft=865.23ms
+[TTFT] BS=5, PL=320, repeat=1, task=5/5, ttft=2201.87ms
+[INFO] Repeat TTFT stats: BS=5, PL=320, repeat=1, valid=5/5, min/avg/max=865.2/1667.4/2202.4ms, arrival_span=1337.1ms
+[TTFT] BS=5, PL=320, repeat=2, task=1/5, ttft=2149.40ms
+[TTFT] BS=5, PL=320, repeat=2, task=2/5, ttft=2149.18ms
+[TTFT] BS=5, PL=320, repeat=2, task=3/5, ttft=2148.94ms
+[TTFT] BS=5, PL=320, repeat=2, task=4/5, ttft=400.70ms
+[TTFT] BS=5, PL=320, repeat=2, task=5/5, ttft=2148.89ms
+[INFO] Repeat TTFT stats: BS=5, PL=320, repeat=2, valid=5/5, min/avg/max=400.7/1799.4/2149.4ms, arrival_span=1748.7ms
+[TTFT] BS=5, PL=320, repeat=3, task=1/5, ttft=397.94ms
+[TTFT] BS=5, PL=320, repeat=3, task=2/5, ttft=2146.23ms
+[TTFT] BS=5, PL=320, repeat=3, task=3/5, ttft=2146.23ms
+[TTFT] BS=5, PL=320, repeat=3, task=4/5, ttft=2146.16ms
+[TTFT] BS=5, PL=320, repeat=3, task=5/5, ttft=2146.09ms
+[INFO] Repeat TTFT stats: BS=5, PL=320, repeat=3, valid=5/5, min/avg/max=397.9/1796.5/2146.2ms, arrival_span=1748.3ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 1360.31 ms (3 samples)
+
+[51/88] Testing: BatchSize=5, PromptLen=576 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=5, PromptLen=576 (x3)
+[TTFT] BS=5, PL=576, repeat=1, task=1/5, ttft=3880.40ms
+[TTFT] BS=5, PL=576, repeat=1, task=2/5, ttft=3879.99ms
+[TTFT] BS=5, PL=576, repeat=1, task=3/5, ttft=3879.89ms
+[TTFT] BS=5, PL=576, repeat=1, task=4/5, ttft=772.31ms
+[TTFT] BS=5, PL=576, repeat=1, task=5/5, ttft=3879.70ms
+[INFO] Repeat TTFT stats: BS=5, PL=576, repeat=1, valid=5/5, min/avg/max=772.3/3258.5/3880.4ms, arrival_span=3108.1ms
+[TTFT] BS=5, PL=576, repeat=2, task=1/5, ttft=1560.49ms
+[TTFT] BS=5, PL=576, repeat=2, task=2/5, ttft=3933.80ms
+[TTFT] BS=5, PL=576, repeat=2, task=3/5, ttft=3933.80ms
+[TTFT] BS=5, PL=576, repeat=2, task=4/5, ttft=3933.75ms
+[TTFT] BS=5, PL=576, repeat=2, task=5/5, ttft=1560.04ms
+[INFO] Repeat TTFT stats: BS=5, PL=576, repeat=2, valid=5/5, min/avg/max=1560.0/2984.4/3933.8ms, arrival_span=2373.8ms
+[TTFT] BS=5, PL=576, repeat=3, task=1/5, ttft=3915.32ms
+[TTFT] BS=5, PL=576, repeat=3, task=2/5, ttft=3915.09ms
+[TTFT] BS=5, PL=576, repeat=3, task=3/5, ttft=3915.00ms
+[TTFT] BS=5, PL=576, repeat=3, task=4/5, ttft=3914.92ms
+[TTFT] BS=5, PL=576, repeat=3, task=5/5, ttft=3914.53ms
+[INFO] Repeat TTFT stats: BS=5, PL=576, repeat=3, valid=5/5, min/avg/max=3914.5/3915.0/3915.3ms, arrival_span=0.8ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 2996.07 ms (3 samples)
+
+[52/88] Testing: BatchSize=5, PromptLen=832 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=5, PromptLen=832 (x3)
+[TTFT] BS=5, PL=832, repeat=1, task=1/5, ttft=3373.75ms
+[TTFT] BS=5, PL=832, repeat=1, task=2/5, ttft=3373.53ms
+[TTFT] BS=5, PL=832, repeat=1, task=3/5, ttft=3373.33ms
+[TTFT] BS=5, PL=832, repeat=1, task=4/5, ttft=5741.85ms
+[TTFT] BS=5, PL=832, repeat=1, task=5/5, ttft=5741.87ms
+[INFO] Repeat TTFT stats: BS=5, PL=832, repeat=1, valid=5/5, min/avg/max=3373.3/4320.9/5741.9ms, arrival_span=2368.5ms
+[TTFT] BS=5, PL=832, repeat=2, task=1/5, ttft=5658.50ms
+[TTFT] BS=5, PL=832, repeat=2, task=2/5, ttft=5658.38ms
+[TTFT] BS=5, PL=832, repeat=2, task=3/5, ttft=5658.31ms
+[TTFT] BS=5, PL=832, repeat=2, task=4/5, ttft=1118.46ms
+[TTFT] BS=5, PL=832, repeat=2, task=5/5, ttft=5658.15ms
+[INFO] Repeat TTFT stats: BS=5, PL=832, repeat=2, valid=5/5, min/avg/max=1118.5/4750.4/5658.5ms, arrival_span=4540.0ms
+[TTFT] BS=5, PL=832, repeat=3, task=1/5, ttft=5671.33ms
+[TTFT] BS=5, PL=832, repeat=3, task=2/5, ttft=5671.20ms
+[TTFT] BS=5, PL=832, repeat=3, task=3/5, ttft=1131.57ms
+[TTFT] BS=5, PL=832, repeat=3, task=4/5, ttft=5671.07ms
+[TTFT] BS=5, PL=832, repeat=3, task=5/5, ttft=5670.99ms
+[INFO] Repeat TTFT stats: BS=5, PL=832, repeat=3, valid=5/5, min/avg/max=1131.6/4763.2/5671.3ms, arrival_span=4539.8ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 3782.51 ms (3 samples)
+
+[53/88] Testing: BatchSize=5, PromptLen=1088 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=5, PromptLen=1088 (x3)
+[TTFT] BS=5, PL=1088, repeat=1, task=1/5, ttft=7401.16ms
+[TTFT] BS=5, PL=1088, repeat=1, task=2/5, ttft=1476.11ms
+[TTFT] BS=5, PL=1088, repeat=1, task=3/5, ttft=7400.88ms
+[TTFT] BS=5, PL=1088, repeat=1, task=4/5, ttft=7400.63ms
+[TTFT] BS=5, PL=1088, repeat=1, task=5/5, ttft=7400.71ms
+[INFO] Repeat TTFT stats: BS=5, PL=1088, repeat=1, valid=5/5, min/avg/max=1476.1/6215.9/7401.2ms, arrival_span=5925.1ms
+[TTFT] BS=5, PL=1088, repeat=2, task=1/5, ttft=7387.14ms
+[TTFT] BS=5, PL=1088, repeat=2, task=2/5, ttft=2921.10ms
+[TTFT] BS=5, PL=1088, repeat=2, task=3/5, ttft=7386.77ms
+[TTFT] BS=5, PL=1088, repeat=2, task=4/5, ttft=2920.95ms
+[TTFT] BS=5, PL=1088, repeat=2, task=5/5, ttft=7386.50ms
+[INFO] Repeat TTFT stats: BS=5, PL=1088, repeat=2, valid=5/5, min/avg/max=2921.0/5600.5/7387.1ms, arrival_span=4466.2ms
+[TTFT] BS=5, PL=1088, repeat=3, task=1/5, ttft=7500.05ms
+[TTFT] BS=5, PL=1088, repeat=3, task=2/5, ttft=5862.72ms
+[TTFT] BS=5, PL=1088, repeat=3, task=3/5, ttft=5862.30ms
+[TTFT] BS=5, PL=1088, repeat=3, task=4/5, ttft=5862.37ms
+[TTFT] BS=5, PL=1088, repeat=3, task=5/5, ttft=5862.29ms
+[INFO] Repeat TTFT stats: BS=5, PL=1088, repeat=3, valid=5/5, min/avg/max=5862.3/6189.9/7500.0ms, arrival_span=1637.8ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 5424.62 ms (3 samples)
+
+[54/88] Testing: BatchSize=5, PromptLen=1344 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=5, PromptLen=1344 (x3)
+[TTFT] BS=5, PL=1344, repeat=1, task=1/5, ttft=9058.93ms
+[TTFT] BS=5, PL=1344, repeat=1, task=2/5, ttft=9058.55ms
+[TTFT] BS=5, PL=1344, repeat=1, task=3/5, ttft=1791.09ms
+[TTFT] BS=5, PL=1344, repeat=1, task=4/5, ttft=9058.34ms
+[TTFT] BS=5, PL=1344, repeat=1, task=5/5, ttft=9058.00ms
+[INFO] Repeat TTFT stats: BS=5, PL=1344, repeat=1, valid=5/5, min/avg/max=1791.1/7605.0/9058.9ms, arrival_span=7267.8ms
+[TTFT] BS=5, PL=1344, repeat=2, task=1/5, ttft=9038.32ms
+[TTFT] BS=5, PL=1344, repeat=2, task=2/5, ttft=9038.18ms
+[TTFT] BS=5, PL=1344, repeat=2, task=3/5, ttft=1791.62ms
+[TTFT] BS=5, PL=1344, repeat=2, task=4/5, ttft=9038.02ms
+[TTFT] BS=5, PL=1344, repeat=2, task=5/5, ttft=9037.92ms
+[INFO] Repeat TTFT stats: BS=5, PL=1344, repeat=2, valid=5/5, min/avg/max=1791.6/7588.8/9038.3ms, arrival_span=7246.7ms
+[TTFT] BS=5, PL=1344, repeat=3, task=1/5, ttft=9068.21ms
+[TTFT] BS=5, PL=1344, repeat=3, task=2/5, ttft=9067.91ms
+[TTFT] BS=5, PL=1344, repeat=3, task=3/5, ttft=9067.75ms
+[TTFT] BS=5, PL=1344, repeat=3, task=4/5, ttft=9067.67ms
+[TTFT] BS=5, PL=1344, repeat=3, task=5/5, ttft=9067.44ms
+[INFO] Repeat TTFT stats: BS=5, PL=1344, repeat=3, valid=5/5, min/avg/max=9067.4/9067.8/9068.2ms, arrival_span=0.8ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 6635.93 ms (3 samples)
+
+[55/88] Testing: BatchSize=5, PromptLen=1600 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=5, PromptLen=1600 (x3)
+[TTFT] BS=5, PL=1600, repeat=1, task=1/5, ttft=10751.96ms
+[TTFT] BS=5, PL=1600, repeat=1, task=2/5, ttft=10751.69ms
+[TTFT] BS=5, PL=1600, repeat=1, task=3/5, ttft=10751.57ms
+[TTFT] BS=5, PL=1600, repeat=1, task=4/5, ttft=10751.48ms
+[TTFT] BS=5, PL=1600, repeat=1, task=5/5, ttft=10751.21ms
+[INFO] Repeat TTFT stats: BS=5, PL=1600, repeat=1, valid=5/5, min/avg/max=10751.2/10751.6/10752.0ms, arrival_span=0.7ms
+[TTFT] BS=5, PL=1600, repeat=2, task=1/5, ttft=10744.34ms
+[TTFT] BS=5, PL=1600, repeat=2, task=2/5, ttft=10744.26ms
+[TTFT] BS=5, PL=1600, repeat=2, task=3/5, ttft=10744.17ms
+[TTFT] BS=5, PL=1600, repeat=2, task=4/5, ttft=10744.09ms
+[TTFT] BS=5, PL=1600, repeat=2, task=5/5, ttft=10744.02ms
+[INFO] Repeat TTFT stats: BS=5, PL=1600, repeat=2, valid=5/5, min/avg/max=10744.0/10744.2/10744.3ms, arrival_span=0.3ms
+[TTFT] BS=5, PL=1600, repeat=3, task=1/5, ttft=10973.16ms
+[TTFT] BS=5, PL=1600, repeat=3, task=2/5, ttft=8586.90ms
+[TTFT] BS=5, PL=1600, repeat=3, task=3/5, ttft=8586.80ms
+[TTFT] BS=5, PL=1600, repeat=3, task=4/5, ttft=8586.57ms
+[TTFT] BS=5, PL=1600, repeat=3, task=5/5, ttft=8586.59ms
+[INFO] Repeat TTFT stats: BS=5, PL=1600, repeat=3, valid=5/5, min/avg/max=8586.6/9064.0/10973.2ms, arrival_span=2386.6ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 10425.21 ms (3 samples)
+
+[56/88] Testing: BatchSize=5, PromptLen=1856 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=5, PromptLen=1856 (x3)
+[TTFT] BS=5, PL=1856, repeat=1, task=1/5, ttft=12677.86ms
+[TTFT] BS=5, PL=1856, repeat=1, task=2/5, ttft=7472.49ms
+[TTFT] BS=5, PL=1856, repeat=1, task=3/5, ttft=7472.37ms
+[TTFT] BS=5, PL=1856, repeat=1, task=4/5, ttft=7472.17ms
+[TTFT] BS=5, PL=1856, repeat=1, task=5/5, ttft=12677.13ms
+[INFO] Repeat TTFT stats: BS=5, PL=1856, repeat=1, valid=5/5, min/avg/max=7472.2/9554.4/12677.9ms, arrival_span=5205.7ms
+[TTFT] BS=5, PL=1856, repeat=2, task=1/5, ttft=12558.33ms
+[TTFT] BS=5, PL=1856, repeat=2, task=2/5, ttft=2485.52ms
+[TTFT] BS=5, PL=1856, repeat=2, task=3/5, ttft=12558.19ms
+[TTFT] BS=5, PL=1856, repeat=2, task=4/5, ttft=12557.97ms
+[TTFT] BS=5, PL=1856, repeat=2, task=5/5, ttft=12557.88ms
+[INFO] Repeat TTFT stats: BS=5, PL=1856, repeat=2, valid=5/5, min/avg/max=2485.5/10543.6/12558.3ms, arrival_span=10072.8ms
+[TTFT] BS=5, PL=1856, repeat=3, task=1/5, ttft=12552.78ms
+[TTFT] BS=5, PL=1856, repeat=3, task=2/5, ttft=12552.65ms
+[TTFT] BS=5, PL=1856, repeat=3, task=3/5, ttft=2483.32ms
+[TTFT] BS=5, PL=1856, repeat=3, task=4/5, ttft=12552.48ms
+[TTFT] BS=5, PL=1856, repeat=3, task=5/5, ttft=12552.33ms
+[INFO] Repeat TTFT stats: BS=5, PL=1856, repeat=3, valid=5/5, min/avg/max=2483.3/10538.7/12552.8ms, arrival_span=10069.5ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 8371.66 ms (3 samples)
+
+[57/88] Testing: BatchSize=5, PromptLen=2112 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=5, PromptLen=2112 (x3)
+[TTFT] BS=5, PL=2112, repeat=1, task=1/5, ttft=14249.88ms
+[TTFT] BS=5, PL=2112, repeat=1, task=2/5, ttft=2820.57ms
+[TTFT] BS=5, PL=2112, repeat=1, task=3/5, ttft=14249.54ms
+[TTFT] BS=5, PL=2112, repeat=1, task=4/5, ttft=14249.16ms
+[TTFT] BS=5, PL=2112, repeat=1, task=5/5, ttft=14249.32ms
+[INFO] Repeat TTFT stats: BS=5, PL=2112, repeat=1, valid=5/5, min/avg/max=2820.6/11963.7/14249.9ms, arrival_span=11429.3ms
+[TTFT] BS=5, PL=2112, repeat=2, task=1/5, ttft=14250.29ms
+[TTFT] BS=5, PL=2112, repeat=2, task=2/5, ttft=2814.97ms
+[TTFT] BS=5, PL=2112, repeat=2, task=3/5, ttft=14250.02ms
+[TTFT] BS=5, PL=2112, repeat=2, task=4/5, ttft=14249.93ms
+[TTFT] BS=5, PL=2112, repeat=2, task=5/5, ttft=14249.79ms
+[INFO] Repeat TTFT stats: BS=5, PL=2112, repeat=2, valid=5/5, min/avg/max=2815.0/11963.0/14250.3ms, arrival_span=11435.3ms
+[TTFT] BS=5, PL=2112, repeat=3, task=1/5, ttft=14236.73ms
+[TTFT] BS=5, PL=2112, repeat=3, task=2/5, ttft=14236.71ms
+[TTFT] BS=5, PL=2112, repeat=3, task=3/5, ttft=2814.58ms
+[TTFT] BS=5, PL=2112, repeat=3, task=4/5, ttft=14236.56ms
+[TTFT] BS=5, PL=2112, repeat=3, task=5/5, ttft=14236.45ms
+[INFO] Repeat TTFT stats: BS=5, PL=2112, repeat=3, valid=5/5, min/avg/max=2814.6/11952.2/14236.7ms, arrival_span=11422.2ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 8531.17 ms (3 samples)
+
+[58/88] Testing: BatchSize=5, PromptLen=2368 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=5, PromptLen=2368 (x3)
+[TTFT] BS=5, PL=2368, repeat=1, task=1/5, ttft=16017.94ms
+[TTFT] BS=5, PL=2368, repeat=1, task=2/5, ttft=16017.58ms
+[TTFT] BS=5, PL=2368, repeat=1, task=3/5, ttft=16017.39ms
+[TTFT] BS=5, PL=2368, repeat=1, task=4/5, ttft=16017.04ms
+[TTFT] BS=5, PL=2368, repeat=1, task=5/5, ttft=3148.90ms
+[INFO] Repeat TTFT stats: BS=5, PL=2368, repeat=1, valid=5/5, min/avg/max=3148.9/13443.8/16017.9ms, arrival_span=12869.0ms
+[TTFT] BS=5, PL=2368, repeat=2, task=1/5, ttft=16110.17ms
+[TTFT] BS=5, PL=2368, repeat=2, task=2/5, ttft=3175.55ms
+[TTFT] BS=5, PL=2368, repeat=2, task=3/5, ttft=16109.93ms
+[TTFT] BS=5, PL=2368, repeat=2, task=4/5, ttft=16109.85ms
+[TTFT] BS=5, PL=2368, repeat=2, task=5/5, ttft=16109.74ms
+[INFO] Repeat TTFT stats: BS=5, PL=2368, repeat=2, valid=5/5, min/avg/max=3175.5/13523.0/16110.2ms, arrival_span=12934.6ms
+[TTFT] BS=5, PL=2368, repeat=3, task=1/5, ttft=16075.24ms
+[TTFT] BS=5, PL=2368, repeat=3, task=2/5, ttft=3163.02ms
+[TTFT] BS=5, PL=2368, repeat=3, task=3/5, ttft=16074.98ms
+[TTFT] BS=5, PL=2368, repeat=3, task=4/5, ttft=16074.88ms
+[TTFT] BS=5, PL=2368, repeat=3, task=5/5, ttft=16074.76ms
+[INFO] Repeat TTFT stats: BS=5, PL=2368, repeat=3, valid=5/5, min/avg/max=3163.0/13492.6/16075.2ms, arrival_span=12912.2ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 9615.14 ms (3 samples)
+
+[59/88] Testing: BatchSize=5, PromptLen=2624 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=5, PromptLen=2624 (x3)
+[TTFT] BS=5, PL=2624, repeat=1, task=1/5, ttft=3554.10ms
+[TTFT] BS=5, PL=2624, repeat=1, task=2/5, ttft=17827.85ms
+[TTFT] BS=5, PL=2624, repeat=1, task=3/5, ttft=17827.75ms
+[TTFT] BS=5, PL=2624, repeat=1, task=4/5, ttft=17827.43ms
+[TTFT] BS=5, PL=2624, repeat=1, task=5/5, ttft=17827.46ms
+[INFO] Repeat TTFT stats: BS=5, PL=2624, repeat=1, valid=5/5, min/avg/max=3554.1/14972.9/17827.9ms, arrival_span=14273.8ms
+[TTFT] BS=5, PL=2624, repeat=2, task=1/5, ttft=3537.40ms
+[TTFT] BS=5, PL=2624, repeat=2, task=2/5, ttft=17817.99ms
+[TTFT] BS=5, PL=2624, repeat=2, task=3/5, ttft=17817.82ms
+[TTFT] BS=5, PL=2624, repeat=2, task=4/5, ttft=17817.67ms
+[TTFT] BS=5, PL=2624, repeat=2, task=5/5, ttft=17817.43ms
+[INFO] Repeat TTFT stats: BS=5, PL=2624, repeat=2, valid=5/5, min/avg/max=3537.4/14961.7/17818.0ms, arrival_span=14280.6ms
+[TTFT] BS=5, PL=2624, repeat=3, task=1/5, ttft=17693.11ms
+[TTFT] BS=5, PL=2624, repeat=3, task=2/5, ttft=17692.82ms
+[TTFT] BS=5, PL=2624, repeat=3, task=3/5, ttft=3516.07ms
+[TTFT] BS=5, PL=2624, repeat=3, task=4/5, ttft=17692.61ms
+[TTFT] BS=5, PL=2624, repeat=3, task=5/5, ttft=17692.19ms
+[INFO] Repeat TTFT stats: BS=5, PL=2624, repeat=3, valid=5/5, min/avg/max=3516.1/14857.4/17693.1ms, arrival_span=14177.0ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 10657.75 ms (3 samples)
+
+[60/88] Testing: BatchSize=5, PromptLen=2880 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=5, PromptLen=2880 (x3)
+[TTFT] BS=5, PL=2880, repeat=1, task=1/5, ttft=19373.47ms
+[TTFT] BS=5, PL=2880, repeat=1, task=2/5, ttft=19372.55ms
+[TTFT] BS=5, PL=2880, repeat=1, task=3/5, ttft=19372.42ms
+[TTFT] BS=5, PL=2880, repeat=1, task=4/5, ttft=19372.20ms
+[TTFT] BS=5, PL=2880, repeat=1, task=5/5, ttft=3853.06ms
+[INFO] Repeat TTFT stats: BS=5, PL=2880, repeat=1, valid=5/5, min/avg/max=3853.1/16268.7/19373.5ms, arrival_span=15520.4ms
+[TTFT] BS=5, PL=2880, repeat=2, task=1/5, ttft=7677.10ms
+[TTFT] BS=5, PL=2880, repeat=2, task=2/5, ttft=19490.18ms
+[TTFT] BS=5, PL=2880, repeat=2, task=3/5, ttft=19490.22ms
+[TTFT] BS=5, PL=2880, repeat=2, task=4/5, ttft=7676.76ms
+[TTFT] BS=5, PL=2880, repeat=2, task=5/5, ttft=19490.10ms
+[INFO] Repeat TTFT stats: BS=5, PL=2880, repeat=2, valid=5/5, min/avg/max=7676.8/14764.9/19490.2ms, arrival_span=11813.5ms
+[TTFT] BS=5, PL=2880, repeat=3, task=1/5, ttft=11584.26ms
+[TTFT] BS=5, PL=2880, repeat=3, task=2/5, ttft=11584.05ms
+[TTFT] BS=5, PL=2880, repeat=3, task=3/5, ttft=11583.93ms
+[TTFT] BS=5, PL=2880, repeat=3, task=4/5, ttft=19609.78ms
+[TTFT] BS=5, PL=2880, repeat=3, task=5/5, ttft=19609.50ms
+[INFO] Repeat TTFT stats: BS=5, PL=2880, repeat=3, valid=5/5, min/avg/max=11583.9/14794.3/19609.8ms, arrival_span=8025.8ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 13597.87 ms (3 samples)
+
+[61/88] Testing: BatchSize=6, PromptLen=64 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=6, PromptLen=64 (x3)
+[TTFT] BS=6, PL=64, repeat=1, task=1/6, ttft=86.22ms
+[TTFT] BS=6, PL=64, repeat=1, task=2/6, ttft=526.14ms
+[TTFT] BS=6, PL=64, repeat=1, task=3/6, ttft=526.08ms
+[TTFT] BS=6, PL=64, repeat=1, task=4/6, ttft=525.77ms
+[TTFT] BS=6, PL=64, repeat=1, task=5/6, ttft=525.91ms
+[TTFT] BS=6, PL=64, repeat=1, task=6/6, ttft=525.93ms
+[INFO] Repeat TTFT stats: BS=6, PL=64, repeat=1, valid=6/6, min/avg/max=86.2/452.7/526.1ms, arrival_span=439.9ms
+[TTFT] BS=6, PL=64, repeat=2, task=1/6, ttft=523.02ms
+[TTFT] BS=6, PL=64, repeat=2, task=2/6, ttft=81.65ms
+[TTFT] BS=6, PL=64, repeat=2, task=3/6, ttft=522.56ms
+[TTFT] BS=6, PL=64, repeat=2, task=4/6, ttft=522.72ms
+[TTFT] BS=6, PL=64, repeat=2, task=5/6, ttft=522.68ms
+[TTFT] BS=6, PL=64, repeat=2, task=6/6, ttft=522.65ms
+[INFO] Repeat TTFT stats: BS=6, PL=64, repeat=2, valid=6/6, min/avg/max=81.6/449.2/523.0ms, arrival_span=441.4ms
+[TTFT] BS=6, PL=64, repeat=3, task=1/6, ttft=227.77ms
+[TTFT] BS=6, PL=64, repeat=3, task=2/6, ttft=227.58ms
+[TTFT] BS=6, PL=64, repeat=3, task=3/6, ttft=227.54ms
+[TTFT] BS=6, PL=64, repeat=3, task=4/6, ttft=438.26ms
+[TTFT] BS=6, PL=64, repeat=3, task=5/6, ttft=438.32ms
+[TTFT] BS=6, PL=64, repeat=3, task=6/6, ttft=438.30ms
+[INFO] Repeat TTFT stats: BS=6, PL=64, repeat=3, valid=6/6, min/avg/max=227.5/333.0/438.3ms, arrival_span=210.8ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 313.81 ms (3 samples)
+
+[62/88] Testing: BatchSize=6, PromptLen=320 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=6, PromptLen=320 (x3)
+[TTFT] BS=6, PL=320, repeat=1, task=1/6, ttft=864.48ms
+[TTFT] BS=6, PL=320, repeat=1, task=2/6, ttft=2620.29ms
+[TTFT] BS=6, PL=320, repeat=1, task=3/6, ttft=863.99ms
+[TTFT] BS=6, PL=320, repeat=1, task=4/6, ttft=2619.94ms
+[TTFT] BS=6, PL=320, repeat=1, task=5/6, ttft=2620.04ms
+[TTFT] BS=6, PL=320, repeat=1, task=6/6, ttft=2620.01ms
+[INFO] Repeat TTFT stats: BS=6, PL=320, repeat=1, valid=6/6, min/avg/max=864.0/2034.8/2620.3ms, arrival_span=1756.3ms
+[TTFT] BS=6, PL=320, repeat=2, task=1/6, ttft=863.33ms
+[TTFT] BS=6, PL=320, repeat=2, task=2/6, ttft=2621.31ms
+[TTFT] BS=6, PL=320, repeat=2, task=3/6, ttft=2620.97ms
+[TTFT] BS=6, PL=320, repeat=2, task=4/6, ttft=2621.13ms
+[TTFT] BS=6, PL=320, repeat=2, task=5/6, ttft=863.05ms
+[TTFT] BS=6, PL=320, repeat=2, task=6/6, ttft=2621.08ms
+[INFO] Repeat TTFT stats: BS=6, PL=320, repeat=2, valid=6/6, min/avg/max=863.0/2035.1/2621.3ms, arrival_span=1758.3ms
+[TTFT] BS=6, PL=320, repeat=3, task=1/6, ttft=402.31ms
+[TTFT] BS=6, PL=320, repeat=3, task=2/6, ttft=2591.81ms
+[TTFT] BS=6, PL=320, repeat=3, task=3/6, ttft=2591.93ms
+[TTFT] BS=6, PL=320, repeat=3, task=4/6, ttft=2591.88ms
+[TTFT] BS=6, PL=320, repeat=3, task=5/6, ttft=2591.78ms
+[TTFT] BS=6, PL=320, repeat=3, task=6/6, ttft=2591.75ms
+[INFO] Repeat TTFT stats: BS=6, PL=320, repeat=3, valid=6/6, min/avg/max=402.3/2226.9/2591.9ms, arrival_span=2189.6ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 1660.48 ms (3 samples)
+
+[63/88] Testing: BatchSize=6, PromptLen=576 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=6, PromptLen=576 (x3)
+[TTFT] BS=6, PL=576, repeat=1, task=1/6, ttft=4689.75ms
+[TTFT] BS=6, PL=576, repeat=1, task=2/6, ttft=4689.50ms
+[TTFT] BS=6, PL=576, repeat=1, task=3/6, ttft=4689.40ms
+[TTFT] BS=6, PL=576, repeat=1, task=4/6, ttft=767.94ms
+[TTFT] BS=6, PL=576, repeat=1, task=5/6, ttft=4688.97ms
+[TTFT] BS=6, PL=576, repeat=1, task=6/6, ttft=4689.11ms
+[INFO] Repeat TTFT stats: BS=6, PL=576, repeat=1, valid=6/6, min/avg/max=767.9/4035.8/4689.7ms, arrival_span=3921.8ms
+[TTFT] BS=6, PL=576, repeat=2, task=1/6, ttft=2367.66ms
+[TTFT] BS=6, PL=576, repeat=2, task=2/6, ttft=4772.81ms
+[TTFT] BS=6, PL=576, repeat=2, task=3/6, ttft=4772.74ms
+[TTFT] BS=6, PL=576, repeat=2, task=4/6, ttft=2367.10ms
+[TTFT] BS=6, PL=576, repeat=2, task=5/6, ttft=4772.37ms
+[TTFT] BS=6, PL=576, repeat=2, task=6/6, ttft=2367.03ms
+[INFO] Repeat TTFT stats: BS=6, PL=576, repeat=2, valid=6/6, min/avg/max=2367.0/3570.0/4772.8ms, arrival_span=2405.8ms
+[TTFT] BS=6, PL=576, repeat=3, task=1/6, ttft=3960.08ms
+[TTFT] BS=6, PL=576, repeat=3, task=2/6, ttft=3959.84ms
+[TTFT] BS=6, PL=576, repeat=3, task=3/6, ttft=3959.61ms
+[TTFT] BS=6, PL=576, repeat=3, task=4/6, ttft=3959.63ms
+[TTFT] BS=6, PL=576, repeat=3, task=5/6, ttft=3959.54ms
+[TTFT] BS=6, PL=576, repeat=3, task=6/6, ttft=4801.89ms
+[INFO] Repeat TTFT stats: BS=6, PL=576, repeat=3, valid=6/6, min/avg/max=3959.5/4100.1/4801.9ms, arrival_span=842.4ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 3559.83 ms (3 samples)
+
+[64/88] Testing: BatchSize=6, PromptLen=832 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=6, PromptLen=832 (x3)
+[TTFT] BS=6, PL=832, repeat=1, task=1/6, ttft=6774.51ms
+[TTFT] BS=6, PL=832, repeat=1, task=2/6, ttft=6774.31ms
+[TTFT] BS=6, PL=832, repeat=1, task=3/6, ttft=1125.49ms
+[TTFT] BS=6, PL=832, repeat=1, task=4/6, ttft=6774.16ms
+[TTFT] BS=6, PL=832, repeat=1, task=5/6, ttft=6774.05ms
+[TTFT] BS=6, PL=832, repeat=1, task=6/6, ttft=6773.68ms
+[INFO] Repeat TTFT stats: BS=6, PL=832, repeat=1, valid=6/6, min/avg/max=1125.5/5832.7/6774.5ms, arrival_span=5649.0ms
+[TTFT] BS=6, PL=832, repeat=2, task=1/6, ttft=1140.61ms
+[TTFT] BS=6, PL=832, repeat=2, task=2/6, ttft=6790.78ms
+[TTFT] BS=6, PL=832, repeat=2, task=3/6, ttft=6791.00ms
+[TTFT] BS=6, PL=832, repeat=2, task=4/6, ttft=6790.97ms
+[TTFT] BS=6, PL=832, repeat=2, task=5/6, ttft=6790.96ms
+[TTFT] BS=6, PL=832, repeat=2, task=6/6, ttft=6790.87ms
+[INFO] Repeat TTFT stats: BS=6, PL=832, repeat=2, valid=6/6, min/avg/max=1140.6/5849.2/6791.0ms, arrival_span=5650.4ms
+[TTFT] BS=6, PL=832, repeat=3, task=1/6, ttft=6786.10ms
+[TTFT] BS=6, PL=832, repeat=3, task=2/6, ttft=6785.84ms
+[TTFT] BS=6, PL=832, repeat=3, task=3/6, ttft=6785.75ms
+[TTFT] BS=6, PL=832, repeat=3, task=4/6, ttft=1134.38ms
+[TTFT] BS=6, PL=832, repeat=3, task=5/6, ttft=6785.59ms
+[TTFT] BS=6, PL=832, repeat=3, task=6/6, ttft=6785.28ms
+[INFO] Repeat TTFT stats: BS=6, PL=832, repeat=3, valid=6/6, min/avg/max=1134.4/5843.8/6786.1ms, arrival_span=5651.7ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 3958.68 ms (3 samples)
+
+[65/88] Testing: BatchSize=6, PromptLen=1088 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=6, PromptLen=1088 (x3)
+[TTFT] BS=6, PL=1088, repeat=1, task=1/6, ttft=8839.05ms
+[TTFT] BS=6, PL=1088, repeat=1, task=2/6, ttft=1480.46ms
+[TTFT] BS=6, PL=1088, repeat=1, task=3/6, ttft=8838.65ms
+[TTFT] BS=6, PL=1088, repeat=1, task=4/6, ttft=8838.60ms
+[TTFT] BS=6, PL=1088, repeat=1, task=5/6, ttft=8838.30ms
+[TTFT] BS=6, PL=1088, repeat=1, task=6/6, ttft=8838.41ms
+[INFO] Repeat TTFT stats: BS=6, PL=1088, repeat=1, valid=6/6, min/avg/max=1480.5/7612.2/8839.0ms, arrival_span=7358.6ms
+[TTFT] BS=6, PL=1088, repeat=2, task=1/6, ttft=2970.93ms
+[TTFT] BS=6, PL=1088, repeat=2, task=2/6, ttft=8913.28ms
+[TTFT] BS=6, PL=1088, repeat=2, task=3/6, ttft=8913.05ms
+[TTFT] BS=6, PL=1088, repeat=2, task=4/6, ttft=8913.04ms
+[TTFT] BS=6, PL=1088, repeat=2, task=5/6, ttft=2969.81ms
+[TTFT] BS=6, PL=1088, repeat=2, task=6/6, ttft=8912.90ms
+[INFO] Repeat TTFT stats: BS=6, PL=1088, repeat=2, valid=6/6, min/avg/max=2969.8/6932.2/8913.3ms, arrival_span=5943.5ms
+[TTFT] BS=6, PL=1088, repeat=3, task=1/6, ttft=8849.83ms
+[TTFT] BS=6, PL=1088, repeat=3, task=2/6, ttft=8849.54ms
+[TTFT] BS=6, PL=1088, repeat=3, task=3/6, ttft=1472.65ms
+[TTFT] BS=6, PL=1088, repeat=3, task=4/6, ttft=8849.28ms
+[TTFT] BS=6, PL=1088, repeat=3, task=5/6, ttft=8849.06ms
+[TTFT] BS=6, PL=1088, repeat=3, task=6/6, ttft=8849.06ms
+[INFO] Repeat TTFT stats: BS=6, PL=1088, repeat=3, valid=6/6, min/avg/max=1472.6/7619.9/8849.8ms, arrival_span=7377.2ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 5420.85 ms (3 samples)
+
+[66/88] Testing: BatchSize=6, PromptLen=1344 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=6, PromptLen=1344 (x3)
+[TTFT] BS=6, PL=1344, repeat=1, task=1/6, ttft=1803.03ms
+[TTFT] BS=6, PL=1344, repeat=1, task=2/6, ttft=10854.32ms
+[TTFT] BS=6, PL=1344, repeat=1, task=3/6, ttft=10854.21ms
+[TTFT] BS=6, PL=1344, repeat=1, task=4/6, ttft=10854.13ms
+[TTFT] BS=6, PL=1344, repeat=1, task=5/6, ttft=10853.67ms
+[TTFT] BS=6, PL=1344, repeat=1, task=6/6, ttft=10853.87ms
+[INFO] Repeat TTFT stats: BS=6, PL=1344, repeat=1, valid=6/6, min/avg/max=1803.0/9345.5/10854.3ms, arrival_span=9051.3ms
+[TTFT] BS=6, PL=1344, repeat=2, task=1/6, ttft=1787.89ms
+[TTFT] BS=6, PL=1344, repeat=2, task=2/6, ttft=10859.16ms
+[TTFT] BS=6, PL=1344, repeat=2, task=3/6, ttft=10859.21ms
+[TTFT] BS=6, PL=1344, repeat=2, task=4/6, ttft=10859.13ms
+[TTFT] BS=6, PL=1344, repeat=2, task=5/6, ttft=10859.06ms
+[TTFT] BS=6, PL=1344, repeat=2, task=6/6, ttft=10858.94ms
+[INFO] Repeat TTFT stats: BS=6, PL=1344, repeat=2, valid=6/6, min/avg/max=1787.9/9347.2/10859.2ms, arrival_span=9071.3ms
+[TTFT] BS=6, PL=1344, repeat=3, task=1/6, ttft=1803.81ms
+[TTFT] BS=6, PL=1344, repeat=3, task=2/6, ttft=10891.98ms
+[TTFT] BS=6, PL=1344, repeat=3, task=3/6, ttft=10891.88ms
+[TTFT] BS=6, PL=1344, repeat=3, task=4/6, ttft=10891.80ms
+[TTFT] BS=6, PL=1344, repeat=3, task=5/6, ttft=10891.72ms
+[TTFT] BS=6, PL=1344, repeat=3, task=6/6, ttft=10891.39ms
+[INFO] Repeat TTFT stats: BS=6, PL=1344, repeat=3, valid=6/6, min/avg/max=1803.8/9377.1/10892.0ms, arrival_span=9088.2ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 6333.37 ms (3 samples)
+
+[67/88] Testing: BatchSize=6, PromptLen=1600 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=6, PromptLen=1600 (x3)
+[TTFT] BS=6, PL=1600, repeat=1, task=1/6, ttft=12973.06ms
+[TTFT] BS=6, PL=1600, repeat=1, task=2/6, ttft=12972.55ms
+[TTFT] BS=6, PL=1600, repeat=1, task=3/6, ttft=12972.43ms
+[TTFT] BS=6, PL=1600, repeat=1, task=4/6, ttft=12972.33ms
+[TTFT] BS=6, PL=1600, repeat=1, task=5/6, ttft=2148.79ms
+[TTFT] BS=6, PL=1600, repeat=1, task=6/6, ttft=12971.98ms
+[INFO] Repeat TTFT stats: BS=6, PL=1600, repeat=1, valid=6/6, min/avg/max=2148.8/11168.5/12973.1ms, arrival_span=10824.3ms
+[TTFT] BS=6, PL=1600, repeat=2, task=1/6, ttft=2145.51ms
+[TTFT] BS=6, PL=1600, repeat=2, task=2/6, ttft=12946.04ms
+[TTFT] BS=6, PL=1600, repeat=2, task=3/6, ttft=12945.96ms
+[TTFT] BS=6, PL=1600, repeat=2, task=4/6, ttft=12945.89ms
+[TTFT] BS=6, PL=1600, repeat=2, task=5/6, ttft=12945.83ms
+[TTFT] BS=6, PL=1600, repeat=2, task=6/6, ttft=12945.39ms
+[INFO] Repeat TTFT stats: BS=6, PL=1600, repeat=2, valid=6/6, min/avg/max=2145.5/11145.8/12946.0ms, arrival_span=10800.5ms
+[TTFT] BS=6, PL=1600, repeat=3, task=1/6, ttft=2130.81ms
+[TTFT] BS=6, PL=1600, repeat=3, task=2/6, ttft=12905.75ms
+[TTFT] BS=6, PL=1600, repeat=3, task=3/6, ttft=12905.66ms
+[TTFT] BS=6, PL=1600, repeat=3, task=4/6, ttft=12905.57ms
+[TTFT] BS=6, PL=1600, repeat=3, task=5/6, ttft=12905.50ms
+[TTFT] BS=6, PL=1600, repeat=3, task=6/6, ttft=12905.25ms
+[INFO] Repeat TTFT stats: BS=6, PL=1600, repeat=3, valid=6/6, min/avg/max=2130.8/11109.8/12905.8ms, arrival_span=10774.9ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 7541.66 ms (3 samples)
+
+[68/88] Testing: BatchSize=6, PromptLen=1856 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=6, PromptLen=1856 (x3)
+[TTFT] BS=6, PL=1856, repeat=1, task=1/6, ttft=15000.97ms
+[TTFT] BS=6, PL=1856, repeat=1, task=2/6, ttft=15000.61ms
+[TTFT] BS=6, PL=1856, repeat=1, task=3/6, ttft=15000.50ms
+[TTFT] BS=6, PL=1856, repeat=1, task=4/6, ttft=15000.41ms
+[TTFT] BS=6, PL=1856, repeat=1, task=5/6, ttft=15000.16ms
+[TTFT] BS=6, PL=1856, repeat=1, task=6/6, ttft=2481.87ms
+[INFO] Repeat TTFT stats: BS=6, PL=1856, repeat=1, valid=6/6, min/avg/max=2481.9/12914.1/15001.0ms, arrival_span=12519.1ms
+[TTFT] BS=6, PL=1856, repeat=2, task=1/6, ttft=14995.10ms
+[TTFT] BS=6, PL=1856, repeat=2, task=2/6, ttft=14994.81ms
+[TTFT] BS=6, PL=1856, repeat=2, task=3/6, ttft=2487.83ms
+[TTFT] BS=6, PL=1856, repeat=2, task=4/6, ttft=14994.60ms
+[TTFT] BS=6, PL=1856, repeat=2, task=5/6, ttft=14994.52ms
+[TTFT] BS=6, PL=1856, repeat=2, task=6/6, ttft=14994.28ms
+[INFO] Repeat TTFT stats: BS=6, PL=1856, repeat=2, valid=6/6, min/avg/max=2487.8/12910.2/14995.1ms, arrival_span=12507.3ms
+[TTFT] BS=6, PL=1856, repeat=3, task=1/6, ttft=15008.27ms
+[TTFT] BS=6, PL=1856, repeat=3, task=2/6, ttft=15008.08ms
+[TTFT] BS=6, PL=1856, repeat=3, task=3/6, ttft=15007.96ms
+[TTFT] BS=6, PL=1856, repeat=3, task=4/6, ttft=15007.88ms
+[TTFT] BS=6, PL=1856, repeat=3, task=5/6, ttft=2501.83ms
+[TTFT] BS=6, PL=1856, repeat=3, task=6/6, ttft=15007.66ms
+[INFO] Repeat TTFT stats: BS=6, PL=1856, repeat=3, valid=6/6, min/avg/max=2501.8/12923.6/15008.3ms, arrival_span=12506.4ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 8745.98 ms (3 samples)
+
+[69/88] Testing: BatchSize=6, PromptLen=2112 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=6, PromptLen=2112 (x3)
+[TTFT] BS=6, PL=2112, repeat=1, task=1/6, ttft=2835.08ms
+[TTFT] BS=6, PL=2112, repeat=1, task=2/6, ttft=17216.24ms
+[TTFT] BS=6, PL=2112, repeat=1, task=3/6, ttft=17216.17ms
+[TTFT] BS=6, PL=2112, repeat=1, task=4/6, ttft=17216.12ms
+[TTFT] BS=6, PL=2112, repeat=1, task=5/6, ttft=17215.83ms
+[TTFT] BS=6, PL=2112, repeat=1, task=6/6, ttft=17215.99ms
+[INFO] Repeat TTFT stats: BS=6, PL=2112, repeat=1, valid=6/6, min/avg/max=2835.1/14819.2/17216.2ms, arrival_span=14381.2ms
+[TTFT] BS=6, PL=2112, repeat=2, task=1/6, ttft=17245.74ms
+[TTFT] BS=6, PL=2112, repeat=2, task=2/6, ttft=17245.75ms
+[TTFT] BS=6, PL=2112, repeat=2, task=3/6, ttft=17245.67ms
+[TTFT] BS=6, PL=2112, repeat=2, task=4/6, ttft=17245.61ms
+[TTFT] BS=6, PL=2112, repeat=2, task=5/6, ttft=2864.80ms
+[TTFT] BS=6, PL=2112, repeat=2, task=6/6, ttft=17245.39ms
+[INFO] Repeat TTFT stats: BS=6, PL=2112, repeat=2, valid=6/6, min/avg/max=2864.8/14848.8/17245.7ms, arrival_span=14380.9ms
+[TTFT] BS=6, PL=2112, repeat=3, task=1/6, ttft=17212.02ms
+[TTFT] BS=6, PL=2112, repeat=3, task=2/6, ttft=17211.96ms
+[TTFT] BS=6, PL=2112, repeat=3, task=3/6, ttft=17211.88ms
+[TTFT] BS=6, PL=2112, repeat=3, task=4/6, ttft=17211.80ms
+[TTFT] BS=6, PL=2112, repeat=3, task=5/6, ttft=2858.87ms
+[TTFT] BS=6, PL=2112, repeat=3, task=6/6, ttft=17211.64ms
+[INFO] Repeat TTFT stats: BS=6, PL=2112, repeat=3, valid=6/6, min/avg/max=2858.9/14819.7/17212.0ms, arrival_span=14353.1ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 10038.79 ms (3 samples)
+
+[70/88] Testing: BatchSize=6, PromptLen=2368 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=6, PromptLen=2368 (x3)
+[TTFT] BS=6, PL=2368, repeat=1, task=1/6, ttft=3175.64ms
+[TTFT] BS=6, PL=2368, repeat=1, task=2/6, ttft=19278.88ms
+[TTFT] BS=6, PL=2368, repeat=1, task=3/6, ttft=19278.80ms
+[TTFT] BS=6, PL=2368, repeat=1, task=4/6, ttft=19278.76ms
+[TTFT] BS=6, PL=2368, repeat=1, task=5/6, ttft=19278.48ms
+[TTFT] BS=6, PL=2368, repeat=1, task=6/6, ttft=19278.60ms
+[INFO] Repeat TTFT stats: BS=6, PL=2368, repeat=1, valid=6/6, min/avg/max=3175.6/16594.9/19278.9ms, arrival_span=16103.2ms
+[TTFT] BS=6, PL=2368, repeat=2, task=1/6, ttft=19139.11ms
+[TTFT] BS=6, PL=2368, repeat=2, task=2/6, ttft=19138.93ms
+[TTFT] BS=6, PL=2368, repeat=2, task=3/6, ttft=19138.81ms
+[TTFT] BS=6, PL=2368, repeat=2, task=4/6, ttft=19138.72ms
+[TTFT] BS=6, PL=2368, repeat=2, task=5/6, ttft=3145.87ms
+[TTFT] BS=6, PL=2368, repeat=2, task=6/6, ttft=19138.49ms
+[INFO] Repeat TTFT stats: BS=6, PL=2368, repeat=2, valid=6/6, min/avg/max=3145.9/16473.3/19139.1ms, arrival_span=15993.2ms
+[TTFT] BS=6, PL=2368, repeat=3, task=1/6, ttft=19157.44ms
+[TTFT] BS=6, PL=2368, repeat=3, task=2/6, ttft=19157.32ms
+[TTFT] BS=6, PL=2368, repeat=3, task=3/6, ttft=19157.24ms
+[TTFT] BS=6, PL=2368, repeat=3, task=4/6, ttft=3141.97ms
+[TTFT] BS=6, PL=2368, repeat=3, task=5/6, ttft=19157.11ms
+[TTFT] BS=6, PL=2368, repeat=3, task=6/6, ttft=19157.05ms
+[INFO] Repeat TTFT stats: BS=6, PL=2368, repeat=3, valid=6/6, min/avg/max=3142.0/16488.0/19157.4ms, arrival_span=16015.5ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 11173.15 ms (3 samples)
+
+[71/88] Testing: BatchSize=6, PromptLen=2624 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=6, PromptLen=2624 (x3)
+[TTFT] BS=6, PL=2624, repeat=1, task=1/6, ttft=21262.29ms
+[TTFT] BS=6, PL=2624, repeat=1, task=2/6, ttft=21261.99ms
+[TTFT] BS=6, PL=2624, repeat=1, task=3/6, ttft=3506.55ms
+[TTFT] BS=6, PL=2624, repeat=1, task=4/6, ttft=21261.80ms
+[TTFT] BS=6, PL=2624, repeat=1, task=5/6, ttft=21261.35ms
+[TTFT] BS=6, PL=2624, repeat=1, task=6/6, ttft=21261.57ms
+[INFO] Repeat TTFT stats: BS=6, PL=2624, repeat=1, valid=6/6, min/avg/max=3506.6/18302.6/21262.3ms, arrival_span=17755.7ms
+[TTFT] BS=6, PL=2624, repeat=2, task=1/6, ttft=21227.29ms
+[TTFT] BS=6, PL=2624, repeat=2, task=2/6, ttft=21227.13ms
+[TTFT] BS=6, PL=2624, repeat=2, task=3/6, ttft=21227.02ms
+[TTFT] BS=6, PL=2624, repeat=2, task=4/6, ttft=3505.56ms
+[TTFT] BS=6, PL=2624, repeat=2, task=5/6, ttft=21226.84ms
+[TTFT] BS=6, PL=2624, repeat=2, task=6/6, ttft=21226.73ms
+[INFO] Repeat TTFT stats: BS=6, PL=2624, repeat=2, valid=6/6, min/avg/max=3505.6/18273.4/21227.3ms, arrival_span=17721.7ms
+[TTFT] BS=6, PL=2624, repeat=3, task=1/6, ttft=21234.88ms
+[TTFT] BS=6, PL=2624, repeat=3, task=2/6, ttft=21234.88ms
+[TTFT] BS=6, PL=2624, repeat=3, task=3/6, ttft=3528.07ms
+[TTFT] BS=6, PL=2624, repeat=3, task=4/6, ttft=21234.79ms
+[TTFT] BS=6, PL=2624, repeat=3, task=5/6, ttft=21234.74ms
+[TTFT] BS=6, PL=2624, repeat=3, task=6/6, ttft=21234.62ms
+[INFO] Repeat TTFT stats: BS=6, PL=2624, repeat=3, valid=6/6, min/avg/max=3528.1/18283.7/21234.9ms, arrival_span=17706.8ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 12377.44 ms (3 samples)
+
+[72/88] Testing: BatchSize=7, PromptLen=64 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=7, PromptLen=64 (x3)
+[TTFT] BS=7, PL=64, repeat=1, task=1/7, ttft=628.59ms
+[TTFT] BS=7, PL=64, repeat=1, task=2/7, ttft=628.33ms
+[TTFT] BS=7, PL=64, repeat=1, task=3/7, ttft=628.24ms
+[TTFT] BS=7, PL=64, repeat=1, task=4/7, ttft=628.17ms
+[TTFT] BS=7, PL=64, repeat=1, task=5/7, ttft=627.77ms
+[TTFT] BS=7, PL=64, repeat=1, task=6/7, ttft=84.60ms
+[TTFT] BS=7, PL=64, repeat=1, task=7/7, ttft=627.98ms
+[INFO] Repeat TTFT stats: BS=7, PL=64, repeat=1, valid=7/7, min/avg/max=84.6/550.5/628.6ms, arrival_span=544.0ms
+[TTFT] BS=7, PL=64, repeat=2, task=1/7, ttft=82.10ms
+[TTFT] BS=7, PL=64, repeat=2, task=2/7, ttft=623.84ms
+[TTFT] BS=7, PL=64, repeat=2, task=3/7, ttft=624.00ms
+[TTFT] BS=7, PL=64, repeat=2, task=4/7, ttft=623.95ms
+[TTFT] BS=7, PL=64, repeat=2, task=5/7, ttft=623.91ms
+[TTFT] BS=7, PL=64, repeat=2, task=6/7, ttft=623.86ms
+[TTFT] BS=7, PL=64, repeat=2, task=7/7, ttft=623.81ms
+[INFO] Repeat TTFT stats: BS=7, PL=64, repeat=2, valid=7/7, min/avg/max=82.1/546.5/624.0ms, arrival_span=541.9ms
+[TTFT] BS=7, PL=64, repeat=3, task=1/7, ttft=80.80ms
+[TTFT] BS=7, PL=64, repeat=3, task=2/7, ttft=616.63ms
+[TTFT] BS=7, PL=64, repeat=3, task=3/7, ttft=616.86ms
+[TTFT] BS=7, PL=64, repeat=3, task=4/7, ttft=616.82ms
+[TTFT] BS=7, PL=64, repeat=3, task=5/7, ttft=616.78ms
+[TTFT] BS=7, PL=64, repeat=3, task=6/7, ttft=616.74ms
+[TTFT] BS=7, PL=64, repeat=3, task=7/7, ttft=616.70ms
+[INFO] Repeat TTFT stats: BS=7, PL=64, repeat=3, valid=7/7, min/avg/max=80.8/540.2/616.9ms, arrival_span=536.1ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 352.83 ms (3 samples)
+
+[73/88] Testing: BatchSize=7, PromptLen=320 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=7, PromptLen=320 (x3)
+[TTFT] BS=7, PL=320, repeat=1, task=1/7, ttft=3057.70ms
+[TTFT] BS=7, PL=320, repeat=1, task=2/7, ttft=3057.45ms
+[TTFT] BS=7, PL=320, repeat=1, task=3/7, ttft=408.98ms
+[TTFT] BS=7, PL=320, repeat=1, task=4/7, ttft=3057.27ms
+[TTFT] BS=7, PL=320, repeat=1, task=5/7, ttft=3057.16ms
+[TTFT] BS=7, PL=320, repeat=1, task=6/7, ttft=3056.73ms
+[TTFT] BS=7, PL=320, repeat=1, task=7/7, ttft=3056.95ms
+[INFO] Repeat TTFT stats: BS=7, PL=320, repeat=1, valid=7/7, min/avg/max=409.0/2678.9/3057.7ms, arrival_span=2648.7ms
+[TTFT] BS=7, PL=320, repeat=2, task=1/7, ttft=404.43ms
+[TTFT] BS=7, PL=320, repeat=2, task=2/7, ttft=3034.13ms
+[TTFT] BS=7, PL=320, repeat=2, task=3/7, ttft=3034.17ms
+[TTFT] BS=7, PL=320, repeat=2, task=4/7, ttft=3034.11ms
+[TTFT] BS=7, PL=320, repeat=2, task=5/7, ttft=3034.05ms
+[TTFT] BS=7, PL=320, repeat=2, task=6/7, ttft=3033.84ms
+[TTFT] BS=7, PL=320, repeat=2, task=7/7, ttft=3033.79ms
+[INFO] Repeat TTFT stats: BS=7, PL=320, repeat=2, valid=7/7, min/avg/max=404.4/2658.4/3034.2ms, arrival_span=2629.7ms
+[TTFT] BS=7, PL=320, repeat=3, task=1/7, ttft=403.90ms
+[TTFT] BS=7, PL=320, repeat=3, task=2/7, ttft=3030.76ms
+[TTFT] BS=7, PL=320, repeat=3, task=3/7, ttft=3030.88ms
+[TTFT] BS=7, PL=320, repeat=3, task=4/7, ttft=3030.82ms
+[TTFT] BS=7, PL=320, repeat=3, task=5/7, ttft=3030.76ms
+[TTFT] BS=7, PL=320, repeat=3, task=6/7, ttft=3030.71ms
+[TTFT] BS=7, PL=320, repeat=3, task=7/7, ttft=3030.66ms
+[INFO] Repeat TTFT stats: BS=7, PL=320, repeat=3, valid=7/7, min/avg/max=403.9/2655.5/3030.9ms, arrival_span=2627.0ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 1723.34 ms (3 samples)
+
+[74/88] Testing: BatchSize=7, PromptLen=576 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=7, PromptLen=576 (x3)
+[TTFT] BS=7, PL=576, repeat=1, task=1/7, ttft=1568.63ms
+[TTFT] BS=7, PL=576, repeat=1, task=2/7, ttft=5515.42ms
+[TTFT] BS=7, PL=576, repeat=1, task=3/7, ttft=5515.30ms
+[TTFT] BS=7, PL=576, repeat=1, task=4/7, ttft=5515.18ms
+[TTFT] BS=7, PL=576, repeat=1, task=5/7, ttft=5515.12ms
+[TTFT] BS=7, PL=576, repeat=1, task=6/7, ttft=5514.84ms
+[TTFT] BS=7, PL=576, repeat=1, task=7/7, ttft=1567.37ms
+[INFO] Repeat TTFT stats: BS=7, PL=576, repeat=1, valid=7/7, min/avg/max=1567.4/4387.4/5515.4ms, arrival_span=3948.1ms
+[TTFT] BS=7, PL=576, repeat=2, task=1/7, ttft=5488.62ms
+[TTFT] BS=7, PL=576, repeat=2, task=2/7, ttft=768.95ms
+[TTFT] BS=7, PL=576, repeat=2, task=3/7, ttft=5488.20ms
+[TTFT] BS=7, PL=576, repeat=2, task=4/7, ttft=5488.30ms
+[TTFT] BS=7, PL=576, repeat=2, task=5/7, ttft=5488.24ms
+[TTFT] BS=7, PL=576, repeat=2, task=6/7, ttft=5488.20ms
+[TTFT] BS=7, PL=576, repeat=2, task=7/7, ttft=5488.15ms
+[INFO] Repeat TTFT stats: BS=7, PL=576, repeat=2, valid=7/7, min/avg/max=769.0/4814.1/5488.6ms, arrival_span=4719.7ms
+[TTFT] BS=7, PL=576, repeat=3, task=1/7, ttft=5468.43ms
+[TTFT] BS=7, PL=576, repeat=3, task=2/7, ttft=768.84ms
+[TTFT] BS=7, PL=576, repeat=3, task=3/7, ttft=5468.27ms
+[TTFT] BS=7, PL=576, repeat=3, task=4/7, ttft=5468.22ms
+[TTFT] BS=7, PL=576, repeat=3, task=5/7, ttft=5468.18ms
+[TTFT] BS=7, PL=576, repeat=3, task=6/7, ttft=5468.14ms
+[TTFT] BS=7, PL=576, repeat=3, task=7/7, ttft=5468.10ms
+[INFO] Repeat TTFT stats: BS=7, PL=576, repeat=3, valid=7/7, min/avg/max=768.8/4796.9/5468.4ms, arrival_span=4699.6ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 3262.94 ms (3 samples)
+
+[75/88] Testing: BatchSize=7, PromptLen=832 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=7, PromptLen=832 (x3)
+[TTFT] BS=7, PL=832, repeat=1, task=1/7, ttft=6766.11ms
+[TTFT] BS=7, PL=832, repeat=1, task=2/7, ttft=6765.89ms
+[TTFT] BS=7, PL=832, repeat=1, task=3/7, ttft=6765.81ms
+[TTFT] BS=7, PL=832, repeat=1, task=4/7, ttft=6765.71ms
+[TTFT] BS=7, PL=832, repeat=1, task=5/7, ttft=6765.66ms
+[TTFT] BS=7, PL=832, repeat=1, task=6/7, ttft=6765.48ms
+[TTFT] BS=7, PL=832, repeat=1, task=7/7, ttft=8061.90ms
+[INFO] Repeat TTFT stats: BS=7, PL=832, repeat=1, valid=7/7, min/avg/max=6765.5/6950.9/8061.9ms, arrival_span=1296.4ms
+[TTFT] BS=7, PL=832, repeat=2, task=1/7, ttft=7915.61ms
+[TTFT] BS=7, PL=832, repeat=2, task=2/7, ttft=7915.63ms
+[TTFT] BS=7, PL=832, repeat=2, task=3/7, ttft=7915.58ms
+[TTFT] BS=7, PL=832, repeat=2, task=4/7, ttft=7915.54ms
+[TTFT] BS=7, PL=832, repeat=2, task=5/7, ttft=7915.50ms
+[TTFT] BS=7, PL=832, repeat=2, task=6/7, ttft=7915.46ms
+[TTFT] BS=7, PL=832, repeat=2, task=7/7, ttft=1131.19ms
+[INFO] Repeat TTFT stats: BS=7, PL=832, repeat=2, valid=7/7, min/avg/max=1131.2/6946.4/7915.6ms, arrival_span=6784.4ms
+[TTFT] BS=7, PL=832, repeat=3, task=1/7, ttft=7913.61ms
+[TTFT] BS=7, PL=832, repeat=3, task=2/7, ttft=1127.79ms
+[TTFT] BS=7, PL=832, repeat=3, task=3/7, ttft=7913.37ms
+[TTFT] BS=7, PL=832, repeat=3, task=4/7, ttft=7913.30ms
+[TTFT] BS=7, PL=832, repeat=3, task=5/7, ttft=7913.23ms
+[TTFT] BS=7, PL=832, repeat=3, task=6/7, ttft=7913.17ms
+[TTFT] BS=7, PL=832, repeat=3, task=7/7, ttft=7913.09ms
+[INFO] Repeat TTFT stats: BS=7, PL=832, repeat=3, valid=7/7, min/avg/max=1127.8/6943.9/7913.6ms, arrival_span=6785.8ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 5485.94 ms (3 samples)
+
+[76/88] Testing: BatchSize=7, PromptLen=1088 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=7, PromptLen=1088 (x3)
+[TTFT] BS=7, PL=1088, repeat=1, task=1/7, ttft=10337.24ms
+[TTFT] BS=7, PL=1088, repeat=1, task=2/7, ttft=1475.67ms
+[TTFT] BS=7, PL=1088, repeat=1, task=3/7, ttft=10336.80ms
+[TTFT] BS=7, PL=1088, repeat=1, task=4/7, ttft=10336.34ms
+[TTFT] BS=7, PL=1088, repeat=1, task=5/7, ttft=10336.54ms
+[TTFT] BS=7, PL=1088, repeat=1, task=6/7, ttft=10336.51ms
+[TTFT] BS=7, PL=1088, repeat=1, task=7/7, ttft=10336.41ms
+[INFO] Repeat TTFT stats: BS=7, PL=1088, repeat=1, valid=7/7, min/avg/max=1475.7/9070.8/10337.2ms, arrival_span=8861.6ms
+[TTFT] BS=7, PL=1088, repeat=2, task=1/7, ttft=10329.63ms
+[TTFT] BS=7, PL=1088, repeat=2, task=2/7, ttft=1475.54ms
+[TTFT] BS=7, PL=1088, repeat=2, task=3/7, ttft=10329.32ms
+[TTFT] BS=7, PL=1088, repeat=2, task=4/7, ttft=10329.21ms
+[TTFT] BS=7, PL=1088, repeat=2, task=5/7, ttft=10329.10ms
+[TTFT] BS=7, PL=1088, repeat=2, task=6/7, ttft=10329.01ms
+[TTFT] BS=7, PL=1088, repeat=2, task=7/7, ttft=10328.87ms
+[INFO] Repeat TTFT stats: BS=7, PL=1088, repeat=2, valid=7/7, min/avg/max=1475.5/9064.4/10329.6ms, arrival_span=8854.1ms
+[TTFT] BS=7, PL=1088, repeat=3, task=1/7, ttft=1494.68ms
+[TTFT] BS=7, PL=1088, repeat=3, task=2/7, ttft=10374.30ms
+[TTFT] BS=7, PL=1088, repeat=3, task=3/7, ttft=10374.22ms
+[TTFT] BS=7, PL=1088, repeat=3, task=4/7, ttft=10374.17ms
+[TTFT] BS=7, PL=1088, repeat=3, task=5/7, ttft=10374.10ms
+[TTFT] BS=7, PL=1088, repeat=3, task=6/7, ttft=10374.04ms
+[TTFT] BS=7, PL=1088, repeat=3, task=7/7, ttft=10373.62ms
+[INFO] Repeat TTFT stats: BS=7, PL=1088, repeat=3, valid=7/7, min/avg/max=1494.7/9105.6/10374.3ms, arrival_span=8879.6ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 5914.51 ms (3 samples)
+
+[77/88] Testing: BatchSize=7, PromptLen=1344 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=7, PromptLen=1344 (x3)
+[TTFT] BS=7, PL=1344, repeat=1, task=1/7, ttft=12686.79ms
+[TTFT] BS=7, PL=1344, repeat=1, task=2/7, ttft=12686.52ms
+[TTFT] BS=7, PL=1344, repeat=1, task=3/7, ttft=12686.44ms
+[TTFT] BS=7, PL=1344, repeat=1, task=4/7, ttft=12686.29ms
+[TTFT] BS=7, PL=1344, repeat=1, task=5/7, ttft=12685.99ms
+[TTFT] BS=7, PL=1344, repeat=1, task=6/7, ttft=12686.19ms
+[TTFT] BS=7, PL=1344, repeat=1, task=7/7, ttft=1799.31ms
+[INFO] Repeat TTFT stats: BS=7, PL=1344, repeat=1, valid=7/7, min/avg/max=1799.3/11131.1/12686.8ms, arrival_span=10887.5ms
+[TTFT] BS=7, PL=1344, repeat=2, task=1/7, ttft=12661.01ms
+[TTFT] BS=7, PL=1344, repeat=2, task=2/7, ttft=12660.83ms
+[TTFT] BS=7, PL=1344, repeat=2, task=3/7, ttft=12660.68ms
+[TTFT] BS=7, PL=1344, repeat=2, task=4/7, ttft=12660.55ms
+[TTFT] BS=7, PL=1344, repeat=2, task=5/7, ttft=1797.76ms
+[TTFT] BS=7, PL=1344, repeat=2, task=6/7, ttft=12660.29ms
+[TTFT] BS=7, PL=1344, repeat=2, task=7/7, ttft=12660.17ms
+[INFO] Repeat TTFT stats: BS=7, PL=1344, repeat=2, valid=7/7, min/avg/max=1797.8/11108.8/12661.0ms, arrival_span=10863.2ms
+[TTFT] BS=7, PL=1344, repeat=3, task=1/7, ttft=12668.18ms
+[TTFT] BS=7, PL=1344, repeat=3, task=2/7, ttft=12668.11ms
+[TTFT] BS=7, PL=1344, repeat=3, task=3/7, ttft=12668.03ms
+[TTFT] BS=7, PL=1344, repeat=3, task=4/7, ttft=12667.96ms
+[TTFT] BS=7, PL=1344, repeat=3, task=5/7, ttft=12667.92ms
+[TTFT] BS=7, PL=1344, repeat=3, task=6/7, ttft=1792.34ms
+[TTFT] BS=7, PL=1344, repeat=3, task=7/7, ttft=12667.73ms
+[INFO] Repeat TTFT stats: BS=7, PL=1344, repeat=3, valid=7/7, min/avg/max=1792.3/11114.3/12668.2ms, arrival_span=10875.8ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 7234.23 ms (3 samples)
+
+[78/88] Testing: BatchSize=7, PromptLen=1600 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=7, PromptLen=1600 (x3)
+[TTFT] BS=7, PL=1600, repeat=1, task=1/7, ttft=15104.21ms
+[TTFT] BS=7, PL=1600, repeat=1, task=2/7, ttft=15103.95ms
+[TTFT] BS=7, PL=1600, repeat=1, task=3/7, ttft=2137.24ms
+[TTFT] BS=7, PL=1600, repeat=1, task=4/7, ttft=15103.54ms
+[TTFT] BS=7, PL=1600, repeat=1, task=5/7, ttft=15103.68ms
+[TTFT] BS=7, PL=1600, repeat=1, task=6/7, ttft=15103.57ms
+[TTFT] BS=7, PL=1600, repeat=1, task=7/7, ttft=15103.48ms
+[INFO] Repeat TTFT stats: BS=7, PL=1600, repeat=1, valid=7/7, min/avg/max=2137.2/13251.4/15104.2ms, arrival_span=12967.0ms
+[TTFT] BS=7, PL=1600, repeat=2, task=1/7, ttft=15084.87ms
+[TTFT] BS=7, PL=1600, repeat=2, task=2/7, ttft=15084.73ms
+[TTFT] BS=7, PL=1600, repeat=2, task=3/7, ttft=15084.63ms
+[TTFT] BS=7, PL=1600, repeat=2, task=4/7, ttft=2137.80ms
+[TTFT] BS=7, PL=1600, repeat=2, task=5/7, ttft=15084.45ms
+[TTFT] BS=7, PL=1600, repeat=2, task=6/7, ttft=15084.38ms
+[TTFT] BS=7, PL=1600, repeat=2, task=7/7, ttft=15084.29ms
+[INFO] Repeat TTFT stats: BS=7, PL=1600, repeat=2, valid=7/7, min/avg/max=2137.8/13235.0/15084.9ms, arrival_span=12947.1ms
+[TTFT] BS=7, PL=1600, repeat=3, task=1/7, ttft=15153.02ms
+[TTFT] BS=7, PL=1600, repeat=3, task=2/7, ttft=15153.04ms
+[TTFT] BS=7, PL=1600, repeat=3, task=3/7, ttft=15152.95ms
+[TTFT] BS=7, PL=1600, repeat=3, task=4/7, ttft=15152.92ms
+[TTFT] BS=7, PL=1600, repeat=3, task=5/7, ttft=2147.23ms
+[TTFT] BS=7, PL=1600, repeat=3, task=6/7, ttft=15152.77ms
+[TTFT] BS=7, PL=1600, repeat=3, task=7/7, ttft=15152.64ms
+[INFO] Repeat TTFT stats: BS=7, PL=1600, repeat=3, valid=7/7, min/avg/max=2147.2/13294.9/15153.0ms, arrival_span=13005.8ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 8627.40 ms (3 samples)
+
+[79/88] Testing: BatchSize=7, PromptLen=1856 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=7, PromptLen=1856 (x3)
+[TTFT] BS=7, PL=1856, repeat=1, task=1/7, ttft=17639.24ms
+[TTFT] BS=7, PL=1856, repeat=1, task=2/7, ttft=2520.84ms
+[TTFT] BS=7, PL=1856, repeat=1, task=3/7, ttft=17638.36ms
+[TTFT] BS=7, PL=1856, repeat=1, task=4/7, ttft=17637.81ms
+[TTFT] BS=7, PL=1856, repeat=1, task=5/7, ttft=17637.98ms
+[TTFT] BS=7, PL=1856, repeat=1, task=6/7, ttft=17637.79ms
+[TTFT] BS=7, PL=1856, repeat=1, task=7/7, ttft=17637.62ms
+[INFO] Repeat TTFT stats: BS=7, PL=1856, repeat=1, valid=7/7, min/avg/max=2520.8/15478.5/17639.2ms, arrival_span=15118.4ms
+[TTFT] BS=7, PL=1856, repeat=2, task=1/7, ttft=17633.80ms
+[TTFT] BS=7, PL=1856, repeat=2, task=2/7, ttft=17633.63ms
+[TTFT] BS=7, PL=1856, repeat=2, task=3/7, ttft=2511.84ms
+[TTFT] BS=7, PL=1856, repeat=2, task=4/7, ttft=17633.68ms
+[TTFT] BS=7, PL=1856, repeat=2, task=5/7, ttft=17633.58ms
+[TTFT] BS=7, PL=1856, repeat=2, task=6/7, ttft=17633.48ms
+[TTFT] BS=7, PL=1856, repeat=2, task=7/7, ttft=17633.34ms
+[INFO] Repeat TTFT stats: BS=7, PL=1856, repeat=2, valid=7/7, min/avg/max=2511.8/15473.3/17633.8ms, arrival_span=15122.0ms
+[TTFT] BS=7, PL=1856, repeat=3, task=1/7, ttft=17625.37ms
+[TTFT] BS=7, PL=1856, repeat=3, task=2/7, ttft=2511.65ms
+[TTFT] BS=7, PL=1856, repeat=3, task=3/7, ttft=17625.12ms
+[TTFT] BS=7, PL=1856, repeat=3, task=4/7, ttft=17625.02ms
+[TTFT] BS=7, PL=1856, repeat=3, task=5/7, ttft=17624.93ms
+[TTFT] BS=7, PL=1856, repeat=3, task=6/7, ttft=17624.85ms
+[TTFT] BS=7, PL=1856, repeat=3, task=7/7, ttft=17624.72ms
+[INFO] Repeat TTFT stats: BS=7, PL=1856, repeat=3, valid=7/7, min/avg/max=2511.6/15466.0/17625.4ms, arrival_span=15113.7ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 10073.79 ms (3 samples)
+
+[80/88] Testing: BatchSize=7, PromptLen=2112 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=7, PromptLen=2112 (x3)
+[TTFT] BS=7, PL=2112, repeat=1, task=1/7, ttft=19991.62ms
+[TTFT] BS=7, PL=2112, repeat=1, task=2/7, ttft=19991.38ms
+[TTFT] BS=7, PL=2112, repeat=1, task=3/7, ttft=19991.25ms
+[TTFT] BS=7, PL=2112, repeat=1, task=4/7, ttft=19990.86ms
+[TTFT] BS=7, PL=2112, repeat=1, task=5/7, ttft=2853.71ms
+[TTFT] BS=7, PL=2112, repeat=1, task=6/7, ttft=19990.92ms
+[TTFT] BS=7, PL=2112, repeat=1, task=7/7, ttft=19990.80ms
+[INFO] Repeat TTFT stats: BS=7, PL=2112, repeat=1, valid=7/7, min/avg/max=2853.7/17542.9/19991.6ms, arrival_span=17137.9ms
+[TTFT] BS=7, PL=2112, repeat=2, task=1/7, ttft=19890.92ms
+[TTFT] BS=7, PL=2112, repeat=2, task=2/7, ttft=19890.85ms
+[TTFT] BS=7, PL=2112, repeat=2, task=3/7, ttft=2824.89ms
+[TTFT] BS=7, PL=2112, repeat=2, task=4/7, ttft=19890.62ms
+[TTFT] BS=7, PL=2112, repeat=2, task=5/7, ttft=19890.54ms
+[TTFT] BS=7, PL=2112, repeat=2, task=6/7, ttft=19890.46ms
+[TTFT] BS=7, PL=2112, repeat=2, task=7/7, ttft=19890.31ms
+[INFO] Repeat TTFT stats: BS=7, PL=2112, repeat=2, valid=7/7, min/avg/max=2824.9/17452.7/19890.9ms, arrival_span=17066.0ms
+[TTFT] BS=7, PL=2112, repeat=3, task=1/7, ttft=19903.90ms
+[TTFT] BS=7, PL=2112, repeat=3, task=2/7, ttft=19903.71ms
+[TTFT] BS=7, PL=2112, repeat=3, task=3/7, ttft=19903.54ms
+[TTFT] BS=7, PL=2112, repeat=3, task=4/7, ttft=2826.62ms
+[TTFT] BS=7, PL=2112, repeat=3, task=5/7, ttft=19903.26ms
+[TTFT] BS=7, PL=2112, repeat=3, task=6/7, ttft=19903.13ms
+[TTFT] BS=7, PL=2112, repeat=3, task=7/7, ttft=19902.96ms
+[INFO] Repeat TTFT stats: BS=7, PL=2112, repeat=3, valid=7/7, min/avg/max=2826.6/17463.9/19903.9ms, arrival_span=17077.3ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 11381.94 ms (3 samples)
+
+[81/88] Testing: BatchSize=8, PromptLen=64 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=8, PromptLen=64 (x3)
+[TTFT] BS=8, PL=64, repeat=1, task=1/8, ttft=728.86ms
+[TTFT] BS=8, PL=64, repeat=1, task=2/8, ttft=87.47ms
+[TTFT] BS=8, PL=64, repeat=1, task=3/8, ttft=728.54ms
+[TTFT] BS=8, PL=64, repeat=1, task=4/8, ttft=728.06ms
+[TTFT] BS=8, PL=64, repeat=1, task=5/8, ttft=728.38ms
+[TTFT] BS=8, PL=64, repeat=1, task=6/8, ttft=728.26ms
+[TTFT] BS=8, PL=64, repeat=1, task=7/8, ttft=728.14ms
+[TTFT] BS=8, PL=64, repeat=1, task=8/8, ttft=728.20ms
+[INFO] Repeat TTFT stats: BS=8, PL=64, repeat=1, valid=8/8, min/avg/max=87.5/648.2/728.9ms, arrival_span=641.4ms
+[TTFT] BS=8, PL=64, repeat=2, task=1/8, ttft=656.73ms
+[TTFT] BS=8, PL=64, repeat=2, task=2/8, ttft=722.47ms
+[TTFT] BS=8, PL=64, repeat=2, task=3/8, ttft=656.02ms
+[TTFT] BS=8, PL=64, repeat=2, task=4/8, ttft=656.22ms
+[TTFT] BS=8, PL=64, repeat=2, task=5/8, ttft=656.18ms
+[TTFT] BS=8, PL=64, repeat=2, task=6/8, ttft=656.15ms
+[TTFT] BS=8, PL=64, repeat=2, task=7/8, ttft=656.10ms
+[TTFT] BS=8, PL=64, repeat=2, task=8/8, ttft=656.06ms
+[INFO] Repeat TTFT stats: BS=8, PL=64, repeat=2, valid=8/8, min/avg/max=656.0/664.5/722.5ms, arrival_span=66.5ms
+[TTFT] BS=8, PL=64, repeat=3, task=1/8, ttft=723.34ms
+[TTFT] BS=8, PL=64, repeat=3, task=2/8, ttft=723.04ms
+[TTFT] BS=8, PL=64, repeat=3, task=3/8, ttft=722.90ms
+[TTFT] BS=8, PL=64, repeat=3, task=4/8, ttft=84.68ms
+[TTFT] BS=8, PL=64, repeat=3, task=5/8, ttft=722.64ms
+[TTFT] BS=8, PL=64, repeat=3, task=6/8, ttft=722.54ms
+[TTFT] BS=8, PL=64, repeat=3, task=7/8, ttft=722.46ms
+[TTFT] BS=8, PL=64, repeat=3, task=8/8, ttft=721.95ms
+[INFO] Repeat TTFT stats: BS=8, PL=64, repeat=3, valid=8/8, min/avg/max=84.7/642.9/723.3ms, arrival_span=638.7ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 500.48 ms (3 samples)
+
+[82/88] Testing: BatchSize=8, PromptLen=320 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=8, PromptLen=320 (x3)
+[TTFT] BS=8, PL=320, repeat=1, task=1/8, ttft=3489.38ms
+[TTFT] BS=8, PL=320, repeat=1, task=2/8, ttft=3488.95ms
+[TTFT] BS=8, PL=320, repeat=1, task=3/8, ttft=3488.83ms
+[TTFT] BS=8, PL=320, repeat=1, task=4/8, ttft=405.35ms
+[TTFT] BS=8, PL=320, repeat=1, task=5/8, ttft=3488.68ms
+[TTFT] BS=8, PL=320, repeat=1, task=6/8, ttft=3488.60ms
+[TTFT] BS=8, PL=320, repeat=1, task=7/8, ttft=3488.36ms
+[TTFT] BS=8, PL=320, repeat=1, task=8/8, ttft=3488.48ms
+[INFO] Repeat TTFT stats: BS=8, PL=320, repeat=1, valid=8/8, min/avg/max=405.4/3103.3/3489.4ms, arrival_span=3084.0ms
+[TTFT] BS=8, PL=320, repeat=2, task=1/8, ttft=3086.89ms
+[TTFT] BS=8, PL=320, repeat=2, task=2/8, ttft=3520.35ms
+[TTFT] BS=8, PL=320, repeat=2, task=3/8, ttft=3086.14ms
+[TTFT] BS=8, PL=320, repeat=2, task=4/8, ttft=3086.35ms
+[TTFT] BS=8, PL=320, repeat=2, task=5/8, ttft=3086.32ms
+[TTFT] BS=8, PL=320, repeat=2, task=6/8, ttft=3086.27ms
+[TTFT] BS=8, PL=320, repeat=2, task=7/8, ttft=3086.24ms
+[TTFT] BS=8, PL=320, repeat=2, task=8/8, ttft=3086.19ms
+[INFO] Repeat TTFT stats: BS=8, PL=320, repeat=2, valid=8/8, min/avg/max=3086.1/3140.6/3520.4ms, arrival_span=434.2ms
+[TTFT] BS=8, PL=320, repeat=3, task=1/8, ttft=3501.91ms
+[TTFT] BS=8, PL=320, repeat=3, task=2/8, ttft=3501.68ms
+[TTFT] BS=8, PL=320, repeat=3, task=3/8, ttft=3501.58ms
+[TTFT] BS=8, PL=320, repeat=3, task=4/8, ttft=3501.51ms
+[TTFT] BS=8, PL=320, repeat=3, task=5/8, ttft=405.27ms
+[TTFT] BS=8, PL=320, repeat=3, task=6/8, ttft=3501.37ms
+[TTFT] BS=8, PL=320, repeat=3, task=7/8, ttft=3501.30ms
+[TTFT] BS=8, PL=320, repeat=3, task=8/8, ttft=3501.02ms
+[INFO] Repeat TTFT stats: BS=8, PL=320, repeat=3, valid=8/8, min/avg/max=405.3/3114.5/3501.9ms, arrival_span=3096.6ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 2401.40 ms (3 samples)
+
+[83/88] Testing: BatchSize=8, PromptLen=576 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=8, PromptLen=576 (x3)
+[TTFT] BS=8, PL=576, repeat=1, task=1/8, ttft=6243.16ms
+[TTFT] BS=8, PL=576, repeat=1, task=2/8, ttft=6242.96ms
+[TTFT] BS=8, PL=576, repeat=1, task=3/8, ttft=6242.90ms
+[TTFT] BS=8, PL=576, repeat=1, task=4/8, ttft=6242.87ms
+[TTFT] BS=8, PL=576, repeat=1, task=5/8, ttft=6242.82ms
+[TTFT] BS=8, PL=576, repeat=1, task=6/8, ttft=6242.74ms
+[TTFT] BS=8, PL=576, repeat=1, task=7/8, ttft=6242.39ms
+[TTFT] BS=8, PL=576, repeat=1, task=8/8, ttft=757.82ms
+[INFO] Repeat TTFT stats: BS=8, PL=576, repeat=1, valid=8/8, min/avg/max=757.8/5557.2/6243.2ms, arrival_span=5485.3ms
+[TTFT] BS=8, PL=576, repeat=2, task=1/8, ttft=6237.34ms
+[TTFT] BS=8, PL=576, repeat=2, task=2/8, ttft=6237.23ms
+[TTFT] BS=8, PL=576, repeat=2, task=3/8, ttft=775.11ms
+[TTFT] BS=8, PL=576, repeat=2, task=4/8, ttft=6237.06ms
+[TTFT] BS=8, PL=576, repeat=2, task=5/8, ttft=6237.00ms
+[TTFT] BS=8, PL=576, repeat=2, task=6/8, ttft=6236.93ms
+[TTFT] BS=8, PL=576, repeat=2, task=7/8, ttft=6236.87ms
+[TTFT] BS=8, PL=576, repeat=2, task=8/8, ttft=6236.75ms
+[INFO] Repeat TTFT stats: BS=8, PL=576, repeat=2, valid=8/8, min/avg/max=775.1/5554.3/6237.3ms, arrival_span=5462.2ms
+[TTFT] BS=8, PL=576, repeat=3, task=1/8, ttft=6242.67ms
+[TTFT] BS=8, PL=576, repeat=3, task=2/8, ttft=6242.73ms
+[TTFT] BS=8, PL=576, repeat=3, task=3/8, ttft=6242.68ms
+[TTFT] BS=8, PL=576, repeat=3, task=4/8, ttft=6242.66ms
+[TTFT] BS=8, PL=576, repeat=3, task=5/8, ttft=6242.62ms
+[TTFT] BS=8, PL=576, repeat=3, task=6/8, ttft=6242.59ms
+[TTFT] BS=8, PL=576, repeat=3, task=7/8, ttft=761.35ms
+[TTFT] BS=8, PL=576, repeat=3, task=8/8, ttft=6242.42ms
+[INFO] Repeat TTFT stats: BS=8, PL=576, repeat=3, valid=8/8, min/avg/max=761.4/5557.5/6242.7ms, arrival_span=5481.4ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 3502.92 ms (3 samples)
+
+[84/88] Testing: BatchSize=8, PromptLen=832 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=8, PromptLen=832 (x3)
+[TTFT] BS=8, PL=832, repeat=1, task=1/8, ttft=9075.98ms
+[TTFT] BS=8, PL=832, repeat=1, task=2/8, ttft=9075.73ms
+[TTFT] BS=8, PL=832, repeat=1, task=3/8, ttft=9075.63ms
+[TTFT] BS=8, PL=832, repeat=1, task=4/8, ttft=1143.39ms
+[TTFT] BS=8, PL=832, repeat=1, task=5/8, ttft=9075.15ms
+[TTFT] BS=8, PL=832, repeat=1, task=6/8, ttft=9075.41ms
+[TTFT] BS=8, PL=832, repeat=1, task=7/8, ttft=9075.22ms
+[TTFT] BS=8, PL=832, repeat=1, task=8/8, ttft=9075.24ms
+[INFO] Repeat TTFT stats: BS=8, PL=832, repeat=1, valid=8/8, min/avg/max=1143.4/8084.0/9076.0ms, arrival_span=7932.6ms
+[TTFT] BS=8, PL=832, repeat=2, task=1/8, ttft=9067.89ms
+[TTFT] BS=8, PL=832, repeat=2, task=2/8, ttft=9068.02ms
+[TTFT] BS=8, PL=832, repeat=2, task=3/8, ttft=9067.96ms
+[TTFT] BS=8, PL=832, repeat=2, task=4/8, ttft=9067.90ms
+[TTFT] BS=8, PL=832, repeat=2, task=5/8, ttft=9067.84ms
+[TTFT] BS=8, PL=832, repeat=2, task=6/8, ttft=1139.26ms
+[TTFT] BS=8, PL=832, repeat=2, task=7/8, ttft=9067.74ms
+[TTFT] BS=8, PL=832, repeat=2, task=8/8, ttft=9067.62ms
+[INFO] Repeat TTFT stats: BS=8, PL=832, repeat=2, valid=8/8, min/avg/max=1139.3/8076.8/9068.0ms, arrival_span=7928.8ms
+[TTFT] BS=8, PL=832, repeat=3, task=1/8, ttft=9077.54ms
+[TTFT] BS=8, PL=832, repeat=3, task=2/8, ttft=9077.55ms
+[TTFT] BS=8, PL=832, repeat=3, task=3/8, ttft=9077.47ms
+[TTFT] BS=8, PL=832, repeat=3, task=4/8, ttft=9077.41ms
+[TTFT] BS=8, PL=832, repeat=3, task=5/8, ttft=9077.36ms
+[TTFT] BS=8, PL=832, repeat=3, task=6/8, ttft=1133.38ms
+[TTFT] BS=8, PL=832, repeat=3, task=7/8, ttft=9077.26ms
+[TTFT] BS=8, PL=832, repeat=3, task=8/8, ttft=9077.16ms
+[INFO] Repeat TTFT stats: BS=8, PL=832, repeat=3, valid=8/8, min/avg/max=1133.4/8084.4/9077.6ms, arrival_span=7944.2ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 5106.27 ms (3 samples)
+
+[85/88] Testing: BatchSize=8, PromptLen=1088 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=8, PromptLen=1088 (x3)
+[TTFT] BS=8, PL=1088, repeat=1, task=1/8, ttft=11818.57ms
+[TTFT] BS=8, PL=1088, repeat=1, task=2/8, ttft=1476.71ms
+[TTFT] BS=8, PL=1088, repeat=1, task=3/8, ttft=11818.27ms
+[TTFT] BS=8, PL=1088, repeat=1, task=4/8, ttft=11818.20ms
+[TTFT] BS=8, PL=1088, repeat=1, task=5/8, ttft=11817.93ms
+[TTFT] BS=8, PL=1088, repeat=1, task=6/8, ttft=11818.06ms
+[TTFT] BS=8, PL=1088, repeat=1, task=7/8, ttft=11817.96ms
+[TTFT] BS=8, PL=1088, repeat=1, task=8/8, ttft=11817.92ms
+[INFO] Repeat TTFT stats: BS=8, PL=1088, repeat=1, valid=8/8, min/avg/max=1476.7/10525.5/11818.6ms, arrival_span=10341.9ms
+[TTFT] BS=8, PL=1088, repeat=2, task=1/8, ttft=11807.90ms
+[TTFT] BS=8, PL=1088, repeat=2, task=2/8, ttft=11807.94ms
+[TTFT] BS=8, PL=1088, repeat=2, task=3/8, ttft=11807.89ms
+[TTFT] BS=8, PL=1088, repeat=2, task=4/8, ttft=11807.84ms
+[TTFT] BS=8, PL=1088, repeat=2, task=5/8, ttft=11807.82ms
+[TTFT] BS=8, PL=1088, repeat=2, task=6/8, ttft=11807.77ms
+[TTFT] BS=8, PL=1088, repeat=2, task=7/8, ttft=1479.16ms
+[TTFT] BS=8, PL=1088, repeat=2, task=8/8, ttft=11807.61ms
+[INFO] Repeat TTFT stats: BS=8, PL=1088, repeat=2, valid=8/8, min/avg/max=1479.2/10516.7/11807.9ms, arrival_span=10328.8ms
+[TTFT] BS=8, PL=1088, repeat=3, task=1/8, ttft=11804.68ms
+[TTFT] BS=8, PL=1088, repeat=3, task=2/8, ttft=11804.57ms
+[TTFT] BS=8, PL=1088, repeat=3, task=3/8, ttft=11804.46ms
+[TTFT] BS=8, PL=1088, repeat=3, task=4/8, ttft=11804.38ms
+[TTFT] BS=8, PL=1088, repeat=3, task=5/8, ttft=1469.37ms
+[TTFT] BS=8, PL=1088, repeat=3, task=6/8, ttft=11804.23ms
+[TTFT] BS=8, PL=1088, repeat=3, task=7/8, ttft=11804.16ms
+[TTFT] BS=8, PL=1088, repeat=3, task=8/8, ttft=11804.09ms
+[INFO] Repeat TTFT stats: BS=8, PL=1088, repeat=3, valid=8/8, min/avg/max=1469.4/10512.5/11804.7ms, arrival_span=10335.3ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 6642.74 ms (3 samples)
+
+[86/88] Testing: BatchSize=8, PromptLen=1344 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=8, PromptLen=1344 (x3)
+[TTFT] BS=8, PL=1344, repeat=1, task=1/8, ttft=14456.01ms
+[TTFT] BS=8, PL=1344, repeat=1, task=2/8, ttft=14455.61ms
+[TTFT] BS=8, PL=1344, repeat=1, task=3/8, ttft=14455.50ms
+[TTFT] BS=8, PL=1344, repeat=1, task=4/8, ttft=1785.26ms
+[TTFT] BS=8, PL=1344, repeat=1, task=5/8, ttft=14455.03ms
+[TTFT] BS=8, PL=1344, repeat=1, task=6/8, ttft=14455.19ms
+[TTFT] BS=8, PL=1344, repeat=1, task=7/8, ttft=14455.08ms
+[TTFT] BS=8, PL=1344, repeat=1, task=8/8, ttft=14454.97ms
+[INFO] Repeat TTFT stats: BS=8, PL=1344, repeat=1, valid=8/8, min/avg/max=1785.3/12871.6/14456.0ms, arrival_span=12670.7ms
+[TTFT] BS=8, PL=1344, repeat=2, task=1/8, ttft=14464.49ms
+[TTFT] BS=8, PL=1344, repeat=2, task=2/8, ttft=14464.41ms
+[TTFT] BS=8, PL=1344, repeat=2, task=3/8, ttft=1792.06ms
+[TTFT] BS=8, PL=1344, repeat=2, task=4/8, ttft=14464.22ms
+[TTFT] BS=8, PL=1344, repeat=2, task=5/8, ttft=14464.16ms
+[TTFT] BS=8, PL=1344, repeat=2, task=6/8, ttft=14464.09ms
+[TTFT] BS=8, PL=1344, repeat=2, task=7/8, ttft=14464.02ms
+[TTFT] BS=8, PL=1344, repeat=2, task=8/8, ttft=14463.96ms
+[INFO] Repeat TTFT stats: BS=8, PL=1344, repeat=2, valid=8/8, min/avg/max=1792.1/12880.2/14464.5ms, arrival_span=12672.4ms
+[TTFT] BS=8, PL=1344, repeat=3, task=1/8, ttft=14468.79ms
+[TTFT] BS=8, PL=1344, repeat=3, task=2/8, ttft=14468.82ms
+[TTFT] BS=8, PL=1344, repeat=3, task=3/8, ttft=14468.76ms
+[TTFT] BS=8, PL=1344, repeat=3, task=4/8, ttft=14468.68ms
+[TTFT] BS=8, PL=1344, repeat=3, task=5/8, ttft=14468.61ms
+[TTFT] BS=8, PL=1344, repeat=3, task=6/8, ttft=14468.55ms
+[TTFT] BS=8, PL=1344, repeat=3, task=7/8, ttft=1787.64ms
+[TTFT] BS=8, PL=1344, repeat=3, task=8/8, ttft=14468.30ms
+[INFO] Repeat TTFT stats: BS=8, PL=1344, repeat=3, valid=8/8, min/avg/max=1787.6/12883.5/14468.8ms, arrival_span=12681.2ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 8125.72 ms (3 samples)
+
+[87/88] Testing: BatchSize=8, PromptLen=1600 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=8, PromptLen=1600 (x3)
+[TTFT] BS=8, PL=1600, repeat=1, task=1/8, ttft=17221.07ms
+[TTFT] BS=8, PL=1600, repeat=1, task=2/8, ttft=17220.73ms
+[TTFT] BS=8, PL=1600, repeat=1, task=3/8, ttft=17220.64ms
+[TTFT] BS=8, PL=1600, repeat=1, task=4/8, ttft=17220.56ms
+[TTFT] BS=8, PL=1600, repeat=1, task=5/8, ttft=2133.41ms
+[TTFT] BS=8, PL=1600, repeat=1, task=6/8, ttft=17220.40ms
+[TTFT] BS=8, PL=1600, repeat=1, task=7/8, ttft=17220.19ms
+[TTFT] BS=8, PL=1600, repeat=1, task=8/8, ttft=17219.78ms
+[INFO] Repeat TTFT stats: BS=8, PL=1600, repeat=1, valid=8/8, min/avg/max=2133.4/15334.6/17221.1ms, arrival_span=15087.6ms
+[TTFT] BS=8, PL=1600, repeat=2, task=1/8, ttft=17212.77ms
+[TTFT] BS=8, PL=1600, repeat=2, task=2/8, ttft=17212.52ms
+[TTFT] BS=8, PL=1600, repeat=2, task=3/8, ttft=17212.41ms
+[TTFT] BS=8, PL=1600, repeat=2, task=4/8, ttft=17212.32ms
+[TTFT] BS=8, PL=1600, repeat=2, task=5/8, ttft=17212.23ms
+[TTFT] BS=8, PL=1600, repeat=2, task=6/8, ttft=2135.39ms
+[TTFT] BS=8, PL=1600, repeat=2, task=7/8, ttft=17212.07ms
+[TTFT] BS=8, PL=1600, repeat=2, task=8/8, ttft=17211.82ms
+[INFO] Repeat TTFT stats: BS=8, PL=1600, repeat=2, valid=8/8, min/avg/max=2135.4/15327.7/17212.8ms, arrival_span=15077.4ms
+[TTFT] BS=8, PL=1600, repeat=3, task=1/8, ttft=2137.42ms
+[TTFT] BS=8, PL=1600, repeat=3, task=2/8, ttft=17229.76ms
+[TTFT] BS=8, PL=1600, repeat=3, task=3/8, ttft=17229.84ms
+[TTFT] BS=8, PL=1600, repeat=3, task=4/8, ttft=17229.79ms
+[TTFT] BS=8, PL=1600, repeat=3, task=5/8, ttft=17229.73ms
+[TTFT] BS=8, PL=1600, repeat=3, task=6/8, ttft=17229.67ms
+[TTFT] BS=8, PL=1600, repeat=3, task=7/8, ttft=17229.63ms
+[TTFT] BS=8, PL=1600, repeat=3, task=8/8, ttft=17229.56ms
+[INFO] Repeat TTFT stats: BS=8, PL=1600, repeat=3, valid=8/8, min/avg/max=2137.4/15343.2/17229.8ms, arrival_span=15092.4ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 9678.32 ms (3 samples)
+
+[88/88] Testing: BatchSize=8, PromptLen=1856 ...--- 🚀 Triggering Warmup Requests ---
+[INFO] Configs: 1, Repeats: 3
+   >> Firing: BatchSize=8, PromptLen=1856 (x3)
+[TTFT] BS=8, PL=1856, repeat=1, task=1/8, ttft=19971.03ms
+[TTFT] BS=8, PL=1856, repeat=1, task=2/8, ttft=19970.76ms
+[TTFT] BS=8, PL=1856, repeat=1, task=3/8, ttft=19970.66ms
+[TTFT] BS=8, PL=1856, repeat=1, task=4/8, ttft=2498.56ms
+[TTFT] BS=8, PL=1856, repeat=1, task=5/8, ttft=19970.36ms
+[TTFT] BS=8, PL=1856, repeat=1, task=6/8, ttft=19969.94ms
+[TTFT] BS=8, PL=1856, repeat=1, task=7/8, ttft=19970.23ms
+[TTFT] BS=8, PL=1856, repeat=1, task=8/8, ttft=19970.23ms
+[INFO] Repeat TTFT stats: BS=8, PL=1856, repeat=1, valid=8/8, min/avg/max=2498.6/17786.5/19971.0ms, arrival_span=17472.5ms
+[TTFT] BS=8, PL=1856, repeat=2, task=1/8, ttft=20053.68ms
+[TTFT] BS=8, PL=1856, repeat=2, task=2/8, ttft=20053.56ms
+[TTFT] BS=8, PL=1856, repeat=2, task=3/8, ttft=20053.45ms
+[TTFT] BS=8, PL=1856, repeat=2, task=4/8, ttft=20053.35ms
+[TTFT] BS=8, PL=1856, repeat=2, task=5/8, ttft=2491.15ms
+[TTFT] BS=8, PL=1856, repeat=2, task=6/8, ttft=20053.16ms
+[TTFT] BS=8, PL=1856, repeat=2, task=7/8, ttft=20053.08ms
+[TTFT] BS=8, PL=1856, repeat=2, task=8/8, ttft=20052.97ms
+[INFO] Repeat TTFT stats: BS=8, PL=1856, repeat=2, valid=8/8, min/avg/max=2491.2/17858.0/20053.7ms, arrival_span=17562.5ms
+[TTFT] BS=8, PL=1856, repeat=3, task=1/8, ttft=20111.60ms
+[TTFT] BS=8, PL=1856, repeat=3, task=2/8, ttft=20111.66ms
+[TTFT] BS=8, PL=1856, repeat=3, task=3/8, ttft=20111.57ms
+[TTFT] BS=8, PL=1856, repeat=3, task=4/8, ttft=20111.48ms
+[TTFT] BS=8, PL=1856, repeat=3, task=5/8, ttft=20111.43ms
+[TTFT] BS=8, PL=1856, repeat=3, task=6/8, ttft=2508.84ms
+[TTFT] BS=8, PL=1856, repeat=3, task=7/8, ttft=20111.28ms
+[TTFT] BS=8, PL=1856, repeat=3, task=8/8, ttft=20111.15ms
+[INFO] Repeat TTFT stats: BS=8, PL=1856, repeat=3, valid=8/8, min/avg/max=2508.8/17911.1/20111.7ms, arrival_span=17602.8ms
+
+--- 🏁 All Warmup Requests Sent ---
+[INFO] Warmup TTFT data collected from request responses.
+ Done. Avg TTFT: 11272.49 ms (3 samples)
+
+[Detailed Warmup] All tests finished. Total points: 264. Fitting model...
+
+--- 📊 Data Collection Summary ---
+   Config (BS=1, PL=64): Count=3, Avg=319.86ms (Min=78.2, Max=801.1)
+   Config (BS=1, PL=320): Count=3, Avg=421.01ms (Min=398.4, Max=461.3)
+   Config (BS=1, PL=576): Count=3, Avg=770.97ms (Min=767.5, Max=773.2)
+   Config (BS=1, PL=832): Count=3, Avg=1126.68ms (Min=1125.2, Max=1129.2)
+   Config (BS=1, PL=1088): Count=3, Avg=1469.11ms (Min=1463.7, Max=1472.8)
+   Config (BS=1, PL=1344): Count=3, Avg=1789.63ms (Min=1787.0, Max=1792.6)
+   Config (BS=1, PL=1600): Count=3, Avg=2132.20ms (Min=2131.2, Max=2133.6)
+   Config (BS=1, PL=1856): Count=3, Avg=2487.86ms (Min=2486.5, Max=2489.5)
+   Config (BS=1, PL=2112): Count=3, Avg=2824.99ms (Min=2819.8, Max=2831.1)
+   Config (BS=1, PL=2368): Count=3, Avg=3155.30ms (Min=3152.6, Max=3157.0)
+   Config (BS=1, PL=2624): Count=3, Avg=3518.28ms (Min=3514.2, Max=3522.6)
+   Config (BS=1, PL=2880): Count=3, Avg=3855.28ms (Min=3847.5, Max=3859.9)
+   Config (BS=2, PL=64): Count=3, Avg=112.92ms (Min=110.8, Max=115.9)
+   Config (BS=2, PL=320): Count=3, Avg=684.46ms (Min=596.6, Max=858.5)
+   Config (BS=2, PL=576): Count=3, Avg=1156.90ms (Min=1152.0, Max=1159.5)
+   Config (BS=2, PL=832): Count=3, Avg=2271.60ms (Min=2270.1, Max=2273.9)
+   Config (BS=2, PL=1088): Count=3, Avg=2224.13ms (Min=2223.2, Max=2225.7)
+   Config (BS=2, PL=1344): Count=3, Avg=2709.04ms (Min=2702.4, Max=2721.5)
+   Config (BS=2, PL=1600): Count=3, Avg=3586.20ms (Min=3228.1, Max=4302.1)
+   Config (BS=2, PL=1856): Count=3, Avg=4165.61ms (Min=3742.6, Max=5003.5)
+   Config (BS=2, PL=2112): Count=3, Avg=4267.53ms (Min=4248.7, Max=4277.3)
+   Config (BS=2, PL=2368): Count=3, Avg=4757.38ms (Min=4747.2, Max=4766.1)
+   Config (BS=2, PL=2624): Count=3, Avg=5887.32ms (Min=5280.4, Max=7069.1)
+   Config (BS=2, PL=2880): Count=3, Avg=7069.64ms (Min=5785.6, Max=7727.5)
+   Config (BS=3, PL=64): Count=3, Avg=172.66ms (Min=146.0, Max=223.3)
+   Config (BS=3, PL=320): Count=3, Avg=833.16ms (Min=829.8, Max=839.6)
+   Config (BS=3, PL=576): Count=3, Avg=1686.59ms (Min=1551.9, Max=1954.5)
+   Config (BS=3, PL=832): Count=3, Avg=2276.25ms (Min=2268.2, Max=2283.8)
+   Config (BS=3, PL=1088): Count=3, Avg=3422.40ms (Min=2939.1, Max=4385.0)
+   Config (BS=3, PL=1344): Count=3, Avg=4218.22ms (Min=3611.1, Max=5424.5)
+   Config (BS=3, PL=1600): Count=3, Avg=5039.05ms (Min=4320.2, Max=6467.7)
+   Config (BS=3, PL=1856): Count=3, Avg=5045.18ms (Min=5039.3, Max=5052.2)
+   Config (BS=3, PL=2112): Count=3, Avg=6217.87ms (Min=5731.8, Max=7173.4)
+   Config (BS=3, PL=2368): Count=3, Avg=7414.59ms (Min=6349.5, Max=9542.2)
+   Config (BS=3, PL=2624): Count=3, Avg=7092.61ms (Min=7080.0, Max=7104.5)
+   Config (BS=3, PL=2880): Count=3, Avg=10332.53ms (Min=7769.1, Max=11630.9)
+   Config (BS=4, PL=64): Count=3, Avg=189.48ms (Min=186.5, Max=193.7)
+   Config (BS=4, PL=320): Count=3, Avg=1218.33ms (Min=1069.2, Max=1297.5)
+   Config (BS=4, PL=576): Count=3, Avg=1953.43ms (Min=1947.5, Max=1961.0)
+   Config (BS=4, PL=832): Count=3, Avg=3021.69ms (Min=2824.2, Max=3415.4)
+   Config (BS=4, PL=1088): Count=3, Avg=4419.81ms (Min=3687.8, Max=5877.3)
+   Config (BS=4, PL=1344): Count=3, Avg=4509.03ms (Min=4492.7, Max=4518.9)
+   Config (BS=4, PL=1600): Count=3, Avg=5366.33ms (Min=5353.1, Max=5375.9)
+   Config (BS=4, PL=1856): Count=3, Avg=7487.40ms (Min=6239.7, Max=9979.5)
+   Config (BS=4, PL=2112): Count=3, Avg=8511.73ms (Min=7100.3, Max=11328.3)
+   Config (BS=4, PL=2368): Count=3, Avg=8529.72ms (Min=7961.8, Max=9629.4)
+   Config (BS=4, PL=2624): Count=3, Avg=10710.12ms (Min=8886.7, Max=12518.4)
+   Config (BS=4, PL=2880): Count=3, Avg=11616.07ms (Min=9689.7, Max=15453.9)
+   Config (BS=5, PL=64): Count=3, Avg=251.55ms (Min=249.1, Max=255.7)
+   Config (BS=5, PL=320): Count=3, Avg=1360.31ms (Min=1272.1, Max=1533.8)
+   Config (BS=5, PL=576): Count=3, Avg=2996.07ms (Min=2326.4, Max=3914.9)
+   Config (BS=5, PL=832): Count=3, Avg=3782.51ms (Min=3388.5, Max=4557.6)
+   Config (BS=5, PL=1088): Count=3, Avg=5424.62ms (Min=4438.6, Max=6681.2)
+   Config (BS=5, PL=1344): Count=3, Avg=6635.93ms (Min=5415.0, Max=9067.8)
+   Config (BS=5, PL=1600): Count=3, Avg=10425.21ms (Min=9779.9, Max=10751.6)
+   Config (BS=5, PL=1856): Count=3, Avg=8371.66ms (Min=7518.0, Max=10075.0)
+   Config (BS=5, PL=2112): Count=3, Avg=8531.17ms (Min=8525.7, Max=8535.2)
+   Config (BS=5, PL=2368): Count=3, Avg=9615.14ms (Min=9583.4, Max=9642.9)
+   Config (BS=5, PL=2624): Count=3, Avg=10657.75ms (Min=10604.6, Max=10691.0)
+   Config (BS=5, PL=2880): Count=3, Avg=13597.87ms (Min=11613.3, Max=15596.9)
+   Config (BS=6, PL=64): Count=3, Avg=313.81ms (Min=302.3, Max=332.9)
+   Config (BS=6, PL=320): Count=3, Avg=1660.48ms (Min=1497.1, Max=1742.2)
+   Config (BS=6, PL=576): Count=3, Avg=3559.83ms (Min=2728.8, Max=4380.7)
+   Config (BS=6, PL=832): Count=3, Avg=3958.68ms (Min=3950.0, Max=3965.8)
+   Config (BS=6, PL=1088): Count=3, Avg=5420.85ms (Min=5159.8, Max=5941.5)
+   Config (BS=6, PL=1344): Count=3, Avg=6333.37ms (Min=6323.6, Max=6347.9)
+   Config (BS=6, PL=1600): Count=3, Avg=7541.66ms (Min=7518.3, Max=7560.9)
+   Config (BS=6, PL=1856): Count=3, Avg=8745.98ms (Min=8741.4, Max=8755.0)
+   Config (BS=6, PL=2112): Count=3, Avg=10038.79ms (Min=10025.7, Max=10055.3)
+   Config (BS=6, PL=2368): Count=3, Avg=11173.15ms (Min=11142.5, Max=11227.3)
+   Config (BS=6, PL=2624): Count=3, Avg=12377.44ms (Min=12366.4, Max=12384.4)
+   Config (BS=7, PL=64): Count=3, Avg=352.83ms (Min=348.8, Max=356.6)
+   Config (BS=7, PL=320): Count=3, Avg=1723.34ms (Min=1717.4, Max=1733.3)
+   Config (BS=7, PL=576): Count=3, Avg=3262.94ms (Min=3118.6, Max=3541.4)
+   Config (BS=7, PL=832): Count=3, Avg=5485.94ms (Min=4520.7, Max=7413.7)
+   Config (BS=7, PL=1088): Count=3, Avg=5914.51ms (Min=5902.6, Max=5934.5)
+   Config (BS=7, PL=1344): Count=3, Avg=7234.23ms (Min=7229.4, Max=7243.1)
+   Config (BS=7, PL=1600): Count=3, Avg=8627.40ms (Min=8611.3, Max=8650.1)
+   Config (BS=7, PL=1856): Count=3, Avg=10073.79ms (Min=10068.5, Max=10080.0)
+   Config (BS=7, PL=2112): Count=3, Avg=11381.94ms (Min=11357.9, Max=11422.7)
+   Config (BS=8, PL=64): Count=3, Avg=500.48ms (Min=404.0, Max=689.2)
+   Config (BS=8, PL=320): Count=3, Avg=2401.40ms (Min=1947.4, Max=3303.2)
+   Config (BS=8, PL=576): Count=3, Avg=3502.92ms (Min=3500.5, Max=3506.2)
+   Config (BS=8, PL=832): Count=3, Avg=5106.27ms (Min=5103.6, Max=5109.7)
+   Config (BS=8, PL=1088): Count=3, Avg=6642.74ms (Min=6637.0, Max=6647.6)
+   Config (BS=8, PL=1344): Count=3, Avg=8125.72ms (Min=8120.6, Max=8128.3)
+   Config (BS=8, PL=1600): Count=3, Avg=9678.32ms (Min=9674.1, Max=9683.6)
+   Config (BS=8, PL=1856): Count=3, Avg=11272.49ms (Min=11234.8, Max=11310.3)
+----------------------------------
+
+[Regressor] Fitting model with 264 samples...
+✅ Model fitted successfully.
+   Coeffs: a=6.69e-04, b=9.40e-04, c=2.02e-02, d=-0.073
+
+✅ [Detailed Warmup] Model calibrated.
+   a (B*L) = 6.69e-04
+   b (L)   = 9.40e-04
+   c (B)   = 2.02e-02
+   d (Int) = -0.073
+==================================================
+
+2026-04-07 04:15:58,301 - prefill_prediction_server - INFO - >>> [Background] 真实 Warmup 完成，模型已精确校准。
