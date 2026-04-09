@@ -1,0 +1,6 @@
+[check] python -m py_compile instance/TTFT_predictor/request_generator.py
+[check] mock tokenizer minimum-length validation
+target=1, actual=1, ok=True
+target=32, actual=65, ok=True
+target=128, actual=152, ok=True
+target=512, actual=533, ok=True
