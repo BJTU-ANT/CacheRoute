@@ -150,9 +150,8 @@ Python版本：3.12.11<br>
     curl http://127.0.0.1:8000/v1/models
     ```
 8. 进行准备工作，检查运行环境、预热调度器知识清单。首先，安装requirements.txt内的依赖库`python -m pip install -r requirements.txt`。
-9. 首先启动CacheRoute调度器，参数选项见/scheduler/README.md
+9. 首先进入test目录，启动CacheRoute调度器，参数选项见/scheduler/README.md
     ```
-    cd test
     python3 demo_scheduler.py --cacheroute --kdn-pending-overload-th 8 --kdn-active-overload-th 4 --kdn-queue-ms-overload-th 30 --cacheroute-log-decision 1
     ```
 10. 预热KDN服务器，运行`demo_kdn.py`，启动通过`kdn_api`KDN服务器。启用新终端运行kdn_server下`kdn_register_cli.py`，这是一个封装好的交互式接口，通过送入知识块文本完成文本以及KVCache块的注册，形成知识库。具体方法见`kdn_server/README.md`
