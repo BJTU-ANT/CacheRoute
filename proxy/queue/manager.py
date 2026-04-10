@@ -111,6 +111,54 @@ class QueueManager:
             total_s * 1000.0,
         )
 
+    async def _apply_idle_correction(self, task: ProxyTask, instance_id: str) -> None:
+        """
+        任务首 token 到达后，按“预测完成时延 vs 实际完成时延”纠正 expected_idle 时间戳。
+
+        规则：
+        - actual_total > predict_total  -> expected_idle 后移
+        - actual_total < predict_total  -> expected_idle 前移
+        """
+        pred_ms = task.trace.get("predict_total_ms")
+        actual_ms = task.trace.get("actual_total_ms")
+
+        correction_basis = "total"
+        # 兼容兜底：若 total 不可用，则退回 compute 口径
+        if not isinstance(pred_ms, int) or not isinstance(actual_ms, int):
+            pred_ms = task.trace.get("predict_compute_ms")
+            actual_ms = task.trace.get("actual_compute_ms")
+            correction_basis = "compute"
+
+        if not isinstance(pred_ms, int) or not isinstance(actual_ms, int):
+            return
+
+        correction_s = (actual_ms - pred_ms) / 1000.0
+        if correction_s == 0:
+            return
+        # 限幅，避免极端异常一次性把 expected_idle 拉飞
+        correction_s = max(-2.0, min(2.0, correction_s))
+
+        async with self._predict_lock:
+            now_s = time.time()
+            old_idle_s = self._instance_expected_idle_ts_s.get(instance_id, now_s)
+            new_idle_s = old_idle_s + correction_s
+            # 防止被过度前移到“过去很久”
+            new_idle_s = max(now_s, new_idle_s)
+            self._instance_expected_idle_ts_s[instance_id] = new_idle_s
+
+        task.trace["predict_correction_ms"] = int(correction_s * 1000)
+        task.trace["predict_expected_idle_corrected_ms"] = int(new_idle_s * 1000)
+        task.trace["predict_correction_basis"] = 1 if correction_basis == "total" else 0
+        logger.info(
+            "[Predict-Correct] rid=%s instance=%s basis=%s correction=%.2fms idle(old->new)=%.2f->%.2f ms",
+            task.request_id,
+            instance_id,
+            correction_basis,
+            correction_s * 1000.0,
+            old_idle_s * 1000.0,
+            new_idle_s * 1000.0,
+        )
+
     def ensure_workers_started(self, instance_ids: Optional[list[str]] = None) -> None:
         """
         启动 worker（只启动一次）。
@@ -359,6 +407,9 @@ class QueueManager:
                                 task.trace["actual_wait_ms"] = max(0, fwd_start_ms - enqueue_ms)
                             if isinstance(first_ms, int) and isinstance(fwd_start_ms, int):
                                 task.trace["actual_compute_ms"] = max(0, first_ms - fwd_start_ms)
+
+                            # 依据本次任务的预测-实际误差，动态纠正队列 expected_idle 时间戳
+                            await self._apply_idle_correction(task, instance_id)
 
                             logger.info(
                                 "[Timing] rid=%s instance=%s pred(total/wait/compute)=%s/%s/%s ms "
