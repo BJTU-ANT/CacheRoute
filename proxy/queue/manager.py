@@ -427,39 +427,47 @@ class QueueManager:
                         if not seen_first_chunk:
                             seen_first_chunk = True
                             task.trace["first_token_ms"] = _now_ms()
-                            # 实测时延拆分（从 proxy 入队时刻开始）：
-                            # actual_total = proxy_enqueue -> first_token
-                            # actual_wait  = proxy_enqueue -> forward_start
-                            # actual_compute = forward_start -> first_token
-                            first_ms = task.trace.get("first_token_ms")
-                            enqueue_ms = task.trace.get("proxy_enqueue_ms")
-                            fwd_start_ms = task.trace.get("forward_start_ms")
+                            task.trace["ttft_observable"] = 1 if use_chunked else 0
+                            if use_chunked:
+                                # 实测时延拆分（从 proxy 入队时刻开始）：
+                                # actual_total = proxy_enqueue -> first_token
+                                # actual_wait  = proxy_enqueue -> forward_start
+                                # actual_compute = forward_start -> first_token
+                                first_ms = task.trace.get("first_token_ms")
+                                enqueue_ms = task.trace.get("proxy_enqueue_ms")
+                                fwd_start_ms = task.trace.get("forward_start_ms")
 
-                            if isinstance(first_ms, int) and isinstance(enqueue_ms, int):
-                                task.trace["actual_total_ms"] = max(0, first_ms - enqueue_ms)
-                            if isinstance(fwd_start_ms, int) and isinstance(enqueue_ms, int):
-                                task.trace["actual_wait_ms"] = max(0, fwd_start_ms - enqueue_ms)
-                            if isinstance(first_ms, int) and isinstance(fwd_start_ms, int):
-                                task.trace["actual_compute_ms"] = max(0, first_ms - fwd_start_ms)
+                                if isinstance(first_ms, int) and isinstance(enqueue_ms, int):
+                                    task.trace["actual_total_ms"] = max(0, first_ms - enqueue_ms)
+                                if isinstance(fwd_start_ms, int) and isinstance(enqueue_ms, int):
+                                    task.trace["actual_wait_ms"] = max(0, fwd_start_ms - enqueue_ms)
+                                if isinstance(first_ms, int) and isinstance(fwd_start_ms, int):
+                                    task.trace["actual_compute_ms"] = max(0, first_ms - fwd_start_ms)
 
-                            # 依据本次任务的预测-实际误差，动态纠正队列 expected_idle 时间戳
-                            await self._apply_idle_correction(task, instance_id)
+                                # 依据本次任务的预测-实际误差，动态纠正队列 expected_idle 时间戳
+                                await self._apply_idle_correction(task, instance_id)
 
-                            logger.info(
-                                "[Timing] rid=%s instance=%s "
-                                "pred(total/know_prepare/queue_wait/compute)=%s/%s/%s/%s ms "
-                                "actual(total/wait/compute)=%s/%s/%s ms "
-                                "(actual_wait≈prepare_queue+ready_queue, actual_compute≈vllm_queue+compute)",
-                                task.request_id,
-                                instance_id,
-                                task.trace.get("predict_total_ms"),
-                                task.trace.get("predict_know_prepare_ms"),
-                                task.trace.get("predict_queue_wait_ms"),
-                                task.trace.get("predict_compute_ms"),
-                                task.trace.get("actual_total_ms"),
-                                task.trace.get("actual_wait_ms"),
-                                task.trace.get("actual_compute_ms"),
-                            )
+                                logger.info(
+                                    "[Timing] rid=%s instance=%s "
+                                    "pred(total/know_prepare/queue_wait/compute)=%s/%s/%s/%s ms "
+                                    "actual(total/wait/compute)=%s/%s/%s ms "
+                                    "(actual_wait≈prepare_queue+ready_queue, actual_compute≈vllm_queue+compute)",
+                                    task.request_id,
+                                    instance_id,
+                                    task.trace.get("predict_total_ms"),
+                                    task.trace.get("predict_know_prepare_ms"),
+                                    task.trace.get("predict_queue_wait_ms"),
+                                    task.trace.get("predict_compute_ms"),
+                                    task.trace.get("actual_total_ms"),
+                                    task.trace.get("actual_wait_ms"),
+                                    task.trace.get("actual_compute_ms"),
+                                )
+                            else:
+                                logger.info(
+                                    "[Timing] rid=%s instance=%s skip_correction=non_stream_response",
+                                    task.request_id,
+                                    instance_id,
+                                )
                         await task.response_queue.put(chunk)
 
                 task.trace["forward_end_ms"] = _now_ms()
