@@ -20,7 +20,7 @@ def _timehash_uuid() -> str:
     return str(uuid.UUID(digest32))
 
 def generate_prompt_with_tokens(tokenizer, target_token_count: int) -> str:
-    """使用指定的 tokenizer 生成一个包含大致数量 token 的 prompt。"""
+    """使用指定的 tokenizer 生成一个 token 数不小于目标值的 prompt。"""
     if target_token_count <= 0:
         return ""
 
@@ -30,30 +30,45 @@ def generate_prompt_with_tokens(tokenizer, target_token_count: int) -> str:
     if not prefix_token_ids:
         return "Error"
 
-    if len(prefix_token_ids) >= target_token_count:
-        return tokenizer.decode(prefix_token_ids[:target_token_count])
+    prompt_ids = list(prefix_token_ids)
 
-    base_text = "This is a long context test to measure the performance of the system. "
-    base_token_ids = tokenizer.encode(base_text, add_special_tokens=False)
-    if not base_token_ids:
-        return "Error"
+    if len(prompt_ids) < target_token_count:
+        base_text = "This is a long context test to measure the performance of the system. "
+        base_token_ids = tokenizer.encode(base_text, add_special_tokens=False)
+        if not base_token_ids:
+            return "Error"
 
-    remain_token_count = target_token_count - len(prefix_token_ids)
-    body_token_ids = []
-    inject_interval = 4  # 每 4 个基础块插入一次随机噪声块，降低长 prompt 重用概率
-    chunk_idx = 0
-    while len(body_token_ids) < remain_token_count:
-        body_token_ids.extend(base_token_ids)
-        chunk_idx += 1
+        remain_token_count = target_token_count - len(prompt_ids)
+        body_token_ids = []
+        inject_interval = 4  # 每 4 个基础块插入一次随机噪声块，降低长 prompt 重用概率
+        chunk_idx = 0
+        while len(body_token_ids) < remain_token_count:
+            body_token_ids.extend(base_token_ids)
+            chunk_idx += 1
 
-        if chunk_idx % inject_interval == 0:
-            noise_text = f"noise={_timehash_uuid().replace('-', '')[:8]} "
-            noise_token_ids = tokenizer.encode(noise_text, add_special_tokens=False)
-            if noise_token_ids:
-                body_token_ids.extend(noise_token_ids)
+            if chunk_idx % inject_interval == 0:
+                noise_text = f"noise={_timehash_uuid().replace('-', '')[:8]} "
+                noise_token_ids = tokenizer.encode(noise_text, add_special_tokens=False)
+                if noise_token_ids:
+                    body_token_ids.extend(noise_token_ids)
 
-    prompt_ids = prefix_token_ids + body_token_ids[:remain_token_count]
-    return tokenizer.decode(prompt_ids)
+        prompt_ids.extend(body_token_ids[:remain_token_count])
+    else:
+        prompt_ids = prompt_ids[:target_token_count]
+
+    prompt = tokenizer.decode(prompt_ids, skip_special_tokens=False)
+
+    # decode 后重新 tokenize 时，token 数可能因分词边界变化略小于 target。
+    # 这里做二次补齐，保证最终 prompt 的 token 数 >= target_token_count（允许略超）。
+    final_token_ids = tokenizer.encode(prompt, add_special_tokens=False)
+    if len(final_token_ids) >= target_token_count:
+        return prompt
+
+    padding_text = " padding_chunk_for_ttft_measurement."
+    while len(final_token_ids) < target_token_count:
+        prompt += padding_text
+        final_token_ids = tokenizer.encode(prompt, add_special_tokens=False)
+    return prompt
 
 async def send_test_request(
     session: aiohttp.ClientSession, 
