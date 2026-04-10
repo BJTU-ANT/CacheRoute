@@ -68,7 +68,7 @@ async def fetch_kdn_items_by_kids(
 
     payload = {
         "knowledge_ids": kids,
-        "need_fields": ["kid", "length", "embed_dim", "embedding",
+        "need_fields": ["kid", "length", "content", "embed_dim", "embedding",
                         "kv_ready", "kv_rel_dir", "kv_dumped_keys", "kv_updated_at"],
     }
 

@@ -31,6 +31,13 @@ _KDN_ID: str = ""
 _NETWORK_SIM: Optional["NetworkSimulator"] = None
 
 
+def _squelch_noisy_loggers() -> None:
+    # 外部控制信令正常请求不需要持续刷屏
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+
+
 class InjectReadyKVReq(BaseModel):
     request_id: int
     model: str
@@ -238,6 +245,8 @@ def _get_kv_root_dir() -> Path:
 @kdn.on_event("startup")
 async def _startup():
     global _TEXT_DB, _SCHED_CLI, _HB_TASK, _HB_STOP, _KDN_ID, _NETWORK_SIM
+
+    _squelch_noisy_loggers()
 
     # 1) 原有 TextDB 初始化逻辑（保持不变）
     db_dir = _get_db_dir()

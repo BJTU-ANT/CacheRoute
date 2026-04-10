@@ -66,6 +66,10 @@ async def hb_report_loop(
         if w.total == 0:
             continue
 
+        # 正常情况下不刷屏：仅当出现失败时输出 warning。
+        if w.fail <= 0:
+            continue
+
         lines = []
         lines.append("------ [Proxy HBReport] ------")
         lines.append(f"proxy_id={proxy_id} window_s={dur:.1f}")
@@ -74,4 +78,4 @@ async def hb_report_loop(
             lines.append(f"last_err={w.last_err}")
         lines.append("------------------------------")
 
-        logger.info("\n".join(lines))
+        logger.warning("\n".join(lines))
