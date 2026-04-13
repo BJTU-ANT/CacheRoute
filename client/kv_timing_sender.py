@@ -183,12 +183,13 @@ def _resolve_knowledge_length_tokens(
     body: Dict[str, Any],
     total_length_tokens: int,
     knowledge_length_map: Optional[Dict[str, int]] = None,
+    candidate_kids: Optional[List[str]] = None,
 ) -> Tuple[int, str]:
     explicit_len = _safe_int(body.get("knowledge_length_tokens", 0), default=0)
     if explicit_len > 0:
         return explicit_len, "workload_explicit"
 
-    kid_list = _extract_knowledge_ids(body)
+    kid_list = candidate_kids if isinstance(candidate_kids, list) and candidate_kids else _extract_knowledge_ids(body)
     if kid_list and knowledge_length_map:
         s = 0
         hit = 0
@@ -222,10 +223,25 @@ def build_kv_timing_record(
         default=0,
     )
 
+    candidate_kids: List[str] = []
+    candidate_kids.extend(_extract_knowledge_ids(body))
+    for key in ("kv_ready_kids", "text_only_kids", "miss_kids"):
+        v = meta.get(key, []) if isinstance(meta, dict) else []
+        if isinstance(v, list):
+            candidate_kids.extend([str(x).strip().lower() for x in v if str(x).strip()])
+    # 去重保持顺序
+    seen_kids = set()
+    dedup_candidate_kids: List[str] = []
+    for k in candidate_kids:
+        if k not in seen_kids:
+            seen_kids.add(k)
+            dedup_candidate_kids.append(k)
+
     knowledge_length_tokens, knowledge_length_source = _resolve_knowledge_length_tokens(
         body=body,
         total_length_tokens=total_length_tokens,
         knowledge_length_map=knowledge_length_map,
+        candidate_kids=dedup_candidate_kids,
     )
 
     # 命中长度必须满足：
@@ -266,6 +282,7 @@ def build_kv_timing_record(
         "total_length_tokens": total_length_tokens,
         "knowledge_length_tokens": knowledge_length_tokens,
         "knowledge_length_source": knowledge_length_source,
+        "knowledge_ids_for_length": dedup_candidate_kids,
         "actual_hit_length_tokens": actual_hit_length_tokens,
         "remaining_compute_tokens": remaining_compute_tokens,
         "kvcache_size_gb": round(float(actual_hit_length_tokens) * float(token_kv_gb), 8),
@@ -302,6 +319,8 @@ async def run_one(
     scheduled_send_ts: Optional[float],
     token_kv_gb: float,
     knowledge_length_map: Optional[Dict[str, int]] = None,
+    enable_scheduler_knowledge_peek: bool = True,
+    peek_chunk_size: int = 128,
 ) -> Dict[str, Any]:
     name = req_tpl.get("name", f"req_{req_index}")
     url_path = req_tpl.get("url_path", "/v1/chat/completions")
@@ -316,6 +335,24 @@ async def run_one(
         status, meta = await read_chat_stream_meta(client, url, headers, body)
     else:
         status, meta = await read_completions_meta(client, url, headers, body)
+
+    # 若开启 scheduler peek，则优先尝试用本次请求实际涉及的 kid 更新长度缓存，避免退化到 total_length
+    if enable_scheduler_knowledge_peek and knowledge_length_map is not None:
+        kids = _extract_knowledge_ids(body)
+        if isinstance(meta, dict):
+            for key in ("kv_ready_kids", "text_only_kids", "miss_kids"):
+                v = meta.get(key, [])
+                if isinstance(v, list):
+                    kids.extend([str(x).strip().lower() for x in v if str(x).strip()])
+        if kids:
+            more_map = await build_knowledge_length_map(
+                client=client,
+                base_url=base_url,
+                selected_templates=[{"body": {"knowledge_ids": kids}}],
+                chunk_size=peek_chunk_size,
+            )
+            if more_map:
+                knowledge_length_map.update(more_map)
 
     record = build_kv_timing_record(
         req_index=req_index,
@@ -505,6 +542,8 @@ async def main_async(args: argparse.Namespace) -> None:
                     scheduled_send_ts=scheduled_ts,
                     token_kv_gb=args.kv_gb_per_token,
                     knowledge_length_map=knowledge_length_map,
+                    enable_scheduler_knowledge_peek=args.enable_scheduler_knowledge_peek,
+                    peek_chunk_size=args.peek_chunk_size,
                 )
             finally:
                 async with inflight_lock:
