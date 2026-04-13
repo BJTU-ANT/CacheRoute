@@ -20,6 +20,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from proxy.metrics.queue_predictor import queue_predictor
+from core.tokenizer_registry import estimate_tokens
 
 
 def parse_bool(v: Any) -> bool:
@@ -223,17 +224,16 @@ def build_kv_timing_record(
         default=0,
     )
 
-    body_kids: List[str] = _extract_knowledge_ids(body)
     meta_kids: List[str] = []
-    for key in ("kv_ready_kids", "text_only_kids", "miss_kids"):
+    for key in ("kv_ready_kids", "text_only_kids"):
         v = meta.get(key, []) if isinstance(meta, dict) else []
         if isinstance(v, list):
             meta_kids.extend([str(x).strip().lower() for x in v if str(x).strip()])
 
-    # 优先使用请求体显式指定的 kid 计算知识长度；仅在请求体无 kid 时才回退到 meta 候选。
-    candidate_kids: List[str] = body_kids if body_kids else meta_kids
-
-    # 去重保持顺序（用于长度计算）
+    # 优先使用实际参与注入/拼接的 kid（kv_ready + text_only）。
+    # 若 meta 不可用，再退回请求体中的 knowledge_id(s)。
+    candidate_kids: List[str] = meta_kids if meta_kids else _extract_knowledge_ids(body)
+    # 去重保持顺序
     seen_kids = set()
     dedup_candidate_kids: List[str] = []
     for k in candidate_kids:
@@ -241,18 +241,20 @@ def build_kv_timing_record(
             seen_kids.add(k)
             dedup_candidate_kids.append(k)
 
-    knowledge_length_tokens, knowledge_length_source = _resolve_knowledge_length_tokens(
+    knowledge_length_tokens_raw, knowledge_length_source = _resolve_knowledge_length_tokens(
         body=body,
         total_length_tokens=total_length_tokens,
         knowledge_length_map=knowledge_length_map,
         candidate_kids=dedup_candidate_kids,
     )
+    # 防止知识长度异常大于 total_length（例如 ID 集不一致导致的累加偏大）。
+    knowledge_length_tokens = max(0, min(int(knowledge_length_tokens_raw), int(total_length_tokens)))
+
     # 命中长度必须满足：
     # 1) 256 对齐
     # 2) 以知识长度为上限（不能超过 knowledge_length_tokens）
-    # 3) 同时不超过 total_length_tokens（防止异常元数据）
     aligned_hit = (knowledge_length_tokens // 256) * 256
-    actual_hit_length_tokens = min(aligned_hit, knowledge_length_tokens, total_length_tokens)
+    actual_hit_length_tokens = min(aligned_hit, knowledge_length_tokens)
     remaining_compute_tokens = max(0, total_length_tokens - actual_hit_length_tokens)
 
     queue_wait_ms = trace.get("actual_wait_ms")
@@ -284,6 +286,7 @@ def build_kv_timing_record(
         # 用户要求字段
         "total_length_tokens": total_length_tokens,
         "knowledge_length_tokens": knowledge_length_tokens,
+        "knowledge_length_tokens_raw": knowledge_length_tokens_raw,
         "knowledge_length_source": knowledge_length_source,
         "knowledge_ids_for_length": dedup_candidate_kids,
         "actual_hit_length_tokens": actual_hit_length_tokens,
@@ -343,7 +346,7 @@ async def run_one(
     if enable_scheduler_knowledge_peek and knowledge_length_map is not None:
         kids = _extract_knowledge_ids(body)
         if isinstance(meta, dict):
-            for key in ("kv_ready_kids", "text_only_kids", "miss_kids"):
+            for key in ("kv_ready_kids", "text_only_kids"):
                 v = meta.get(key, [])
                 if isinstance(v, list):
                     kids.extend([str(x).strip().lower() for x in v if str(x).strip()])
@@ -352,6 +355,7 @@ async def run_one(
                 client=client,
                 base_url=base_url,
                 selected_templates=[{"body": {"knowledge_ids": kids}}],
+                model_name=str(body.get("model") or ""),
                 chunk_size=peek_chunk_size,
             )
             if more_map:
@@ -451,6 +455,7 @@ async def build_knowledge_length_map(
     client: httpx.AsyncClient,
     base_url: str,
     selected_templates: List[Dict[str, Any]],
+    model_name: str,
     chunk_size: int = 128,
 ) -> Dict[str, int]:
     kids_all: List[str] = []
@@ -474,7 +479,7 @@ async def build_knowledge_length_map(
     peek_url = base_url.rstrip("/") + "/debug/knowledge/peek"
     for i in range(0, len(dedup_kids), max(1, int(chunk_size))):
         chunk = dedup_kids[i:i + max(1, int(chunk_size))]
-        payload = {"kids": chunk, "need_fields": ["length"]}
+        payload = {"kids": chunk, "need_fields": ["length", "text_abstract"]}
         try:
             resp = await client.post(peek_url, json=payload)
             resp.raise_for_status()
@@ -491,6 +496,15 @@ async def build_knowledge_length_map(
             kid = str(it.get("kid", "")).strip().lower()
             if not kid:
                 continue
+            # scheduler.peek 的 length 多为“字符长度”，这里转成 token 口径
+            # 优先使用 text_abstract（kdn_sync 当前写入完整 content）分词。
+            text_abstract = str(it.get("text_abstract") or "")
+            if text_abstract:
+                try:
+                    out[kid] = int(estimate_tokens(text_abstract, model_name))
+                    continue
+                except Exception:
+                    pass
             out[kid] = _safe_int(it.get("length", 0), default=0)
     return out
 
@@ -528,6 +542,7 @@ async def main_async(args: argparse.Namespace) -> None:
                 client=client,
                 base_url=args.base_url,
                 selected_templates=selected_templates,
+                model_name=args.model,
                 chunk_size=args.peek_chunk_size,
             )
 
