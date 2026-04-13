@@ -81,6 +81,9 @@ python3 kv_timing_sender.py \
 - 若未提供，脚本默认会先调用 scheduler 的 `/debug/knowledge/peek` 拉取每个 `kid` 的真实 `length`，再计算命中长度；
 - 仅当无法从 workload 与 scheduler 都拿到知识长度时，才回退使用 `predict_length_tokens` 估算（会包含任务与首部，精度较低）。
 - 命中长度始终以知识长度为上限：`actual_hit_length_tokens <= knowledge_length_tokens`。
+<<<<<<< codex/discuss-kvcache-based-time-predictor-model
 - 脚本会先输出 `knowledge_length_tokens_raw`（原始解析值），并裁剪得到 `knowledge_length_tokens <= total_length_tokens`，避免知识长度大于总长度。
 - 256 对齐规则固定保留：`actual_hit_length_tokens = floor(knowledge_length_tokens / 256) * 256`。
+=======
+>>>>>>> main
 - 输出里会包含 `knowledge_length_source` 和 `knowledge_ids_for_length`，用于排查长度来源是否正确。
