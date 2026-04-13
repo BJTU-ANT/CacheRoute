@@ -72,10 +72,12 @@ python3 kv_timing_sender.py \
   --rps 1 \
   --seed 118 \
   --output-jsonl ./out/kv_timing.jsonl \
-  --output-csv ./out/kv_timing.csv
+  --output-csv ./out/kv_timing.csv \
+  --enable-scheduler-knowledge-peek true
 ```
 
 说明：
 - 若 workload 每条请求提供 `knowledge_length_tokens`，脚本会按该值计算命中长度；
-- 若未提供，将回退使用 `predict_length_tokens` 估算知识长度（会包含任务与首部，精度较低，建议补齐该字段）。
+- 若未提供，脚本默认会先调用 scheduler 的 `/debug/knowledge/peek` 拉取每个 `kid` 的真实 `length`，再计算命中长度；
+- 仅当无法从 workload 与 scheduler 都拿到知识长度时，才回退使用 `predict_length_tokens` 估算（会包含任务与首部，精度较低）。
 - 命中长度始终以知识长度为上限：`actual_hit_length_tokens <= knowledge_length_tokens`。

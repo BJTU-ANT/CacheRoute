@@ -161,7 +161,57 @@ def _safe_int(v: Any, default: int = 0) -> int:
         return int(default)
 
 
-def build_kv_timing_record(req_index: int, req_name: str, body: Dict[str, Any], status: int, meta: Dict[str, Any], token_kv_gb: float) -> Dict[str, Any]:
+def _extract_knowledge_ids(body: Dict[str, Any]) -> List[str]:
+    ids: List[str] = []
+    knowledge_ids = body.get("knowledge_ids")
+    if isinstance(knowledge_ids, list):
+        ids.extend([str(x).strip().lower() for x in knowledge_ids if str(x).strip()])
+    single = body.get("knowledge_id")
+    if isinstance(single, str) and single.strip():
+        ids.append(single.strip().lower())
+    # 去重但保持顺序
+    out: List[str] = []
+    seen = set()
+    for k in ids:
+        if k not in seen:
+            seen.add(k)
+            out.append(k)
+    return out
+
+
+def _resolve_knowledge_length_tokens(
+    body: Dict[str, Any],
+    total_length_tokens: int,
+    knowledge_length_map: Optional[Dict[str, int]] = None,
+) -> Tuple[int, str]:
+    explicit_len = _safe_int(body.get("knowledge_length_tokens", 0), default=0)
+    if explicit_len > 0:
+        return explicit_len, "workload_explicit"
+
+    kid_list = _extract_knowledge_ids(body)
+    if kid_list and knowledge_length_map:
+        s = 0
+        hit = 0
+        for kid in kid_list:
+            if kid in knowledge_length_map:
+                s += int(knowledge_length_map[kid])
+                hit += 1
+        if hit > 0 and s > 0:
+            return int(s), "scheduler_peek"
+
+    # 兜底：无知识长度可用时，退化到 total（会包含问题+首部）
+    return max(0, int(total_length_tokens)), "fallback_total_length"
+
+
+def build_kv_timing_record(
+    req_index: int,
+    req_name: str,
+    body: Dict[str, Any],
+    status: int,
+    meta: Dict[str, Any],
+    token_kv_gb: float,
+    knowledge_length_map: Optional[Dict[str, int]] = None,
+) -> Dict[str, Any]:
     trace = meta.get("trace", {}) if isinstance(meta, dict) else {}
     trace = trace if isinstance(trace, dict) else {}
     kv_ack = meta.get("kv_ack", {}) if isinstance(meta, dict) else {}
@@ -172,10 +222,11 @@ def build_kv_timing_record(req_index: int, req_name: str, body: Dict[str, Any], 
         default=0,
     )
 
-    knowledge_length_tokens = _safe_int(body.get("knowledge_length_tokens", 0), default=0)
-    if knowledge_length_tokens <= 0:
-        # 兜底：若 workload 未提供 knowledge_length_tokens，则按 total 估算（会把问题+首部也算进去）
-        knowledge_length_tokens = total_length_tokens
+    knowledge_length_tokens, knowledge_length_source = _resolve_knowledge_length_tokens(
+        body=body,
+        total_length_tokens=total_length_tokens,
+        knowledge_length_map=knowledge_length_map,
+    )
 
     # 命中长度必须满足：
     # 1) 256 对齐
@@ -213,6 +264,8 @@ def build_kv_timing_record(req_index: int, req_name: str, body: Dict[str, Any], 
         "injection_type": body.get("Injection_type"),
         # 用户要求字段
         "total_length_tokens": total_length_tokens,
+        "knowledge_length_tokens": knowledge_length_tokens,
+        "knowledge_length_source": knowledge_length_source,
         "actual_hit_length_tokens": actual_hit_length_tokens,
         "remaining_compute_tokens": remaining_compute_tokens,
         "kvcache_size_gb": round(float(actual_hit_length_tokens) * float(token_kv_gb), 8),
@@ -248,6 +301,7 @@ async def run_one(
     req_tpl: Dict[str, Any],
     scheduled_send_ts: Optional[float],
     token_kv_gb: float,
+    knowledge_length_map: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Any]:
     name = req_tpl.get("name", f"req_{req_index}")
     url_path = req_tpl.get("url_path", "/v1/chat/completions")
@@ -270,6 +324,7 @@ async def run_one(
         status=status,
         meta=meta if isinstance(meta, dict) else {},
         token_kv_gb=token_kv_gb,
+        knowledge_length_map=knowledge_length_map,
     )
 
     if scheduled_send_ts is not None:
@@ -282,7 +337,7 @@ def print_summary(rows: List[Dict[str, Any]], total_elapsed_s: float, target_rps
     print("KVCache Injection Timing Summary")
     print("=" * 180)
     print(
-        "idx | request_id | status | inj | total_len | hit_len | remain_len | kvcache_gb | "
+        "idx | request_id | status | inj | total_len | know_len | know_src | hit_len | remain_len | kvcache_gb | "
         "queue_wait_ms | compute_ms | text_est_ms | redis_pull_ms | total_ms | kv_ack_ms | payload_bytes | error"
     )
     print("-" * 180)
@@ -290,7 +345,8 @@ def print_summary(rows: List[Dict[str, Any]], total_elapsed_s: float, target_rps
     for r in rows:
         print(
             f"{r.get('req_index')} | {r.get('request_id')} | {r.get('http_status')} | {r.get('injection_type')} | "
-            f"{r.get('total_length_tokens')} | {r.get('actual_hit_length_tokens')} | {r.get('remaining_compute_tokens')} | "
+            f"{r.get('total_length_tokens')} | {r.get('knowledge_length_tokens')} | {r.get('knowledge_length_source')} | "
+            f"{r.get('actual_hit_length_tokens')} | {r.get('remaining_compute_tokens')} | "
             f"{r.get('kvcache_size_gb')} | {r.get('queue_wait_ms')} | {r.get('compute_ms')} | "
             f"{r.get('text_compute_estimate_ms')} | {r.get('lmcache_redis_pull_ms')} | {r.get('total_ms')} | "
             f"{r.get('kv_ack_ms')} | {r.get('payload_bytes')} | {r.get('error')}"
@@ -351,6 +407,54 @@ def write_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
         writer.writerows(normalized)
 
 
+async def build_knowledge_length_map(
+    client: httpx.AsyncClient,
+    base_url: str,
+    selected_templates: List[Dict[str, Any]],
+    chunk_size: int = 128,
+) -> Dict[str, int]:
+    kids_all: List[str] = []
+    for tpl in selected_templates:
+        body = tpl.get("body", {}) if isinstance(tpl, dict) else {}
+        if isinstance(body, dict):
+            kids_all.extend(_extract_knowledge_ids(body))
+
+    # 去重
+    dedup_kids: List[str] = []
+    seen = set()
+    for k in kids_all:
+        if k not in seen:
+            seen.add(k)
+            dedup_kids.append(k)
+
+    if not dedup_kids:
+        return {}
+
+    out: Dict[str, int] = {}
+    peek_url = base_url.rstrip("/") + "/debug/knowledge/peek"
+    for i in range(0, len(dedup_kids), max(1, int(chunk_size))):
+        chunk = dedup_kids[i:i + max(1, int(chunk_size))]
+        payload = {"kids": chunk, "need_fields": ["length"]}
+        try:
+            resp = await client.post(peek_url, json=payload)
+            resp.raise_for_status()
+            obj = resp.json()
+        except Exception:
+            continue
+
+        items = obj.get("items", []) if isinstance(obj, dict) else []
+        if not isinstance(items, list):
+            continue
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            kid = str(it.get("kid", "")).strip().lower()
+            if not kid:
+                continue
+            out[kid] = _safe_int(it.get("length", 0), default=0)
+    return out
+
+
 async def main_async(args: argparse.Namespace) -> None:
     if args.requests <= 0:
         raise ValueError("--requests must be > 0")
@@ -378,6 +482,14 @@ async def main_async(args: argparse.Namespace) -> None:
 
     async with httpx.AsyncClient(timeout=timeout) as client:
         t_start = time.time()
+        knowledge_length_map: Dict[str, int] = {}
+        if args.enable_scheduler_knowledge_peek:
+            knowledge_length_map = await build_knowledge_length_map(
+                client=client,
+                base_url=args.base_url,
+                selected_templates=selected_templates,
+                chunk_size=args.peek_chunk_size,
+            )
 
         async def fire_one(i: int, tpl: Dict[str, Any], scheduled_ts: float) -> Dict[str, Any]:
             nonlocal inflight, peak_inflight
@@ -392,6 +504,7 @@ async def main_async(args: argparse.Namespace) -> None:
                     req_tpl=tpl,
                     scheduled_send_ts=scheduled_ts,
                     token_kv_gb=args.kv_gb_per_token,
+                    knowledge_length_map=knowledge_length_map,
                 )
             finally:
                 async with inflight_lock:
@@ -446,8 +559,16 @@ def main() -> None:
     ap.add_argument("--timeout-s", type=float, default=300.0)
     ap.add_argument("--output-jsonl", default=None)
     ap.add_argument("--output-csv", default=None)
+    ap.add_argument(
+        "--enable-scheduler-knowledge-peek",
+        type=str,
+        default="true",
+        help="query scheduler /debug/knowledge/peek to get accurate knowledge length when workload lacks knowledge_length_tokens",
+    )
+    ap.add_argument("--peek-chunk-size", type=int, default=128, help="chunk size for /debug/knowledge/peek")
 
     args = ap.parse_args()
+    args.enable_scheduler_knowledge_peek = parse_bool(args.enable_scheduler_knowledge_peek)
     asyncio.run(main_async(args))
 
 
