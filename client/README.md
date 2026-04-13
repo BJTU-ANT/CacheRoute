@@ -44,3 +44,37 @@ python3 perf_client.py --mode rps --base-url http://127.0.0.1:7001 --workload-fi
 ```
 <img width="1200" height="1193" alt="image" src="https://github.com/user-attachments/assets/f74b8e51-c11b-408a-b422-021f967766ea" />
 
+
+(3) KVCache时间建模发送器`client/kv_timing_sender.py`：按RPS发包，并输出KV命中/重算相关统计，便于做注入时间预测建模。<br>
+
+核心输出字段包括：
+- 请求ID（若上游未返回则退化为req_index）
+- 总长度（`predict_length_tokens`）
+- 实际命中长度（按256对齐）
+- 剩余重算长度
+- KVCache体积估算（`hit_tokens * kv_gb_per_token`）
+- queue_wait_ms（proxy `actual_wait_ms`）
+- compute_ms（proxy `actual_compute_ms`）
+- text_compute_estimate_ms（`proxy.metrics.queue_predictor` 对剩余长度估算）
+- lmcache_redis_pull_ms（`compute_ms - text_compute_estimate_ms`）
+- total_ms（proxy `actual_total_ms`）
+
+示例：
+```
+python3 kv_timing_sender.py \
+  --base-url http://127.0.0.1:7001 \
+  --workload-file taskset/workload_nq.json \
+  --model llama3-70b \
+  --stream true \
+  --rag true \
+  --injection-type kvcache \
+  --requests 30 \
+  --rps 1 \
+  --seed 118 \
+  --output-jsonl ./out/kv_timing.jsonl \
+  --output-csv ./out/kv_timing.csv
+```
+
+说明：
+- 若 workload 每条请求提供 `knowledge_length_tokens`，脚本会按该值计算命中长度；
+- 若未提供，将回退使用 `predict_length_tokens` 估算知识长度（会包含任务与首部，精度较低，建议补齐该字段）。
