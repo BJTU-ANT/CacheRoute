@@ -75,6 +75,7 @@ export KDN_FORCE_REDIS_HOST=172.18.0.169
 - 同一时刻仅服务一个知识传输任务
 - 后续任务进入 pending 队列等待
 - ack 仍按估算网络时延延后返回
+上述参数可在 `core/config.py` 中配置默认值（`KDN_NETWORK_*`），并可通过同名环境变量覆盖。
 
 **1.4 知识块信息查询**<br>
 KDN_api对外暴露need_field接口，可以根据需求请求对应属性信息，目前开放的属性有：`content`,`length`,`rel_path`,`embedding`,`embed_dim`,`kv_ready`,`kv_rel_dir`,`kv_dumped_keys`,`kv_updated_at`,`embedding_head`，具体例如：

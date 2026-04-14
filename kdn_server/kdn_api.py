@@ -262,12 +262,24 @@ async def _startup():
     _TEXT_DB = TextDatabase(str(db_dir), embedder=embedder)
     print(f"[KDN] TextDatabase ready: {db_dir}")
 
-    network_enabled = os.getenv("KDN_NETWORK_ENABLE", "0").strip() == "1"
+    network_enabled_raw = os.getenv(
+        "KDN_NETWORK_ENABLE",
+        "1" if bool(getattr(config, "KDN_NETWORK_ENABLE", False)) else "0"
+    ).strip().lower()
+    network_enabled = network_enabled_raw in {"1", "true", "yes", "y", "on"}
     if network_enabled:
-        bandwidth_mb_s = float(os.getenv("KDN_NETWORK_BW_MB_S", "1000").strip())
-        batch_window_ms = float(os.getenv("KDN_NETWORK_BATCH_WINDOW_MS", "10").strip())
-        fixed_latency_ms = float(os.getenv("KDN_NETWORK_FIXED_LATENCY_MS", "0").strip())
-        efficiency = float(os.getenv("KDN_NETWORK_EFFICIENCY", "1.0").strip())
+        bandwidth_mb_s = float(
+            os.getenv("KDN_NETWORK_BW_MB_S", str(getattr(config, "KDN_NETWORK_BW_MB_S", 125.0))).strip()
+        )
+        batch_window_ms = float(
+            os.getenv("KDN_NETWORK_BATCH_WINDOW_MS", str(getattr(config, "KDN_NETWORK_BATCH_WINDOW_MS", 10.0))).strip()
+        )
+        fixed_latency_ms = float(
+            os.getenv("KDN_NETWORK_FIXED_LATENCY_MS", str(getattr(config, "KDN_NETWORK_FIXED_LATENCY_MS", 10.0))).strip()
+        )
+        efficiency = float(
+            os.getenv("KDN_NETWORK_EFFICIENCY", str(getattr(config, "KDN_NETWORK_EFFICIENCY", 0.8))).strip()
+        )
 
         _NETWORK_SIM = NetworkSimulator(
             bandwidth_mb_s=bandwidth_mb_s,
