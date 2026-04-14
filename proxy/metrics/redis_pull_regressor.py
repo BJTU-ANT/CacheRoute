@@ -6,6 +6,7 @@ Model form (milliseconds):
 Input dataset can be CSV or JSON.
 Common fields:
   - kvcache_size_gb
+  - or actual_hit_length_tokens (with --kv-gb-per-token)
   - either redis_pull_ms OR redis_pull_ms_1..N OR redis_pull_ms(list)
 
 When multiple redis_pull_ms_* columns exist, row target uses median value.
@@ -81,18 +82,37 @@ class RedisPullLinearRegressor:
                 loaded += 1
             return loaded
 
-    def load_from_json(self, data_path: str | Path) -> int:
+    @staticmethod
+    def _resolve_kvcache_size_gb(row: Dict[str, object], kv_gb_per_token: float) -> Optional[float]:
+        x = _to_float(row.get("kvcache_size_gb"))
+        if x is not None:
+            return x
+        hit_tokens = _to_float(row.get("actual_hit_length_tokens"))
+        if hit_tokens is None:
+            return None
+        return max(0.0, float(hit_tokens) * float(kv_gb_per_token))
+
+    def load_from_json(self, data_path: str | Path, *, kv_gb_per_token: float = 0.0000381) -> int:
         p = Path(data_path)
         payload = json.loads(p.read_text(encoding="utf-8"))
-        rows = payload.get("rows", []) if isinstance(payload, dict) else []
+        if isinstance(payload, list):
+            rows = payload
+        elif isinstance(payload, dict):
+            rows = payload.get("rows")
+            if rows is None:
+                rows = payload.get("data")
+            if rows is None:
+                rows = payload.get("samples", [])
+        else:
+            rows = []
         if not isinstance(rows, list):
-            raise ValueError("invalid json format: 'rows' must be a list")
+            raise ValueError("invalid json format: expected list or a dict with rows/data/samples list")
 
         loaded = 0
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            x = _to_float(row.get("kvcache_size_gb"))
+            x = self._resolve_kvcache_size_gb(row, kv_gb_per_token)
             if x is None:
                 continue
 
@@ -117,10 +137,10 @@ class RedisPullLinearRegressor:
             loaded += 1
         return loaded
 
-    def load_from_file(self, data_path: str | Path) -> int:
+    def load_from_file(self, data_path: str | Path, *, kv_gb_per_token: float = 0.0000381) -> int:
         p = Path(data_path)
         if p.suffix.lower() == ".json":
-            return self.load_from_json(p)
+            return self.load_from_json(p, kv_gb_per_token=kv_gb_per_token)
         return self.load_from_csv(p)
 
     def fit(self) -> RedisPullCoefficients:
@@ -179,13 +199,19 @@ def _build_parser() -> argparse.ArgumentParser:
         default=str(DEFAULT_COEFF_PATH),
         help="output coefficient json path",
     )
+    p.add_argument(
+        "--kv-gb-per-token",
+        type=float,
+        default=0.0000381,
+        help="used when json rows have actual_hit_length_tokens but no kvcache_size_gb",
+    )
     return p
 
 
 def main() -> None:
     args = _build_parser().parse_args()
     reg = RedisPullLinearRegressor()
-    loaded = reg.load_from_file(args.data_file)
+    loaded = reg.load_from_file(args.data_file, kv_gb_per_token=args.kv_gb_per_token)
     coeffs = reg.fit()
     out = reg.save_coefficients_json(args.coeff_path)
     print(f"[RedisPull] loaded samples: {loaded}")

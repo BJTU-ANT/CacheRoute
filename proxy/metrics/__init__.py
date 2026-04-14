@@ -6,6 +6,9 @@ from .queue_predictor import (
     load_ttft_coefficients,
     load_redis_pull_coefficients,
     predict_redis_pull_ms,
+    align_hit_length_tokens,
+    estimate_kvcache_size_gb,
+    predict_prefill_and_redis_breakdown,
 )
 from .redis_pull_regressor import RedisPullLinearRegressor, RedisPullCoefficients
 
@@ -16,6 +19,9 @@ __all__ = [
     "load_ttft_coefficients",
     "load_redis_pull_coefficients",
     "predict_redis_pull_ms",
+    "align_hit_length_tokens",
+    "estimate_kvcache_size_gb",
+    "predict_prefill_and_redis_breakdown",
     "RedisPullLinearRegressor",
     "RedisPullCoefficients",
 ]

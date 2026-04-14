@@ -39,8 +39,30 @@ JSON 输入格式示例：
   ]
 }
 ```
+也支持以下 JSON 结构：
+- 顶层是数组：`[ {...}, {...} ]`
+- 顶层是对象且样本键是 `rows` / `data` / `samples`。
+
+如果样本里没有 `kvcache_size_gb`，但有 `actual_hit_length_tokens`，可加：
+```
+python3 redis_pull_regressor.py --data-file /path/to/redis_pull_table.json --kv-gb-per-token 0.0000381
+```
+此时会按 `kvcache_size_gb = actual_hit_length_tokens * kv_gb_per_token` 自动换算后拟合。
 
 在预测器侧可直接调用：
 ```
 python3 queue_predictor.py --length 2880 --bs 1 --ms --kvcache-size-gb 0.048768
 ```
+
+统一口径预测（推荐）：
+```
+python3 queue_predictor.py \
+  --length 2880 \
+  --bs 1 \
+  --knowledge-length 1330 \
+  --align-size 256 \
+  --kv-gb-per-token 0.0000381
+```
+会结构化输出两类场景：
+- `text-based`：基于 `--length`（即 total_length）四项式估算的纯计算时间。
+- `kvcache-based`（提供 `--knowledge-length` 时）：知识命中长度（256 对齐）、KVCache 大小、剩余待计算长度、剩余文本计算时间、Redis 拉取时间、以及拉取+剩余重计算总时间。
