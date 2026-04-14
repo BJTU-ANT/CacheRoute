@@ -3,9 +3,10 @@
 Model form (milliseconds):
     redis_pull_ms = a * kvcache_size_gb + b
 
-Input CSV is expected to contain:
+Input dataset can be CSV or JSON.
+Common fields:
   - kvcache_size_gb
-  - either redis_pull_ms OR redis_pull_ms_1..N
+  - either redis_pull_ms OR redis_pull_ms_1..N OR redis_pull_ms(list)
 
 When multiple redis_pull_ms_* columns exist, row target uses median value.
 Negative samples are clipped to 0 for fitting stability.
@@ -80,6 +81,48 @@ class RedisPullLinearRegressor:
                 loaded += 1
             return loaded
 
+    def load_from_json(self, data_path: str | Path) -> int:
+        p = Path(data_path)
+        payload = json.loads(p.read_text(encoding="utf-8"))
+        rows = payload.get("rows", []) if isinstance(payload, dict) else []
+        if not isinstance(rows, list):
+            raise ValueError("invalid json format: 'rows' must be a list")
+
+        loaded = 0
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            x = _to_float(row.get("kvcache_size_gb"))
+            if x is None:
+                continue
+
+            y: Optional[float] = None
+            if isinstance(row.get("redis_pull_ms"), list):
+                vals = [_to_float(v) for v in row.get("redis_pull_ms", [])]
+                vals = [v for v in vals if v is not None]
+                if vals:
+                    y = float(statistics.median(vals))
+            elif row.get("redis_pull_ms") is not None:
+                y = _to_float(row.get("redis_pull_ms"))
+            else:
+                ms_keys = sorted([k for k in row.keys() if str(k).startswith("redis_pull_ms_")])
+                vals = [_to_float(row.get(k)) for k in ms_keys]
+                vals = [v for v in vals if v is not None]
+                if vals:
+                    y = float(statistics.median(vals))
+
+            if y is None:
+                continue
+            self.add_sample(x, y)
+            loaded += 1
+        return loaded
+
+    def load_from_file(self, data_path: str | Path) -> int:
+        p = Path(data_path)
+        if p.suffix.lower() == ".json":
+            return self.load_from_json(p)
+        return self.load_from_csv(p)
+
     def fit(self) -> RedisPullCoefficients:
         if len(self._samples) < 2:
             raise ValueError("at least 2 valid samples are required")
@@ -129,8 +172,8 @@ class RedisPullLinearRegressor:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Fit redis pull-time linear model from CSV.")
-    p.add_argument("--data-csv", required=True, help="input csv path")
+    p = argparse.ArgumentParser(description="Fit redis pull-time linear model from CSV/JSON.")
+    p.add_argument("--data-file", required=True, help="input data path (.csv or .json)")
     p.add_argument(
         "--coeff-path",
         default=str(DEFAULT_COEFF_PATH),
@@ -142,7 +185,7 @@ def _build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     args = _build_parser().parse_args()
     reg = RedisPullLinearRegressor()
-    loaded = reg.load_from_csv(args.data_csv)
+    loaded = reg.load_from_file(args.data_file)
     coeffs = reg.fit()
     out = reg.save_coefficients_json(args.coeff_path)
     print(f"[RedisPull] loaded samples: {loaded}")
