@@ -56,6 +56,27 @@ python3 kv_injector.py --kv-dir /path/save/kvcache --redis-host ip --redis-port 
 ```
 这个方法只是验证功能有效性，后续这个方法会封装在KDN匹配服务的流程内，无需自行调用。
 
+**1.3.1 网络路径调试（让KDN走网卡访问Instance Redis）**<br>
+默认情况下，Instance 控制面可能把 `redis_host` 传成 `127.0.0.1`，此时 KDN 会在本机回环访问 Redis。为了模拟跨网，可在 KDN 进程设置：
+```
+export KDN_REDIS_REWRITE_ENABLE=1
+export KDN_REWRITE_LOOPBACK_TO=172.18.0.169
+```
+含义：仅当请求里的 `redis_host` 是 `127.0.0.1/localhost/::1` 时，改写为 `172.18.0.169`。<br>
+也可使用强制覆盖：
+```
+export KDN_REDIS_REWRITE_ENABLE=1
+export KDN_FORCE_REDIS_HOST=172.18.0.169
+```
+这样不管上游传什么 host，都会让 KDN 走该网卡地址连接 Redis。KDN 日志会打印 request_host 与 resolved_host 便于确认。
+默认 `KDN_REDIS_REWRITE_ENABLE=0`（或不设置），此时不会改写任何地址，不影响原有 KVCache 注入路径。
+
+补充：当开启 `KDN_NETWORK_ENABLE=1` 时，KDN 网络模拟器当前采用**单链路串行服务**模型（单服务台排队）：
+- 同一时刻仅服务一个知识传输任务
+- 后续任务进入 pending 队列等待
+- ack 仍按估算网络时延延后返回
+上述参数可在 `core/config.py` 中配置默认值（`KDN_NETWORK_*`），并可通过同名环境变量覆盖。
+
 **1.4 知识块信息查询**<br>
 KDN_api对外暴露need_field接口，可以根据需求请求对应属性信息，目前开放的属性有：`content`,`length`,`rel_path`,`embedding`,`embed_dim`,`kv_ready`,`kv_rel_dir`,`kv_dumped_keys`,`kv_updated_at`,`embedding_head`，具体例如：
 ```

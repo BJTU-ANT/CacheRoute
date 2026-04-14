@@ -8,3 +8,17 @@
 ```
 python3 queue_predictor.py --length 2880 --bs 5 --ms
 ```
+
+### Redis拉取时间回归
+
+当你有类似 `kvcache_size_gb, redis_pull_ms_1..N` 的实验表时，可执行：
+```
+python3 redis_pull_regressor.py --data-csv /path/to/redis_pull_table.csv
+```
+会在 `proxy/metrics/redis_pull_coefficients.json` 写入线性系数（ms）：
+`redis_pull_ms = a * kvcache_size_gb + b`
+
+在预测器侧可直接调用：
+```
+python3 queue_predictor.py --length 2880 --bs 1 --ms --kvcache-size-gb 0.048768
+```
