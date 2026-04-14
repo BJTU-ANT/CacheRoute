@@ -31,6 +31,28 @@ _KDN_ID: str = ""
 _NETWORK_SIM: Optional["NetworkSimulator"] = None
 
 
+def _resolve_redis_target_host(request_host: str) -> str:
+    """
+    为网络调试提供 redis 目标地址重写：
+      1) KDN_FORCE_REDIS_HOST: 无条件覆盖
+      2) KDN_REWRITE_LOOPBACK_TO: 仅在请求是回环地址时重写
+    """
+    enabled_raw = os.getenv("KDN_REDIS_REWRITE_ENABLE", str(getattr(config, "KDN_REDIS_REWRITE_ENABLE", False))).strip().lower()
+    enabled = enabled_raw in {"1", "true", "yes", "y", "on"}
+    if not enabled:
+        return request_host
+
+    force_host = os.getenv("KDN_FORCE_REDIS_HOST", str(getattr(config, "KDN_FORCE_REDIS_HOST", ""))).strip()
+    if force_host:
+        return force_host
+
+    rewrite_host = os.getenv("KDN_REWRITE_LOOPBACK_TO", str(getattr(config, "KDN_REWRITE_LOOPBACK_TO", ""))).strip()
+    if rewrite_host and request_host.strip().lower() in {"127.0.0.1", "localhost", "::1"}:
+        return rewrite_host
+
+    return request_host
+
+
 def _squelch_noisy_loggers() -> None:
     # 外部控制信令正常请求不需要持续刷屏
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -781,10 +803,15 @@ async def inject_ready_kv(payload: Dict[str, Any]):
             content={"ok": False, "detail": "knowledge_ids is empty"},
         )
 
-    redis_host = str(payload.get("redis_host", "127.0.0.1"))
+    request_redis_host = str(payload.get("redis_host", "127.0.0.1"))
+    redis_host = _resolve_redis_target_host(request_redis_host)
     redis_port = int(payload.get("redis_port", 6379))
     redis_db = int(payload.get("redis_db", 0))
     redis_password = payload.get("redis_password", None)
+    logging.info(
+        "[KDN] inject_ready_kv redis target request_host=%s resolved_host=%s port=%s db=%s",
+        request_redis_host, redis_host, redis_port, redis_db
+    )
 
     # 这里一定要拆包：get_many -> (items, miss)
     items, miss = _TEXT_DB.get_many(requested)
