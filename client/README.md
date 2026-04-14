@@ -44,3 +44,46 @@ python3 perf_client.py --mode rps --base-url http://127.0.0.1:7001 --workload-fi
 ```
 <img width="1200" height="1193" alt="image" src="https://github.com/user-attachments/assets/f74b8e51-c11b-408a-b422-021f967766ea" />
 
+
+(3) KVCache时间建模发送器`client/kv_timing_sender.py`：按RPS发包，并输出KV命中/重算相关统计，便于做注入时间预测建模。<br>
+
+核心输出字段包括：
+- 请求ID（若上游未返回则退化为req_index）
+- 总长度（`predict_length_tokens`）
+- 实际命中长度（按256对齐）
+- 剩余重算长度
+- KVCache体积估算（`hit_tokens * kv_gb_per_token`）
+- queue_wait_ms（proxy `actual_wait_ms`）
+- compute_ms（proxy `actual_compute_ms`）
+- text_compute_estimate_ms（`proxy.metrics.queue_predictor` 对剩余长度估算）
+- lmcache_redis_pull_ms（`compute_ms - text_compute_estimate_ms`）
+- total_ms（proxy `actual_total_ms`）
+
+示例：
+```
+python3 kv_timing_sender.py \
+  --base-url http://127.0.0.1:7001 \
+  --workload-file taskset/workload_nq.json \
+  --model llama3-70b \
+  --stream true \
+  --rag true \
+  --injection-type kvcache \
+  --requests 30 \
+  --rps 1 \
+  --seed 118 \
+  --scheduler-tokenizer-map '{"llama3-70b":"/workspace/llm-stack/models/LLM-Research/Meta-Llama-3-70B-Instruct"}' \
+  --output-jsonl ./out/kv_timing.jsonl \
+  --output-csv ./out/kv_timing.csv \
+  --enable-scheduler-knowledge-peek true
+```
+
+说明：
+- 若 workload 每条请求提供 `knowledge_length_tokens`，脚本会按该值计算命中长度；
+- 若未提供，脚本默认会先调用 scheduler 的 `/debug/knowledge/peek` 拉取每个 `kid` 的真实 `length`，再计算命中长度；
+- 注意：scheduler.peek 返回的 `length` 在部分链路里是字符长度。脚本现在会优先对 `text_abstract` 按 `--model` tokenizer 重新估算 token 长度，再用于命中计算；
+- 可通过 `--scheduler-tokenizer-map` 在 client 进程内设置 `SCHEDULER_TOKENIZER_MAP`（与 `demo_scheduler` 一致），优先使用本地 tokenizer 目录，避免从 HuggingFace 拉取；
+- 仅当无法从 workload 与 scheduler 都拿到知识长度时，才回退使用 `predict_length_tokens` 估算（会包含任务与首部，精度较低）。
+- 命中长度始终以知识长度为上限：`actual_hit_length_tokens <= knowledge_length_tokens`。
+- 脚本会先输出 `knowledge_length_tokens_raw`（原始解析值），并裁剪得到 `knowledge_length_tokens <= total_length_tokens`，避免知识长度大于总长度。
+- 256 对齐规则固定保留：`actual_hit_length_tokens = floor(knowledge_length_tokens / 256) * 256`。
+- 输出里会包含 `knowledge_length_source` 和 `knowledge_ids_for_length`，用于排查长度来源是否正确。
