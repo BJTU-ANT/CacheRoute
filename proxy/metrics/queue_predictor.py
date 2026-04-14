@@ -19,6 +19,7 @@ from typing import Dict, Optional
 
 
 DEFAULT_COEFF_PATH = Path(__file__).with_name("ttft_coefficients.json")
+DEFAULT_REDIS_PULL_COEFF_PATH = Path(__file__).with_name("redis_pull_coefficients.json")
 _SHORT_CALIB_ANCHORS_MS = [
     # (length_token, ttft_ms)
     (0, 60.0),
@@ -83,6 +84,21 @@ def load_ttft_coefficients(coeff_path: str | Path = DEFAULT_COEFF_PATH) -> Dict[
     return coeffs
 
 
+def load_redis_pull_coefficients(
+    coeff_path: str | Path = DEFAULT_REDIS_PULL_COEFF_PATH,
+) -> Dict[str, float]:
+    path = Path(coeff_path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        coeffs = {
+            "a": float(payload["a"]),
+            "b": float(payload["b"]),
+        }
+    except KeyError as exc:
+        raise ValueError(f"missing coefficient key: {exc}") from exc
+    return coeffs
+
+
 def queue_predictor(
     length: int,
     bs: Optional[int] = None,
@@ -127,6 +143,75 @@ def queue_predictor(
     return max(pred, calibrated_pred)
 
 
+def predict_redis_pull_ms(
+    *,
+    kvcache_size_gb: float,
+    coeffs: Optional[Dict[str, float]] = None,
+    coeff_path: str | Path = DEFAULT_REDIS_PULL_COEFF_PATH,
+) -> float:
+    """
+    Predict LMCache redis pull time in milliseconds.
+    Linear form:
+      redis_pull_ms = a * kvcache_size_gb + b
+    """
+    x = max(0.0, float(kvcache_size_gb))
+    c = coeffs or load_redis_pull_coefficients(coeff_path)
+    pred = float(c["a"]) * x + float(c["b"])
+    return max(0.0, pred)
+
+
+def align_hit_length_tokens(knowledge_length_tokens: int, *, align_size: int = 256) -> int:
+    """Align knowledge hit length by fixed token granularity (default 256)."""
+    if align_size <= 0:
+        raise ValueError("align_size must be positive")
+    klen = max(0, int(knowledge_length_tokens))
+    return (klen // align_size) * align_size
+
+
+def estimate_kvcache_size_gb(
+    *,
+    knowledge_length_tokens: int,
+    kv_gb_per_token: float = 0.0000381,
+    align_size: int = 256,
+) -> float:
+    hit_tokens = align_hit_length_tokens(knowledge_length_tokens, align_size=align_size)
+    return max(0.0, float(hit_tokens) * float(kv_gb_per_token))
+
+
+def predict_prefill_and_redis_breakdown(
+    *,
+    total_length_tokens: int,
+    knowledge_length_tokens: int,
+    bs: int = 1,
+    kv_gb_per_token: float = 0.0000381,
+    align_size: int = 256,
+    ttft_coeff_path: str | Path = DEFAULT_COEFF_PATH,
+    redis_coeff_path: str | Path = DEFAULT_REDIS_PULL_COEFF_PATH,
+) -> Dict[str, float]:
+    """
+    Predict pure-compute + redis-pull timing in one place with unified inputs.
+    - total_length_tokens -> compute input
+    - knowledge_length_tokens -> redis pull input (with 256 alignment)
+    """
+    total = max(0, int(total_length_tokens))
+    hit_tokens = min(align_hit_length_tokens(knowledge_length_tokens, align_size=align_size), total)
+    remaining_compute_tokens = max(1, total - hit_tokens)
+    compute_seconds = queue_predictor(length=remaining_compute_tokens, bs=bs, coeff_path=ttft_coeff_path)
+    kvcache_size_gb = max(0.0, float(hit_tokens) * float(kv_gb_per_token))
+    redis_pull_ms = predict_redis_pull_ms(kvcache_size_gb=kvcache_size_gb, coeff_path=redis_coeff_path)
+    compute_ms = max(0.0, compute_seconds * 1000.0)
+    return {
+        "total_length_tokens": float(total),
+        "knowledge_length_tokens": float(max(0, int(knowledge_length_tokens))),
+        "actual_hit_length_tokens": float(hit_tokens),
+        "remaining_compute_tokens": float(remaining_compute_tokens),
+        "kvcache_size_gb": float(kvcache_size_gb),
+        "predicted_pure_compute_ms": float(compute_ms),
+        "predicted_redis_pull_ms": float(redis_pull_ms),
+        "predicted_kvcache_total_ms": float(compute_ms + redis_pull_ms),
+    }
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Predict TTFT by length and batch-size.")
     parser.add_argument("--length", type=int, required=True, help="prompt length")
@@ -142,6 +227,31 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="also print milliseconds for convenience",
     )
+    parser.add_argument(
+        "--kvcache-size-gb",
+        type=float,
+        default=None,
+        help="optional: predict redis pull ms using redis_pull_coefficients.json",
+    )
+    parser.add_argument(
+        "--redis-coeff-path",
+        type=str,
+        default=str(DEFAULT_REDIS_PULL_COEFF_PATH),
+        help="redis pull coefficient json path",
+    )
+    parser.add_argument(
+        "--knowledge-length",
+        type=int,
+        default=None,
+        help="knowledge length tokens for KVCache-based structured estimation; will be aligned by --align-size",
+    )
+    parser.add_argument("--align-size", type=int, default=256, help="alignment size for knowledge hit tokens")
+    parser.add_argument(
+        "--kv-gb-per-token",
+        type=float,
+        default=0.0000381,
+        help="KVCache size(GB) per token for kvcache-size estimation",
+    )
     return parser
 
 
@@ -154,9 +264,39 @@ def main() -> None:
         bs=args.bs,
         coeff_path=args.coeff_path,
     )
-    print(f"predicted_ttft_seconds={pred_seconds:.6f}")
-    if args.ms:
-        print(f"predicted_ttft_ms={pred_seconds * 1000:.3f}")
+    pred_ms = pred_seconds * 1000.0
+    print("[text-based]")
+    print(f"  total_length_tokens={int(args.length)}")
+    print(f"  predicted_compute_seconds={pred_seconds:.6f}")
+    print(f"  predicted_compute_ms={pred_ms:.3f}")
+
+    if args.kvcache_size_gb is not None:
+        pull_ms = predict_redis_pull_ms(
+            kvcache_size_gb=float(args.kvcache_size_gb),
+            coeff_path=args.redis_coeff_path,
+        )
+        print("[kvcache-size-only]")
+        print(f"  kvcache_size_gb={float(args.kvcache_size_gb):.8f}")
+        print(f"  predicted_redis_pull_ms={pull_ms:.3f}")
+    if args.knowledge_length is not None:
+        breakdown = predict_prefill_and_redis_breakdown(
+            total_length_tokens=int(args.length),
+            knowledge_length_tokens=int(args.knowledge_length),
+            bs=int(args.bs),
+            kv_gb_per_token=float(args.kv_gb_per_token),
+            align_size=int(args.align_size),
+            ttft_coeff_path=args.coeff_path,
+            redis_coeff_path=args.redis_coeff_path,
+        )
+        print("[kvcache-based]")
+        print(f"  total_length_tokens={int(breakdown['total_length_tokens'])}")
+        print(f"  knowledge_length_tokens={int(breakdown['knowledge_length_tokens'])}")
+        print(f"  actual_hit_length_tokens={int(breakdown['actual_hit_length_tokens'])}")
+        print(f"  kvcache_size_gb={breakdown['kvcache_size_gb']:.8f}")
+        print(f"  remaining_compute_tokens={int(breakdown['remaining_compute_tokens'])}")
+        print(f"  predicted_remaining_compute_ms={breakdown['predicted_pure_compute_ms']:.3f}")
+        print(f"  predicted_redis_pull_ms={breakdown['predicted_redis_pull_ms']:.3f}")
+        print(f"  predicted_kvcache_total_ms={breakdown['predicted_kvcache_total_ms']:.3f}")
 
 
 if __name__ == "__main__":

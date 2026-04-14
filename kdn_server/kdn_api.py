@@ -31,6 +31,28 @@ _KDN_ID: str = ""
 _NETWORK_SIM: Optional["NetworkSimulator"] = None
 
 
+def _resolve_redis_target_host(request_host: str) -> str:
+    """
+    为网络调试提供 redis 目标地址重写：
+      1) KDN_FORCE_REDIS_HOST: 无条件覆盖
+      2) KDN_REWRITE_LOOPBACK_TO: 仅在请求是回环地址时重写
+    """
+    enabled_raw = os.getenv("KDN_REDIS_REWRITE_ENABLE", str(getattr(config, "KDN_REDIS_REWRITE_ENABLE", False))).strip().lower()
+    enabled = enabled_raw in {"1", "true", "yes", "y", "on"}
+    if not enabled:
+        return request_host
+
+    force_host = os.getenv("KDN_FORCE_REDIS_HOST", str(getattr(config, "KDN_FORCE_REDIS_HOST", ""))).strip()
+    if force_host:
+        return force_host
+
+    rewrite_host = os.getenv("KDN_REWRITE_LOOPBACK_TO", str(getattr(config, "KDN_REWRITE_LOOPBACK_TO", ""))).strip()
+    if rewrite_host and request_host.strip().lower() in {"127.0.0.1", "localhost", "::1"}:
+        return rewrite_host
+
+    return request_host
+
+
 def _squelch_noisy_loggers() -> None:
     # 外部控制信令正常请求不需要持续刷屏
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -73,11 +95,13 @@ class TransferTask:
 
 class NetworkSimulator:
     """
-    最小可用网络模拟器：
-    - 批次窗口固定 batch_window_ms
-    - 同批任务平分总带宽
-    - ack 单独返回
-    - 批间串行
+    单链路串行网络模拟器（M/D/1 风格）：
+    - 同一时刻只服务 1 个传输任务
+    - 后续任务在 pending 队列排队
+    - 维持 ack 异步返回与可观测队列时延
+
+    兼容性说明：
+    - 仍保留 batch_window_ms 参数，但在串行模型中不参与调度，仅保留配置兼容。
     """
 
     def __init__(
@@ -135,70 +159,39 @@ class NetworkSimulator:
 
     async def _run(self) -> None:
         while self.running:
-            first_task = await self.pending.get()
-
-            batch_id = self.batch_seq
+            task = await self.pending.get()
+            task_id = self.batch_seq
             self.batch_seq += 1
+            await self._serve_one(task_id, task)
 
-            batch_tasks: List[TransferTask] = [first_task]
-
-            batch_open_time = time.perf_counter()
-            batch_deadline = batch_open_time + self.batch_window_ms / 1000.0
-
-            while True:
-                remain = batch_deadline - time.perf_counter()
-                if remain <= 0:
-                    break
-
-                try:
-                    task = await asyncio.wait_for(self.pending.get(), timeout=remain)
-                    batch_tasks.append(task)
-                except asyncio.TimeoutError:
-                    break
-
-            await self._serve_batch(batch_id, batch_tasks)
-
-    async def _serve_batch(self, batch_id: int, batch_tasks: List[TransferTask]) -> None:
-
-        batch_start = time.perf_counter()
-        batch_size = max(1, len(batch_tasks))
+    async def _serve_one(self, task_id: int, task: TransferTask) -> None:
+        start = time.perf_counter()
+        self._active_transfers = 1
 
         logging.info(
-            "[KDN-NET] batch start id=%s size=%s",
-            batch_id,
-            batch_size,
+            "[KDN-NET] task start id=%s pending=%s payload_bytes=%s",
+            task_id,
+            int(self.pending.qsize()),
+            int(task.payload_bytes),
         )
 
         effective_bandwidth = self.bandwidth_bytes_s * self.efficiency
-        per_task_bandwidth = max(1.0, effective_bandwidth / batch_size)
+        transfer_s = float(task.payload_bytes) / max(1.0, effective_bandwidth)
+        total_net_s = self.fixed_latency_ms / 1000.0 + transfer_s
+        ack_time = start + total_net_s
 
-        latest_ack_time = batch_start
+        queue_s = max(0.0, start - float(task.ready_time))
 
-        self._active_transfers = batch_size
-        for task in batch_tasks:
-            transfer_s = float(task.payload_bytes) / per_task_bandwidth
-            total_net_s = self.fixed_latency_ms / 1000.0 + transfer_s
-            ack_time = batch_start + total_net_s
+        task.batch_id = task_id
+        task.batch_size = 1
+        task.batch_start_time = start
+        task.ack_time = ack_time
+        task.network_queue_ms = queue_s * 1000.0
+        self._queue_ms_ema = (1.0 - self._ema_alpha) * self._queue_ms_ema + self._ema_alpha * task.network_queue_ms
+        task.network_transfer_ms = total_net_s * 1000.0
+        task.network_total_ms = max(0.0, ack_time - float(task.ready_time)) * 1000.0
 
-            queue_s = max(0.0, batch_start - float(task.ready_time))
-
-            task.batch_id = batch_id
-            task.batch_size = batch_size
-            task.batch_start_time = batch_start
-            task.ack_time = ack_time
-            task.network_queue_ms = queue_s * 1000.0
-            # 维护 queue 时延 EMA，供 scheduler 过载判断（无需引入重度统计）
-            self._queue_ms_ema = (1.0 - self._ema_alpha) * self._queue_ms_ema + self._ema_alpha * task.network_queue_ms
-            task.network_transfer_ms = total_net_s * 1000.0
-            task.network_total_ms = max(0.0, ack_time - float(task.ready_time)) * 1000.0
-
-            latest_ack_time = max(latest_ack_time, ack_time)
-
-            asyncio.create_task(self._finish_task(task))
-
-        remain = latest_ack_time - time.perf_counter()
-        if remain > 0:
-            await asyncio.sleep(remain)
+        await self._finish_task(task)
         self._active_transfers = 0
 
     def get_runtime_stats(self) -> Dict[str, Any]:
@@ -269,12 +262,24 @@ async def _startup():
     _TEXT_DB = TextDatabase(str(db_dir), embedder=embedder)
     print(f"[KDN] TextDatabase ready: {db_dir}")
 
-    network_enabled = os.getenv("KDN_NETWORK_ENABLE", "0").strip() == "1"
+    network_enabled_raw = os.getenv(
+        "KDN_NETWORK_ENABLE",
+        "1" if bool(getattr(config, "KDN_NETWORK_ENABLE", False)) else "0"
+    ).strip().lower()
+    network_enabled = network_enabled_raw in {"1", "true", "yes", "y", "on"}
     if network_enabled:
-        bandwidth_mb_s = float(os.getenv("KDN_NETWORK_BW_MB_S", "1000").strip())
-        batch_window_ms = float(os.getenv("KDN_NETWORK_BATCH_WINDOW_MS", "10").strip())
-        fixed_latency_ms = float(os.getenv("KDN_NETWORK_FIXED_LATENCY_MS", "0").strip())
-        efficiency = float(os.getenv("KDN_NETWORK_EFFICIENCY", "1.0").strip())
+        bandwidth_mb_s = float(
+            os.getenv("KDN_NETWORK_BW_MB_S", str(getattr(config, "KDN_NETWORK_BW_MB_S", 125.0))).strip()
+        )
+        batch_window_ms = float(
+            os.getenv("KDN_NETWORK_BATCH_WINDOW_MS", str(getattr(config, "KDN_NETWORK_BATCH_WINDOW_MS", 10.0))).strip()
+        )
+        fixed_latency_ms = float(
+            os.getenv("KDN_NETWORK_FIXED_LATENCY_MS", str(getattr(config, "KDN_NETWORK_FIXED_LATENCY_MS", 10.0))).strip()
+        )
+        efficiency = float(
+            os.getenv("KDN_NETWORK_EFFICIENCY", str(getattr(config, "KDN_NETWORK_EFFICIENCY", 0.8))).strip()
+        )
 
         _NETWORK_SIM = NetworkSimulator(
             bandwidth_mb_s=bandwidth_mb_s,
@@ -781,10 +786,15 @@ async def inject_ready_kv(payload: Dict[str, Any]):
             content={"ok": False, "detail": "knowledge_ids is empty"},
         )
 
-    redis_host = str(payload.get("redis_host", "127.0.0.1"))
+    request_redis_host = str(payload.get("redis_host", "127.0.0.1"))
+    redis_host = _resolve_redis_target_host(request_redis_host)
     redis_port = int(payload.get("redis_port", 6379))
     redis_db = int(payload.get("redis_db", 0))
     redis_password = payload.get("redis_password", None)
+    logging.info(
+        "[KDN] inject_ready_kv redis target request_host=%s resolved_host=%s port=%s db=%s",
+        request_redis_host, redis_host, redis_port, redis_db
+    )
 
     # 这里一定要拆包：get_many -> (items, miss)
     items, miss = _TEXT_DB.get_many(requested)
