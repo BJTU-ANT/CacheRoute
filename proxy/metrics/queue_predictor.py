@@ -19,6 +19,7 @@ from typing import Dict, Optional
 
 
 DEFAULT_COEFF_PATH = Path(__file__).with_name("ttft_coefficients.json")
+DEFAULT_REDIS_PULL_COEFF_PATH = Path(__file__).with_name("redis_pull_coefficients.json")
 _SHORT_CALIB_ANCHORS_MS = [
     # (length_token, ttft_ms)
     (0, 60.0),
@@ -83,6 +84,21 @@ def load_ttft_coefficients(coeff_path: str | Path = DEFAULT_COEFF_PATH) -> Dict[
     return coeffs
 
 
+def load_redis_pull_coefficients(
+    coeff_path: str | Path = DEFAULT_REDIS_PULL_COEFF_PATH,
+) -> Dict[str, float]:
+    path = Path(coeff_path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        coeffs = {
+            "a": float(payload["a"]),
+            "b": float(payload["b"]),
+        }
+    except KeyError as exc:
+        raise ValueError(f"missing coefficient key: {exc}") from exc
+    return coeffs
+
+
 def queue_predictor(
     length: int,
     bs: Optional[int] = None,
@@ -127,6 +143,23 @@ def queue_predictor(
     return max(pred, calibrated_pred)
 
 
+def predict_redis_pull_ms(
+    *,
+    kvcache_size_gb: float,
+    coeffs: Optional[Dict[str, float]] = None,
+    coeff_path: str | Path = DEFAULT_REDIS_PULL_COEFF_PATH,
+) -> float:
+    """
+    Predict LMCache redis pull time in milliseconds.
+    Linear form:
+      redis_pull_ms = a * kvcache_size_gb + b
+    """
+    x = max(0.0, float(kvcache_size_gb))
+    c = coeffs or load_redis_pull_coefficients(coeff_path)
+    pred = float(c["a"]) * x + float(c["b"])
+    return max(0.0, pred)
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Predict TTFT by length and batch-size.")
     parser.add_argument("--length", type=int, required=True, help="prompt length")
@@ -141,6 +174,18 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         "--ms",
         action="store_true",
         help="also print milliseconds for convenience",
+    )
+    parser.add_argument(
+        "--kvcache-size-gb",
+        type=float,
+        default=None,
+        help="optional: predict redis pull ms using redis_pull_coefficients.json",
+    )
+    parser.add_argument(
+        "--redis-coeff-path",
+        type=str,
+        default=str(DEFAULT_REDIS_PULL_COEFF_PATH),
+        help="redis pull coefficient json path",
     )
     return parser
 
@@ -157,6 +202,12 @@ def main() -> None:
     print(f"predicted_ttft_seconds={pred_seconds:.6f}")
     if args.ms:
         print(f"predicted_ttft_ms={pred_seconds * 1000:.3f}")
+    if args.kvcache_size_gb is not None:
+        pull_ms = predict_redis_pull_ms(
+            kvcache_size_gb=float(args.kvcache_size_gb),
+            coeff_path=args.redis_coeff_path,
+        )
+        print(f"predicted_redis_pull_ms={pull_ms:.3f}")
 
 
 if __name__ == "__main__":

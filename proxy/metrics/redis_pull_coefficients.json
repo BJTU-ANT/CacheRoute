@@ -1,0 +1,7 @@
+{
+  "a": 2764.3407821694204,
+  "b": 12.460820712239126,
+  "unit": "ms",
+  "feature": "kvcache_size_gb",
+  "source": "RedisPullLinearRegressor"
+}
