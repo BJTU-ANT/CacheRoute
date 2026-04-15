@@ -143,25 +143,29 @@ class QueueManager:
         任务首 token 到达后，按“预测耗时 vs 实际耗时”纠正 expected_idle 时间戳。
 
         规则：
-        - 默认采用 (predict_queue_wait + predict_compute) 对比 actual_compute，
-          因为 actual_compute 当前定义为“vLLM 队列等待 + 首 token 计算”。
-        - 若上述字段不可用，再回退 total 口径。
+        - 默认采用 total 口径：predict_total 对比 actual_total。
+          这样两侧都从 proxy_enqueue 起算，语义一致。
+        - 若 total 字段不可用，再退回 compute 口径：predict_compute 对比 actual_compute。
         """
-        pred_queue_ms = task.trace.get("predict_queue_wait_ms")
+        pred_total_ms = task.trace.get("predict_total_ms")
+        actual_total_ms = task.trace.get("actual_total_ms")
         pred_compute_ms = task.trace.get("predict_compute_ms")
         actual_ms = task.trace.get("actual_compute_ms")
 
-        correction_basis = "queue+compute"
-        if isinstance(pred_queue_ms, int) and isinstance(pred_compute_ms, int):
-            pred_ms = pred_queue_ms + pred_compute_ms
+        correction_basis = "total"
+        if isinstance(pred_total_ms, int) and isinstance(actual_total_ms, int):
+            pred_ms = pred_total_ms
+            actual_ms = actual_total_ms
         else:
             pred_ms = None
 
-        # 兼容兜底：若 queue+compute 不可用，则退回 total 口径
+        # 兼容兜底：若 total 不可用，则退回 compute 口径
         if not isinstance(pred_ms, int) or not isinstance(actual_ms, int):
-            pred_ms = task.trace.get("predict_total_ms")
-            actual_ms = task.trace.get("actual_total_ms")
-            correction_basis = "total"
+            if isinstance(pred_compute_ms, int) and isinstance(actual_ms, int):
+                pred_ms = pred_compute_ms
+                correction_basis = "compute"
+            else:
+                pred_ms = None
 
         if not isinstance(pred_ms, int) or not isinstance(actual_ms, int):
             return
