@@ -39,6 +39,7 @@ class QueueManager:
 
     _PREDICT_HEADER_OVERHEAD_TOKENS = 36
     _KNOW_PREPARE_FIXED_OVERHEAD_MS = 3.0
+    _READY_DEQUEUE_INTERVAL_S = 0.02
 
     def __init__(self) -> None:
         self._prepare_concurrency_per_instance = int(os.environ.get("PREPARE_CONCURRENCY", config.PREPARE_CONCURRENCY))
@@ -55,6 +56,9 @@ class QueueManager:
         self._http_timeout_s = 60.0
         # per-instance 预计空闲时间戳（seconds since epoch）
         self._instance_expected_idle_ts_s: Dict[str, float] = {}
+        # per-instance ready worker 抓取节流（顺序化 + 最小间隔）
+        self._ready_fetch_locks: Dict[str, asyncio.Lock] = {}
+        self._ready_last_fetch_ts_s: Dict[str, float] = {}
         self._predict_lock = asyncio.Lock()
 
     @staticmethod
@@ -143,25 +147,29 @@ class QueueManager:
         任务首 token 到达后，按“预测耗时 vs 实际耗时”纠正 expected_idle 时间戳。
 
         规则：
-        - 默认采用 (predict_queue_wait + predict_compute) 对比 actual_compute，
-          因为 actual_compute 当前定义为“vLLM 队列等待 + 首 token 计算”。
-        - 若上述字段不可用，再回退 total 口径。
+        - 默认采用 total 口径：predict_total 对比 actual_total。
+          这样两侧都从 proxy_enqueue 起算，语义一致。
+        - 若 total 字段不可用，再退回 compute 口径：predict_compute 对比 actual_compute。
         """
-        pred_queue_ms = task.trace.get("predict_queue_wait_ms")
+        pred_total_ms = task.trace.get("predict_total_ms")
+        actual_total_ms = task.trace.get("actual_total_ms")
         pred_compute_ms = task.trace.get("predict_compute_ms")
         actual_ms = task.trace.get("actual_compute_ms")
 
-        correction_basis = "queue+compute"
-        if isinstance(pred_queue_ms, int) and isinstance(pred_compute_ms, int):
-            pred_ms = pred_queue_ms + pred_compute_ms
+        correction_basis = "total"
+        if isinstance(pred_total_ms, int) and isinstance(actual_total_ms, int):
+            pred_ms = pred_total_ms
+            actual_ms = actual_total_ms
         else:
             pred_ms = None
 
-        # 兼容兜底：若 queue+compute 不可用，则退回 total 口径
+        # 兼容兜底：若 total 不可用，则退回 compute 口径
         if not isinstance(pred_ms, int) or not isinstance(actual_ms, int):
-            pred_ms = task.trace.get("predict_total_ms")
-            actual_ms = task.trace.get("actual_total_ms")
-            correction_basis = "total"
+            if isinstance(pred_compute_ms, int) and isinstance(actual_ms, int):
+                pred_ms = pred_compute_ms
+                correction_basis = "compute"
+            else:
+                pred_ms = None
 
         if not isinstance(pred_ms, int) or not isinstance(actual_ms, int):
             return
@@ -220,6 +228,13 @@ class QueueManager:
                 self._worker_tasks[ready_key] = asyncio.create_task(
                     self._ready_worker_loop(instance_id, worker_idx)
                 )
+
+    def _get_ready_fetch_lock(self, instance_id: str) -> asyncio.Lock:
+        lock = self._ready_fetch_locks.get(instance_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._ready_fetch_locks[instance_id] = lock
+        return lock
 
     async def enqueue_prepare(self, task: ProxyTask) -> None:
         """
@@ -397,7 +412,15 @@ class QueueManager:
         """
         q = self._qmap.get(instance_id)
         while True:
-            task = await q.ready_q.get()
+            # 顺序化抓取：避免多个 ready worker 同时抓取引发明显乱序。
+            async with self._get_ready_fetch_lock(instance_id):
+                now_s = time.time()
+                last_fetch_s = self._ready_last_fetch_ts_s.get(instance_id, 0.0)
+                wait_s = self._READY_DEQUEUE_INTERVAL_S - (now_s - last_fetch_s)
+                if wait_s > 0:
+                    await asyncio.sleep(wait_s)
+                task = await q.ready_q.get()
+                self._ready_last_fetch_ts_s[instance_id] = time.time()
             q.active_ready += 1
             try:
                 task.trace["ready_dequeue_ms"] = _now_ms()
