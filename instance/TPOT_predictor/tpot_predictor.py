@@ -69,21 +69,37 @@ async def run_default_benchmark(
 
 
 def summarize_results(summary: Dict[str, Any]) -> str:
-    lines = ["\n=== TPOT Benchmark Summary ==="]
+    lines = ["\n=== TPOT Benchmark Summary ===", "[Config-Level]"]
+
     for cfg in summary.get("configs", []):
         lines.append(
-            "BS={batch_size}, PL={prompt_length}, tasks={tasks}, "
-            "avg_ttft={avg_ttft_ms:.2f}ms, avg_tpot={avg_tpot_ms:.2f}ms, "
-            "min/max_tpot={min_tpot_ms:.2f}/{max_tpot_ms:.2f}ms".format(
+            "BS={batch_size}, target_PL={target_prompt_length}, tasks={tasks}, "
+            "avg_ttft={avg_ttft_ms:.2f}ms, avg_offset={avg_input_length_offset:.2f}".format(
                 **{
                     **cfg,
                     "avg_ttft_ms": cfg.get("avg_ttft_ms") or 0.0,
-                    "avg_tpot_ms": cfg.get("avg_tpot_ms") or 0.0,
-                    "min_tpot_ms": cfg.get("min_tpot_ms") or 0.0,
-                    "max_tpot_ms": cfg.get("max_tpot_ms") or 0.0,
+                    "avg_input_length_offset": cfg.get("avg_input_length_offset") or 0.0,
                 }
             )
         )
+
+    lines.append("\n[Length-wise Curve by BS]")
+    for bs_curve in summary.get("length_wise_by_bs", []):
+        bs = bs_curve.get("batch_size")
+        curve = bs_curve.get("length_tpot_curve") or []
+        lines.append(f"BS={bs}, curve_points={len(curve)}")
+        for point in curve[:5]:
+            lines.append(
+                "  L={sequence_length}, n={samples}, mean={mean_tpot_ms:.2f}ms, "
+                "median={median_tpot_ms:.2f}ms, p95={p95_tpot_ms:.2f}ms".format(
+                    **{
+                        **point,
+                        "mean_tpot_ms": point.get("mean_tpot_ms") or 0.0,
+                        "median_tpot_ms": point.get("median_tpot_ms") or 0.0,
+                        "p95_tpot_ms": point.get("p95_tpot_ms") or 0.0,
+                    }
+                )
+            )
     return "\n".join(lines)
 
 

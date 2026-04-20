@@ -1,90 +1,111 @@
 # TPOT Predictor
 
-`TPOT_predictor` 参考 `TTFT_predictor` 的结构实现，目标是采集并输出不同 `(prompt_length, batch_size)` 组合下，**每个任务、每个 token 的 TPOT（Time Per Output Token）**。
-
-> 这里的 TPOT 指相邻两个输出 token 的时间差；首 token 时间记为 TTFT。
+`TPOT_predictor` 参考 `TTFT_predictor` 结构实现，但目标是输出 **固定 batch size 下，随真实 sequence length 变化的 TPOT 曲线**。
 
 ---
 
 ## 1. 目录结构
 
-- `tpot_predictor.py`：对外异步入口，负责统一触发 benchmark。
-- `tpot_regressor.py`：核心采集器（当前偏测量与汇总，不做线性拟合）。
-- `request_generator.py`：生成目标 prompt，并发起流式请求，逐 token 抓取时间。
+- `tpot_predictor.py`：对外异步入口，负责触发 benchmark 与摘要输出。
+- `tpot_regressor.py`：核心采集与聚合（当前偏统计，不做回归拟合）。
+- `request_generator.py`：prompt 构造 + SSE 流式解析 + token 级时间记录。
 - `__init__.py`：导出常用接口。
 
 ---
 
-## 2. 关键设计（对齐你的要求）
+## 2. 关键口径
 
-### 2.1 固定请求组约束
+### 2.1 `target_prompt_length` 与 `real_input_length`
 
-对同一组 `(batch_size, prompt_length)`：
+请求走 `/v1/chat/completions` 时，服务端会套 chat template，所以模型真实 prefill 长度不等于裸 prompt token 数。
 
-- 每个任务使用相同 `prompt_length`。
-- 每个任务使用相同 `max_tokens`。
+实现中会同时记录：
 
-即一次 round 的 `bs` 个请求只改变内容随机性，不改变长度口径。
+- `target_prompt_length`：你想要的裸 prompt 目标长度。
+- `real_input_length`：通过
+  `tokenizer.apply_chat_template([{"role":"user","content":prompt}], tokenize=True, add_generation_prompt=True)`
+  算出的真实输入长度。
+- `input_length_offset = real_input_length - target_prompt_length`。
 
-### 2.2 每出一个 token 就抓一次
+每个配置都会打印 debug：
 
-在 `send_stream_request_for_tpot(...)` 中按流式 chunk 记录时间点：
+- `target_prompt_length`
+- `real_input_length`
+- `diff`
 
-- 第 1 个 token：记录 `TTFT`。
-- 第 n 个 token（n>=2）：`TPOT_n = t_n - t_(n-1)`。
+用于定位你观测到的固定偏差（例如 -32/+32 是否由 template 导致）。
 
-### 2.3 每抓一次长度 +1
+### 2.2 token 抓取口径（SSE 解析）
 
-每条任务记录中都有：
+不再按 `iter_any()` 的 chunk 数当 token 数。
 
-- `token_index`：第几个生成 token。
-- `sequence_length = prompt_length + token_index`：满足“每抓一次 length + 1”的要求。
-- `tpot_seconds`：该 token 对应时间间隔。
+现在逻辑：
+
+1. 解析 SSE `data:` 行并反序列化 JSON。
+2. 只读取 `choices[0].delta.content` 的新增文本。
+3. 把新增文本累积后重新 tokenize。
+4. 根据“新增 token 数”展开记录（即使一个 event 带来多个 token，也会展开多个 step）。
+
+### 2.3 sequence length 定义
+
+对每个生成 step：
+
+- `token_index` 从 1 开始（第一个生成 token）。
+- `sequence_length = real_input_length + token_index - 1`。
+
+即 `sequence_length` 表示“生成该 token 前，KV 序列当前长度”。
 
 ---
 
-## 3. 输出数据格式
+## 3. 输出组织
 
-运行后会导出 JSON（默认：`instance/TPOT_predictor/output/tpot_results.json`）：
+### 3.1 保留原始 records
 
-- `summary.configs`：每个 `(bs, pl)` 的聚合统计（avg/min/max TPOT，avg TTFT）。
-- `records`：每个任务的完整时间序列。
+每条任务记录包含：
 
-单个任务记录示例：
+- `batch_size`
+- `target_prompt_length`
+- `real_input_length`
+- `input_length_offset`
+- `token_steps`（含 `token_index`, `sequence_length`, `tpot_seconds`）
+
+### 3.2 新增 length-wise TPOT 曲线（按 bs）
+
+`summary.length_wise_by_bs` 的结构：
 
 ```json
 {
-  "request_id": "bs4-pl512-r1-t2-9",
   "batch_size": 4,
-  "prompt_length": 512,
-  "max_tokens": 16,
-  "ttft_seconds": 0.134,
-  "token_steps": [
-    {"token_index": 1, "sequence_length": 513, "tpot_seconds": 0.134},
-    {"token_index": 2, "sequence_length": 514, "tpot_seconds": 0.012},
-    {"token_index": 3, "sequence_length": 515, "tpot_seconds": 0.011}
+  "length_tpot_curve": [
+    {
+      "sequence_length": 1024,
+      "samples": 12,
+      "mean_tpot_ms": 8.2,
+      "median_tpot_ms": 8.0,
+      "p95_tpot_ms": 9.4
+    }
   ]
 }
 ```
 
+可直接用于：
+
+\[
+T_{decode}(l, b) = \sum_{i=0}^{b-1} TPOT(bs, l+i)
+\]
+
 ---
 
-## 4. 使用方式
+## 4. 使用
 
-## 4.1 直接脚本运行
+### 4.1 直接运行
 
 ```bash
 cd instance/TPOT_predictor
 python tpot_predictor.py
 ```
 
-默认行为：
-
-- 遍历 `WARM_UP_CONFIGS_DEFAULT`。
-- 每个配置重复 `repeats=2`（示例 main 中）。
-- 每请求生成 `max_tokens=16`。
-
-## 4.2 作为模块调用
+### 4.2 作为模块调用
 
 ```python
 import asyncio
@@ -103,16 +124,12 @@ asyncio.run(main())
 
 ---
 
-## 5. 参数建议
+## 5. 拟合建议（四项式）
 
-- `max_tokens`：建议 >= 8，才能更稳定地观察 TPOT 分布。
-- `repeats`：建议 3~5，减少偶然抖动。
-- `concurrency`：默认跟随 `bs`；若环境容易超时，可手动调小。
+拿到 `length_wise_by_bs` 后，可按每个 `bs` 拟合：
 
----
+- 输入：`x = sequence_length`
+- 标签：`y = mean_tpot_ms`（也可用 median）
+- 模型：`y = a0 + a1*x + a2*x^2 + a3*x^3 + a4*x^4`
 
-## 6. 注意事项
-
-1. 当前流式解析逻辑按“收到非空 chunk 即视为一个 token 事件”，依赖你的 vLLM 流式行为。
-2. 若后续要更严谨，可改为解析 SSE 中 `delta.content` / `logprobs` 精确 token 数。
-3. 本方案先保障“结构和流程可跑通”，并保持与 `TTFT_predictor` 相似的代码组织，便于后续扩展到回归预测。
+然后用拟合函数近似每个长度点，再做离散求和来估计 `T_decode(l,b)`。
