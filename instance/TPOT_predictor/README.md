@@ -1,13 +1,17 @@
 # TPOT Predictor
 
-`TPOT_predictor` 参考 `TTFT_predictor` 结构实现，但目标是输出 **固定 batch size 下，随真实 sequence length 变化的 TPOT 曲线**。
+`TPOT_predictor` 参考 `TTFT_predictor` 结构实现，目标是输出 **固定 batch size 下，随真实 sequence length 变化的 TPOT 曲线**，并支持拟合：
+
+\[
+TPOT(bs, length) = a1 \cdot bs \cdot length + a2 \cdot bs + a3 \cdot length + a4
+\]
 
 ---
 
 ## 1. 目录结构
 
-- `tpot_predictor.py`：对外异步入口，负责触发 benchmark 与摘要输出。
-- `tpot_regressor.py`：核心采集与聚合（当前偏统计，不做回归拟合）。
+- `tpot_predictor.py`：对外异步入口，包含采集、摘要、拟合与 decode 时间预测接口。
+- `tpot_regressor.py`：核心采集与聚合，含 `TPOTFourTermRegressor`。
 - `request_generator.py`：prompt 构造 + SSE 流式解析 + token 级时间记录。
 - `__init__.py`：导出常用接口。
 
@@ -17,119 +21,134 @@
 
 ### 2.1 `target_prompt_length` 与 `real_input_length`
 
-请求走 `/v1/chat/completions` 时，服务端会套 chat template，所以模型真实 prefill 长度不等于裸 prompt token 数。
+实现会同时记录：
 
-实现中会同时记录：
-
-- `target_prompt_length`：你想要的裸 prompt 目标长度。
-- `real_input_length`：通过
-  `tokenizer.apply_chat_template([{"role":"user","content":prompt}], tokenize=True, add_generation_prompt=True)`
-  算出的真实输入长度。
+- `target_prompt_length`：裸 prompt 目标长度。
+- `real_input_length`：`apply_chat_template` 后真实进入模型的 prefill 长度。
 - `input_length_offset = real_input_length - target_prompt_length`。
 
-每个配置都会打印 debug：
+并打印每个 task 的 debug：`target_prompt_length / real_input_length / diff`。
 
-- `target_prompt_length`
-- `real_input_length`
-- `diff`
-
-用于定位你观测到的固定偏差（例如 -32/+32 是否由 template 导致）。
-
-### 2.2 token 抓取口径（SSE 解析）
-
-不再按 `iter_any()` 的 chunk 数当 token 数。
-
-现在逻辑：
-
-1. 解析 SSE `data:` 行并反序列化 JSON。
-2. 只读取 `choices[0].delta.content` 的新增文本。
-3. 把新增文本累积后重新 tokenize。
-4. 根据“新增 token 数”展开记录（即使一个 event 带来多个 token，也会展开多个 step）。
-
-### 2.3 sequence length 定义
+### 2.2 sequence length 定义
 
 对每个生成 step：
 
 - `token_index` 从 1 开始（第一个生成 token）。
 - `sequence_length = real_input_length + token_index - 1`。
 
-即 `sequence_length` 表示“生成该 token 前，KV 序列当前长度”。
+这表示“生成该 token 前的序列长度”。
+
+### 2.3 最小可观测 length
+
+由于存在 chat template offset，`sequence_length` 的最小值通常不会从 1 起。
+
+输出里会给：
+
+- `min_observed_sequence_length`
+- `max_observed_sequence_length`
+
+避免误判为漏记。
 
 ---
 
 ## 3. 输出组织
 
-### 3.1 保留原始 records
+### 3.1 原始 records
 
-每条任务记录包含：
+每条任务保留：`batch_size`, `target_prompt_length`, `real_input_length`, `input_length_offset`, `token_steps`。
 
-- `batch_size`
-- `target_prompt_length`
-- `real_input_length`
-- `input_length_offset`
-- `token_steps`（含 `token_index`, `sequence_length`, `tpot_seconds`）
+### 3.2 按长度曲线（按 bs）
 
-### 3.2 新增 length-wise TPOT 曲线（按 bs）
+`summary.length_wise_by_bs[*].length_tpot_curve[*]`：
 
-`summary.length_wise_by_bs` 的结构：
+- `sequence_length`
+- `samples`
+- `mean_tpot_ms`
+- `median_tpot_ms`
+- `p95_tpot_ms`
+
+### 3.3 单独导出 length-wise 文件
+
+支持导出 CSV/JSON（默认 CSV）：
+
+- `batch_size, sequence_length, samples, mean_tpot_ms, median_tpot_ms, p95_tpot_ms`
+
+---
+
+## 4. 默认采样策略（短段加密）
+
+默认 `TOKEN_LENGTHS_TO_TEST`：
+
+- `8..120` 步长 8
+- `128..480` 步长 32
+- `512..1984` 步长 64
+
+即短长度加密、长长度放宽。
+
+---
+
+## 5. 拟合模型（四项线性组合）
+
+`TPOTFourTermRegressor` 使用特征：
+
+- `[bs * length, bs, length, 1]`
+
+标签默认：
+
+- `mean_tpot_ms`（也可传 `median_tpot_ms`）
+
+导出系数：
 
 ```json
 {
-  "batch_size": 4,
-  "length_tpot_curve": [
-    {
-      "sequence_length": 1024,
-      "samples": 12,
-      "mean_tpot_ms": 8.2,
-      "median_tpot_ms": 8.0,
-      "p95_tpot_ms": 9.4
-    }
-  ]
+  "a1": ...,
+  "a2": ...,
+  "a3": ...,
+  "a4": ...,
+  "unit": "ms",
+  "source": "TPOTFourTermRegressor"
 }
 ```
 
-可直接用于：
+---
+
+## 6. Decode 时间计算
+
+接口按：
 
 \[
-T_{decode}(l, b) = \sum_{i=0}^{b-1} TPOT(bs, l+i)
+T_{decode}(l,b,bs)=\sum_{i=0}^{b-1}TPOT(bs,l+i)
 \]
+
+逐点求和。
+
+若某个 `length` 无直接样本：
+
+1. 先用同 `bs` 的观测曲线做插值（或边界最近值）；
+2. 若无可插值点且 `prefer_fitted=True`，再用四项拟合值；
+3. 若仍不可得，兜底为 0。
 
 ---
 
-## 4. 使用
-
-### 4.1 直接运行
-
-```bash
-cd instance/TPOT_predictor
-python tpot_predictor.py
-```
-
-### 4.2 作为模块调用
+## 7. 使用
 
 ```python
 import asyncio
-from tpot_predictor import collect_tpot_matrix
+from tpot_predictor import collect_tpot_matrix, fit_tpot_four_term, predict_decode_time
 
 async def main():
-    reg = await collect_tpot_matrix(
-        configs=[(1, 256), (4, 512)],
+    reg = await collect_tpot_matrix(configs=[(1, 64), (4, 128)], max_tokens=16, repeats=2)
+    coeffs = fit_tpot_four_term(reg, label_key="mean_tpot_ms")
+    print(coeffs)
+
+    decode = predict_decode_time(
+        regressor=reg,
+        batch_size=4,
+        start_sequence_length=160,
         max_tokens=32,
-        repeats=3,
+        prefer_fitted=True,
     )
-    reg.export_json("instance/TPOT_predictor/output/my_tpot.json")
+    print(decode["total_decode_ms"])
 
 asyncio.run(main())
 ```
-
----
-
-## 5. 拟合建议（四项式）
-
-拿到 `length_wise_by_bs` 后，可按每个 `bs` 拟合：
-
-- 输入：`x = sequence_length`
-- 标签：`y = mean_tpot_ms`（也可用 median）
-- 模型：`y = a0 + a1*x + a2*x^2 + a3*x^3 + a4*x^4`
-
-然后用拟合函数近似每个长度点，再做离散求和来估计 `T_decode(l,b)`。

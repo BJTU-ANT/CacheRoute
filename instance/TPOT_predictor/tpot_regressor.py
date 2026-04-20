@@ -1,3 +1,4 @@
+import csv
 import json
 import statistics
 import time
@@ -6,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import aiohttp
+import numpy as np
 from transformers import AutoTokenizer
 
 from request_generator import (
@@ -24,21 +26,88 @@ class TPOTTaskRecord:
     input_length_offset: int
     max_tokens: int
     ttft_seconds: float
-    # 每个元素:
     # token_index: 第几个生成 token（从1开始）
     # sequence_length: 生成该 token 前的长度 = real_input_length + token_index - 1
-    # tpot_seconds: 对应的时间增量
+    # tpot_seconds: 对应时间增量
     token_steps: List[Dict[str, Any]]
 
 
-class TPOTRegressor:
+class TPOTFourTermRegressor:
     """
-    以测量/统计为主，不做参数回归。
-    输出按 bs 与真实 sequence length 聚合的 TPOT 曲线。
+    目标模型：
+    TPOT(bs, length) = a1 * bs * length + a2 * bs + a3 * length + a4
     """
 
     def __init__(self):
+        self._fitted = False
+        self._coeffs = {"a1": 0.0, "a2": 0.0, "a3": 0.0, "a4": 0.0}
+        self._label_key = "mean_tpot_ms"
+
+    def fit(self, points: List[Dict[str, Any]], label_key: str = "mean_tpot_ms") -> Dict[str, Any]:
+        self._label_key = label_key
+
+        X_rows = []
+        y_rows = []
+        weights = []
+        for p in points:
+            y = p.get(label_key)
+            if y is None:
+                continue
+            bs = float(p["batch_size"])
+            length = float(p["sequence_length"])
+            X_rows.append([bs * length, bs, length, 1.0])
+            y_rows.append(float(y))
+            weights.append(max(1.0, float(p.get("samples") or 1.0)))
+
+        if len(X_rows) < 4:
+            raise ValueError("Not enough length-wise points to fit four-term regressor.")
+
+        X = np.asarray(X_rows, dtype=float)
+        y = np.asarray(y_rows, dtype=float)
+        w = np.sqrt(np.asarray(weights, dtype=float))
+        Xw = X * w[:, None]
+        yw = y * w
+
+        coeffs, _, _, _ = np.linalg.lstsq(Xw, yw, rcond=None)
+        self._coeffs = {
+            "a1": float(coeffs[0]),
+            "a2": float(coeffs[1]),
+            "a3": float(coeffs[2]),
+            "a4": float(coeffs[3]),
+        }
+        self._fitted = True
+        return self.get_coefficients()
+
+    def predict_tpot_ms(self, batch_size: int, sequence_length: int) -> float:
+        if not self._fitted:
+            raise RuntimeError("TPOTFourTermRegressor is not fitted.")
+        a1, a2, a3, a4 = (
+            self._coeffs["a1"],
+            self._coeffs["a2"],
+            self._coeffs["a3"],
+            self._coeffs["a4"],
+        )
+        pred = a1 * batch_size * sequence_length + a2 * batch_size + a3 * sequence_length + a4
+        return max(0.0, pred)
+
+    def get_coefficients(self) -> Dict[str, Any]:
+        return {
+            "a1": self._coeffs["a1"],
+            "a2": self._coeffs["a2"],
+            "a3": self._coeffs["a3"],
+            "a4": self._coeffs["a4"],
+            "unit": "ms",
+            "source": "TPOTFourTermRegressor",
+            "label_key": self._label_key,
+        }
+
+
+class TPOTRegressor:
+    """以测量/统计为主，输出按 bs 与真实 sequence_length 聚合的 TPOT 曲线。"""
+
+    def __init__(self):
         self._records: Dict[Tuple[int, int], List[TPOTTaskRecord]] = {}
+        self._four_term_regressor: Optional[TPOTFourTermRegressor] = None
 
     def clear_data(self):
         self._records = {}
@@ -154,6 +223,100 @@ class TPOTRegressor:
                         f"success={success_count}/{bs}, elapsed={round_ms:.1f}ms"
                     )
 
+    def get_lengthwise_points(self) -> List[Dict[str, Any]]:
+        summary = self.build_summary()
+        points: List[Dict[str, Any]] = []
+        for by_bs in summary.get("length_wise_by_bs", []):
+            bs = by_bs["batch_size"]
+            for item in by_bs.get("length_tpot_curve", []):
+                points.append(
+                    {
+                        "batch_size": bs,
+                        "sequence_length": item["sequence_length"],
+                        "samples": item["samples"],
+                        "mean_tpot_ms": item["mean_tpot_ms"],
+                        "median_tpot_ms": item["median_tpot_ms"],
+                        "p95_tpot_ms": item["p95_tpot_ms"],
+                    }
+                )
+        return points
+
+    def fit_four_term_regressor(self, label_key: str = "mean_tpot_ms") -> Dict[str, Any]:
+        points = self.get_lengthwise_points()
+        model = TPOTFourTermRegressor()
+        coeffs = model.fit(points=points, label_key=label_key)
+        self._four_term_regressor = model
+        return coeffs
+
+    def _predict_from_curve_or_interp(self, batch_size: int, sequence_length: int, label_key: str) -> Optional[float]:
+        points = [p for p in self.get_lengthwise_points() if p["batch_size"] == batch_size]
+        if not points:
+            return None
+
+        exact = [p for p in points if p["sequence_length"] == sequence_length and p.get(label_key) is not None]
+        if exact:
+            return float(exact[0][label_key])
+
+        sorted_pts = sorted([p for p in points if p.get(label_key) is not None], key=lambda x: x["sequence_length"])
+        if not sorted_pts:
+            return None
+
+        left = None
+        right = None
+        for p in sorted_pts:
+            if p["sequence_length"] < sequence_length:
+                left = p
+            elif p["sequence_length"] > sequence_length and right is None:
+                right = p
+                break
+
+        if left and right:
+            x0, y0 = left["sequence_length"], float(left[label_key])
+            x1, y1 = right["sequence_length"], float(right[label_key])
+            ratio = (sequence_length - x0) / (x1 - x0)
+            return y0 + ratio * (y1 - y0)
+
+        nearest = left or right
+        return float(nearest[label_key]) if nearest else None
+
+    def predict_decode_time_ms(
+        self,
+        batch_size: int,
+        start_sequence_length: int,
+        max_tokens: int,
+        prefer_fitted: bool = True,
+        label_key: str = "mean_tpot_ms",
+    ) -> Dict[str, Any]:
+        total_ms = 0.0
+        source_counts = {"observed_or_interp": 0, "fitted": 0, "fallback_zero": 0}
+        details = []
+
+        for i in range(max_tokens):
+            length_i = start_sequence_length + i
+            value_ms = self._predict_from_curve_or_interp(batch_size, length_i, label_key)
+            source = "observed_or_interp"
+
+            if value_ms is None and prefer_fitted and self._four_term_regressor is not None:
+                value_ms = self._four_term_regressor.predict_tpot_ms(batch_size, length_i)
+                source = "fitted"
+
+            if value_ms is None:
+                value_ms = 0.0
+                source = "fallback_zero"
+
+            source_counts[source] += 1
+            total_ms += value_ms
+            details.append({"sequence_length": length_i, "tpot_ms": value_ms, "source": source})
+
+        return {
+            "batch_size": batch_size,
+            "start_sequence_length": start_sequence_length,
+            "max_tokens": max_tokens,
+            "total_decode_ms": total_ms,
+            "sources": source_counts,
+            "steps": details,
+        }
+
     def build_summary(self) -> Dict[str, Any]:
         configs_summary: List[Dict[str, Any]] = []
         length_bucket_by_bs: Dict[int, Dict[int, List[float]]] = {}
@@ -161,6 +324,7 @@ class TPOTRegressor:
         for (bs, target_pl), records in sorted(self._records.items(), key=lambda x: (x[0][0], x[0][1])):
             ttft_values = [rec.ttft_seconds for rec in records]
             offsets = [rec.input_length_offset for rec in records]
+            real_lengths = [rec.real_input_length for rec in records]
 
             config_data = {
                 "batch_size": bs,
@@ -170,6 +334,8 @@ class TPOTRegressor:
                 "avg_input_length_offset": statistics.mean(offsets) if offsets else None,
                 "min_input_length_offset": min(offsets) if offsets else None,
                 "max_input_length_offset": max(offsets) if offsets else None,
+                "min_real_input_length": min(real_lengths) if real_lengths else None,
+                "max_real_input_length": max(real_lengths) if real_lengths else None,
             }
             configs_summary.append(config_data)
 
@@ -201,6 +367,8 @@ class TPOTRegressor:
             curves_by_bs.append(
                 {
                     "batch_size": bs,
+                    "min_observed_sequence_length": points[0]["sequence_length"] if points else None,
+                    "max_observed_sequence_length": points[-1]["sequence_length"] if points else None,
                     "length_tpot_curve": points,
                 }
             )
@@ -208,7 +376,27 @@ class TPOTRegressor:
         return {
             "configs": configs_summary,
             "length_wise_by_bs": curves_by_bs,
+            "note": "sequence_length = real_input_length + token_index - 1; minimal observable length depends on chat template offset and sampled target prompt lengths.",
         }
+
+    def export_lengthwise_curve(self, output_path: str):
+        points = self.get_lengthwise_points()
+        path = Path(output_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        if path.suffix.lower() == ".csv":
+            with path.open("w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(
+                    f,
+                    fieldnames=["batch_size", "sequence_length", "samples", "mean_tpot_ms", "median_tpot_ms", "p95_tpot_ms"],
+                )
+                writer.writeheader()
+                for row in points:
+                    writer.writerow(row)
+        else:
+            path.write_text(json.dumps(points, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        print(f"[TPOT] Exported length-wise curve => {path}")
 
     def export_json(self, output_path: str):
         payload = {
