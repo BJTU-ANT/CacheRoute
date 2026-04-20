@@ -55,6 +55,7 @@ class ProxyTask:
     # reservation state for ready/prefill timeline
     pred_slot_idx: int = -1
     pred_slot_ready_ts_ms: int = 0
+    pred_forward_start_ts_ms: int = 0
     pred_prefill_start_ts_ms: int = 0
     pred_first_token_ts_ms: int = 0
     pred_service_ms: int = 0

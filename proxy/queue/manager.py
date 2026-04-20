@@ -117,6 +117,8 @@ class QueueManager:
 
     async def _reserve_ready_task(self, task: ProxyTask, now_s: Optional[float] = None) -> None:
         ts_s = time.time() if now_s is None else now_s
+        ready_enqueue_ms = int(task.trace.get("ready_enqueue_ms", int(ts_s * 1000)))
+        ready_enqueue_s = ready_enqueue_ms / 1000.0
         length = self._estimate_request_length(task)
         bs = 1
         compute_s = max(0.0, queue_predictor(length=length, bs=bs))
@@ -131,6 +133,8 @@ class QueueManager:
             slot_idx = min(range(len(slot_free)), key=lambda idx: slot_free[idx])
             slot_ready_s = max(ts_s, slot_free[slot_idx])
             prefill_start_s = max(slot_ready_s, prefill_free_s)
+            # In current ordered-dispatch mode, forward start follows reservation prefill start.
+            forward_start_s = prefill_start_s
             first_token_s = prefill_start_s + compute_s
 
             slot_free[slot_idx] = first_token_s
@@ -140,6 +144,7 @@ class QueueManager:
 
             task.pred_slot_idx = int(slot_idx)
             task.pred_slot_ready_ts_ms = int(slot_ready_s * 1000)
+            task.pred_forward_start_ts_ms = int(forward_start_s * 1000)
             task.pred_prefill_start_ts_ms = int(prefill_start_s * 1000)
             task.pred_first_token_ts_ms = int(first_token_s * 1000)
             task.pred_service_ms = int(compute_s * 1000)
@@ -148,12 +153,13 @@ class QueueManager:
 
             task.trace["predict_length_tokens"] = int(length)
             task.trace["predict_bs"] = int(bs)
-            # queue_wait: ready queue waiting before forward starts
-            task.trace["predict_queue_wait_ms"] = max(0, int((slot_ready_s - ts_s) * 1000))
+            task.trace["pred_forward_start_ts_ms"] = task.pred_forward_start_ts_ms
+            # queue_wait: ready_enqueue -> predicted forward_start
+            task.trace["predict_queue_wait_ms"] = max(0, int((forward_start_s - ready_enqueue_s) * 1000))
             task.trace["predict_compute_ms"] = int(compute_s * 1000)
             # vllm_internal: from forward_start to first_token, includes vllm queue + prefill compute
-            task.trace["predict_vllm_internal_ms"] = max(0, int((first_token_s - slot_ready_s) * 1000))
-            task.trace["predict_total_ms"] = int((know_prepare_s + (first_token_s - ts_s)) * 1000)
+            task.trace["predict_vllm_internal_ms"] = max(0, int((first_token_s - forward_start_s) * 1000))
+            task.trace["predict_total_ms"] = int((know_prepare_s + (first_token_s - ready_enqueue_s)) * 1000)
             # compatibility field
             task.trace["predict_wait_ms"] = int(know_prepare_ms)
 
@@ -200,22 +206,27 @@ class QueueManager:
             prefill_cursor_s = ts_s
 
             for task in pending:
+                ready_enqueue_ms = int(task.trace.get("ready_enqueue_ms", int(ts_s * 1000)))
+                ready_enqueue_s = ready_enqueue_ms / 1000.0
                 slot_idx = min(range(len(slot_free)), key=lambda idx: slot_free[idx])
                 slot_ready_s = max(ts_s, slot_free[slot_idx])
                 prefill_start_s = max(slot_ready_s, prefill_cursor_s)
+                forward_start_s = prefill_start_s
                 service_s = max(0.0, task.pred_service_ms / 1000.0)
                 first_token_s = prefill_start_s + service_s
 
                 task.pred_slot_idx = int(slot_idx)
                 task.pred_slot_ready_ts_ms = int(slot_ready_s * 1000)
+                task.pred_forward_start_ts_ms = int(forward_start_s * 1000)
                 task.pred_prefill_start_ts_ms = int(prefill_start_s * 1000)
                 task.pred_first_token_ts_ms = int(first_token_s * 1000)
                 task.recompute_generation += 1
 
                 know_prepare_ms = int(task.trace.get("predict_know_prepare_ms", 0) or 0)
-                task.trace["predict_queue_wait_ms"] = max(0, int((slot_ready_s - ts_s) * 1000))
-                task.trace["predict_vllm_internal_ms"] = max(0, int((first_token_s - slot_ready_s) * 1000))
-                task.trace["predict_total_ms"] = int(know_prepare_ms + (first_token_s - ts_s) * 1000)
+                task.trace["pred_forward_start_ts_ms"] = task.pred_forward_start_ts_ms
+                task.trace["predict_queue_wait_ms"] = max(0, int((forward_start_s - ready_enqueue_s) * 1000))
+                task.trace["predict_vllm_internal_ms"] = max(0, int((first_token_s - forward_start_s) * 1000))
+                task.trace["predict_total_ms"] = int(know_prepare_ms + (first_token_s - ready_enqueue_s) * 1000)
 
                 slot_free[slot_idx] = first_token_s
                 prefill_cursor_s = first_token_s
