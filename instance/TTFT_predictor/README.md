@@ -114,69 +114,7 @@ python prefill_prediction_server.py
 - host: `172.18.0.250`
 - port: `9000`
 
-如果要改部署地址，直接修改 `[prefill_prediction_server.py](/d:/研/代码/PD分离推理调度代码/BurstGPT/example/scheduler/TTFT_predictor/prefill_prediction_server.py)` 末尾的 `uvicorn.run(...)` 即可。
-
-## HTTP 接口说明
-
-### 1. 健康检查
-
-`GET /`
-
-返回示例：
-
-```json
-{
-  "status": "ok",
-  "message": "TTFT Predictor is running."
-}
-```
-
-### 2. TTFT 预测
-
-`POST /predict`
-
-请求体：
-
-```json
-{
-  "batch_size": 4,
-  "prompt_length": 1024
-}
-```
-
-返回示例：
-
-```json
-{
-  "predicted_ttft_seconds": 0.183,
-  "predicted_ttft_ms": 183.0
-}
-```
-
-### 3. 回流真实 prefill 数据
-
-`POST /report_prefill`
-
-请求体：
-
-```json
-{
-  "batch_size": 4,
-  "prompt_length": 1024,
-  "prefill_time_seconds": 0.176
-}
-```
-
-返回示例：
-
-```json
-{
-  "status": "received",
-  "msg": "Data queued for model update"
-}
-```
-
-这个接口适合在真实推理完成后，把测得的 prefill 时间回传给预测器。
+如果要改部署地址，直接修改 `[prefill_prediction_server.py]` 末尾的 `uvicorn.run(...)` 即可。
 
 ## Warmup 使用说明
 
@@ -258,18 +196,7 @@ python prefill_prediction_server.py
 - 启动后先执行一次详细 warmup
 - 或者让系统运行一段时间，持续回流真实 prefill 数据
 
-### 2. 为什么 warmup 触发了请求，但没有数据
-
-`trigger_warmup_requests(...)` 只负责发请求，不会自动测量真实 prefill 时间并写回。
-
-也就是说，你需要有外部逻辑调用：
-
-- `update_prefill_data(...)`
-- 或 `/report_prefill`
-
-否则只会有请求，没有训练数据。
-
-### 3. 为什么预测值会是 0 或非常小
+### 2. 为什么预测值会是 0 或非常小
 
 常见原因：
 
@@ -282,7 +209,7 @@ python prefill_prediction_server.py
 - 小于 `0.001s`
 - 大于 `60s`
 
-### 4. 为什么 prompt 长度和真实 token 数不完全一致
+### 3. 为什么 prompt 长度和真实 token 数不完全一致
 
 `request_generator.py` 是根据 tokenizer 近似生成目标 token 数的 prompt，实际生成文本可能会有轻微偏差。这对 warmup 一般是可接受的。
 
@@ -291,26 +218,8 @@ python prefill_prediction_server.py
 ### 直接启动服务
 
 ```bash
-cd example/scheduler/TTFT_predictor
+cd instance/TTFT_predictor
 python prefill_prediction_server.py
 ```
-
-### 调用预测接口
-
-```bash
-curl -X POST http://172.18.0.250:9000/predict \
-  -H "Content-Type: application/json" \
-  -d "{\"batch_size\": 4, \"prompt_length\": 1024}"
-```
-
-### 回流真实 prefill 数据
-
-```bash
-curl -X POST http://172.18.0.250:9000/report_prefill \
-  -H "Content-Type: application/json" \
-  -d "{\"batch_size\": 4, \"prompt_length\": 1024, \"prefill_time_seconds\": 0.176}"
-```
-
-## 版本说明
-
-当前目录已经统一到 `prefill_*` 系列，文档、服务接口和调度器接入都以这一套实现为准。
+### 完成曲线拟合
+移步至`proxy/metrics/`
