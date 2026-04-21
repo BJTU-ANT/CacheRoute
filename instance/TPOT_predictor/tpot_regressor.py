@@ -31,6 +31,8 @@ class TPOTTaskRecord:
     token_steps: List[Dict[str, Any]]
     scenario: str = "baseline"
     prefill_load_config: Optional[Dict[str, Any]] = None
+    injection_started: bool = False
+    injection_token_index: Optional[int] = None
 
 
 class TPOTFourTermRegressor:
@@ -212,6 +214,7 @@ class TPOTRegressor:
         concurrency: Optional[int] = None,
         scenario: str = "baseline",
         prefill_load_config: Optional[Dict[str, Any]] = None,
+        prefill_injection_mode: str = "before_request",
     ):
         tokenizer = AutoTokenizer.from_pretrained(vllm_config["tokenizer_path"])
         timeout = aiohttp.ClientTimeout(total=900)
@@ -220,7 +223,11 @@ class TPOTRegressor:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             stop_event = asyncio.Event()
             prefill_task = None
-            if scenario == "with_prefill_load":
+            normalized_prefill_injection_mode = str(prefill_injection_mode or "before_request").lower()
+            if normalized_prefill_injection_mode not in {"before_request", "after_first_token"}:
+                raise ValueError(f"Unsupported prefill_injection_mode: {prefill_injection_mode}")
+
+            if scenario == "with_prefill_load" and normalized_prefill_injection_mode == "before_request":
                 cfg = prefill_load_config or {}
                 prefill_task = asyncio.create_task(
                     run_background_prefill_load(
@@ -250,6 +257,50 @@ class TPOTRegressor:
                                 f"target_prompt_length={target_pl}, real_input_length={real_len}, diff={diff}"
                             )
 
+                        round_stop_event = stop_event
+                        round_prefill_task = None
+                        round_injection_started = False
+                        round_injection_token_index: Optional[int] = None
+
+                        if scenario == "with_prefill_load" and normalized_prefill_injection_mode == "after_first_token":
+                            round_stop_event = asyncio.Event()
+                            first_token_event = asyncio.Event()
+                            cfg = prefill_load_config or {}
+
+                            async def _start_prefill_after_first_token():
+                                nonlocal round_prefill_task, round_injection_started
+                                await first_token_event.wait()
+                                if round_stop_event.is_set() or round_prefill_task is not None:
+                                    return
+                                round_injection_started = True
+                                round_prefill_task = asyncio.create_task(
+                                    run_background_prefill_load(
+                                        session=session,
+                                        tokenizer=tokenizer,
+                                        host=vllm_config["host"],
+                                        port=vllm_config["port"],
+                                        model=vllm_config["model_id"],
+                                        prefill_prompt_length=int(cfg.get("prefill_prompt_length", 1024)),
+                                        prefill_concurrency=int(cfg.get("prefill_concurrency", 1)),
+                                        prefill_interval_ms=int(cfg.get("prefill_interval_ms", 0)),
+                                        prefill_max_tokens=int(cfg.get("prefill_max_tokens", 1)),
+                                        stop_event=round_stop_event,
+                                    )
+                                )
+
+                            injection_launcher_task = asyncio.create_task(_start_prefill_after_first_token())
+
+                            def _on_first_token():
+                                nonlocal round_injection_token_index
+                                if round_injection_token_index is None:
+                                    round_injection_token_index = 1
+                                first_token_event.set()
+                        else:
+                            injection_launcher_task = None
+
+                            def _on_first_token():
+                                return None
+
                         run_coros = [
                             send_stream_request_for_tpot(
                                 session=session,
@@ -259,6 +310,7 @@ class TPOTRegressor:
                                 prompt=prompt,
                                 max_tokens=max_tokens,
                                 tokenizer=tokenizer,
+                                on_first_token=_on_first_token,
                             )
                             for prompt in prompts
                         ]
@@ -266,6 +318,17 @@ class TPOTRegressor:
                         start_round = time.perf_counter()
                         results = await bounded_gather(run_coros, concurrency=concurrency or bs)
                         round_ms = (time.perf_counter() - start_round) * 1000
+
+                        if injection_launcher_task is not None:
+                            injection_launcher_task.cancel()
+                            try:
+                                await injection_launcher_task
+                            except asyncio.CancelledError:
+                                pass
+
+                        if round_prefill_task is not None:
+                            round_stop_event.set()
+                            await round_prefill_task
 
                         success_count = 0
                         for task_idx, result in enumerate(results, start=1):
@@ -282,6 +345,19 @@ class TPOTRegressor:
                                     "token_index": s.token_index,
                                     "sequence_length": real_input_len + s.token_index - 1,
                                     "tpot_seconds": s.delta_seconds,
+                                    "injection_started": (
+                                        scenario == "with_prefill_load"
+                                        and normalized_prefill_injection_mode == "after_first_token"
+                                        and round_injection_started
+                                        and round_injection_token_index is not None
+                                        and s.token_index >= round_injection_token_index
+                                    ),
+                                    "injection_token_index": round_injection_token_index,
+                                    "injection_sequence_length": (
+                                        real_input_len + round_injection_token_index - 1
+                                        if round_injection_token_index is not None
+                                        else None
+                                    ),
                                 }
                                 for s in result.token_steps
                             ]
@@ -297,6 +373,12 @@ class TPOTRegressor:
                                     token_steps=token_steps,
                                     scenario=scenario,
                                     prefill_load_config=prefill_load_config,
+                                    injection_started=(
+                                        scenario == "with_prefill_load"
+                                        and normalized_prefill_injection_mode == "after_first_token"
+                                        and round_injection_started
+                                    ),
+                                    injection_token_index=round_injection_token_index,
                                 )
                             )
 
@@ -724,6 +806,52 @@ class TPOTRegressor:
         else:
             path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"[TPOT] Exported scenario compare results => {path}")
+
+
+    def compare_pre_post_injection_tpot(
+        self,
+        batch_size: int,
+        length_range: Tuple[int, int],
+        scenario: str = "with_prefill_load",
+    ) -> Dict[str, Any]:
+        length_start, length_end = int(length_range[0]), int(length_range[1])
+        pre_vals: List[float] = []
+        post_vals: List[float] = []
+
+        for (rec_scenario, bs, _), records in self._records.items():
+            if rec_scenario != scenario or bs != batch_size:
+                continue
+            for rec in records:
+                inj_idx = rec.injection_token_index
+                for step in rec.token_steps:
+                    seq_len = int(step.get("sequence_length") or 0)
+                    if seq_len < length_start or seq_len > length_end:
+                        continue
+                    tpot = step.get("tpot_seconds")
+                    token_idx = int(step.get("token_index") or 0)
+                    if tpot is None:
+                        continue
+                    if inj_idx is not None and token_idx >= inj_idx:
+                        post_vals.append(float(tpot) * 1000.0)
+                    else:
+                        pre_vals.append(float(tpot) * 1000.0)
+
+        pre_avg = statistics.mean(pre_vals) if pre_vals else None
+        post_avg = statistics.mean(post_vals) if post_vals else None
+        delta = (post_avg - pre_avg) if (pre_avg is not None and post_avg is not None) else None
+        delta_ratio = (delta / pre_avg) if (delta is not None and pre_avg not in (None, 0)) else None
+
+        return {
+            "batch_size": batch_size,
+            "length_range": [length_start, length_end],
+            "scenario": scenario,
+            "pre_injection_avg_tpot_ms": pre_avg,
+            "post_injection_avg_tpot_ms": post_avg,
+            "delta_tpot_ms": delta,
+            "delta_ratio": delta_ratio,
+            "pre_samples": len(pre_vals),
+            "post_samples": len(post_vals),
+        }
 
     def export_json(self, output_path: str):
         payload = {

@@ -78,6 +78,7 @@ async def collect_tpot_matrix(
     prefill_concurrency: int = 1,
     prefill_interval_ms: int = 0,
     prefill_max_tokens: int = 1,
+    prefill_injection_mode: str = "before_request",
 ):
     regressor = await get_regressor(
         outlier_method=outlier_method,
@@ -100,6 +101,7 @@ async def collect_tpot_matrix(
             "prefill_interval_ms": prefill_interval_ms,
             "prefill_max_tokens": prefill_max_tokens,
         } if with_prefill_load else None,
+        prefill_injection_mode=prefill_injection_mode,
     )
     return regressor
 
@@ -201,6 +203,7 @@ async def collect_tpot_range(
     prefill_concurrency: int = 1,
     prefill_interval_ms: int = 0,
     prefill_max_tokens: int = 1,
+    prefill_injection_mode: str = "before_request",
 ):
     """
     面向真实 sequence_length 区间 [length_start, length_end] 的接口。
@@ -233,6 +236,7 @@ async def collect_tpot_range(
         prefill_concurrency=prefill_concurrency,
         prefill_interval_ms=prefill_interval_ms,
         prefill_max_tokens=prefill_max_tokens,
+        prefill_injection_mode=prefill_injection_mode,
     )
 
     coeffs = None
@@ -291,6 +295,7 @@ async def collect_continuous_tpot_curve(
     prefill_concurrency: int = 1,
     prefill_interval_ms: int = 0,
     prefill_max_tokens: int = 1,
+    prefill_injection_mode: str = "before_request",
 ):
     """
     连续长度采样主模式（单 bs）：
@@ -323,6 +328,7 @@ async def collect_continuous_tpot_curve(
         prefill_concurrency=prefill_concurrency,
         prefill_interval_ms=prefill_interval_ms,
         prefill_max_tokens=prefill_max_tokens,
+        prefill_injection_mode=prefill_injection_mode,
     )
 
     coeffs = None
@@ -498,6 +504,19 @@ def compare_tpot_between_scenarios(
         prefill_scenario=prefill_scenario,
         value_key=value_key,
         prefer_fitted=prefer_fitted,
+    )
+
+
+def compare_pre_post_injection_tpot(
+    regressor: TPOTRegressor,
+    batch_size: int,
+    length_range: Tuple[int, int],
+    scenario: str = "with_prefill_load",
+) -> Dict[str, Any]:
+    return regressor.compare_pre_post_injection_tpot(
+        batch_size=batch_size,
+        length_range=length_range,
+        scenario=scenario,
     )
 
 

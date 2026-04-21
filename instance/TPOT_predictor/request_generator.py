@@ -6,7 +6,7 @@ import time
 import uuid
 import contextlib
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Awaitable, Callable, List, Optional, Union
 
 import aiohttp
 
@@ -60,6 +60,8 @@ def generate_prompt_with_tokens(tokenizer, target_token_count: int) -> str:
 class TokenStep:
     token_index: int
     delta_seconds: float
+    injection_started: bool = False
+    injection_token_index: Optional[int] = None
 
 
 @dataclass
@@ -98,6 +100,7 @@ async def send_stream_request_for_tpot(
     prompt: str,
     max_tokens: int,
     tokenizer,
+    on_first_token: Optional[Callable[[], Union[None, Awaitable[None]]]] = None,
 ) -> TaskTPOTResult:
     """
     正确解析 chat completion SSE stream：
@@ -182,6 +185,10 @@ async def send_stream_request_for_tpot(
                             if ttft_seconds is None and token_idx == 1:
                                 ttft_seconds = now_ts - start_ts
                                 delta = ttft_seconds
+                                if on_first_token is not None:
+                                    cb_ret = on_first_token()
+                                    if asyncio.iscoroutine(cb_ret):
+                                        await cb_ret
                             token_steps.append(TokenStep(token_index=token_idx, delta_seconds=delta))
 
                             if token_idx >= max_tokens:
