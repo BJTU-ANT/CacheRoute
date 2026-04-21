@@ -4,7 +4,6 @@ import itertools
 import json
 import time
 import uuid
-import contextlib
 from dataclasses import dataclass
 from typing import Awaitable, Callable, List, Optional, Union
 
@@ -293,10 +292,11 @@ async def run_background_prefill_load(
     """
     stop_event = stop_event or asyncio.Event()
     interval_sec = max(0.0, prefill_interval_ms / 1000.0)
-    semaphore = asyncio.Semaphore(max(1, prefill_concurrency))
+    worker_count = max(1, prefill_concurrency)
+    print(f"[TPOT] background prefill workers started: {worker_count}")
 
-    async def _one_prefill():
-        async with semaphore:
+    async def _prefill_worker(_worker_id: int):
+        while not stop_event.is_set():
             prompt = generate_prompt_with_tokens(tokenizer, prefill_prompt_length)
             await send_prefill_only_request(
                 session=session,
@@ -306,19 +306,21 @@ async def run_background_prefill_load(
                 prompt=prompt,
                 max_tokens=prefill_max_tokens,
             )
-
-    in_flight = set()
-    try:
-        while not stop_event.is_set():
-            task = asyncio.create_task(_one_prefill())
-            in_flight.add(task)
-            task.add_done_callback(lambda t: in_flight.discard(t))
             if interval_sec > 0:
-                await asyncio.sleep(interval_sec)
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=interval_sec)
+                except asyncio.TimeoutError:
+                    pass
             else:
                 await asyncio.sleep(0)
+
+    workers = [asyncio.create_task(_prefill_worker(i)) for i in range(worker_count)]
+    try:
+        await asyncio.gather(*workers)
     finally:
-        for t in list(in_flight):
-            t.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await t
+        print("[TPOT] background prefill workers stopping")
+        for w in workers:
+            if not w.done():
+                w.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
+        print("[TPOT] background prefill workers stopped")
