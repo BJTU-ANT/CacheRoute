@@ -37,6 +37,8 @@ async def get_regressor(
     outlier_method: str = "mad",
     outlier_threshold: float = 3.5,
     min_samples_for_filter: int = 5,
+    smooth_window: int = 5,
+    spike_ratio_threshold: float = 1.8,
 ) -> TPOTRegressor:
     global _regressor
     async with _lock:
@@ -46,9 +48,17 @@ async def get_regressor(
                 outlier_method=outlier_method,
                 outlier_threshold=outlier_threshold,
                 min_samples_for_filter=min_samples_for_filter,
+                smooth_window=smooth_window,
+                spike_ratio_threshold=spike_ratio_threshold,
             )
         else:
-            _regressor.set_outlier_config(outlier_method, outlier_threshold, min_samples_for_filter)
+            _regressor.set_outlier_config(
+                outlier_method,
+                outlier_threshold,
+                min_samples_for_filter,
+                smooth_window,
+                spike_ratio_threshold,
+            )
     return _regressor
 
 
@@ -61,8 +71,16 @@ async def collect_tpot_matrix(
     outlier_method: str = "mad",
     outlier_threshold: float = 3.5,
     min_samples_for_filter: int = 5,
+    smooth_window: int = 5,
+    spike_ratio_threshold: float = 1.8,
 ):
-    regressor = await get_regressor(outlier_method, outlier_threshold, min_samples_for_filter)
+    regressor = await get_regressor(
+        outlier_method=outlier_method,
+        outlier_threshold=outlier_threshold,
+        min_samples_for_filter=min_samples_for_filter,
+        smooth_window=smooth_window,
+        spike_ratio_threshold=spike_ratio_threshold,
+    )
     regressor.clear_data()
     await regressor.trigger_benchmark_requests(
         test_configs=configs,
@@ -119,10 +137,12 @@ async def collect_tpot_range(
     concurrency: Optional[int] = None,
     prefer_fitted: bool = True,
     fit_after_collect: bool = True,
-    fit_label_key: str = "filtered_mean_tpot_ms",
+    fit_label_key: str = "default_tpot_ms",
     outlier_method: str = "mad",
     outlier_threshold: float = 3.5,
     min_samples_for_filter: int = 5,
+    smooth_window: int = 5,
+    spike_ratio_threshold: float = 1.8,
 ):
     """
     面向真实 sequence_length 区间 [length_start, length_end] 的接口。
@@ -148,6 +168,8 @@ async def collect_tpot_range(
         outlier_method=outlier_method,
         outlier_threshold=outlier_threshold,
         min_samples_for_filter=min_samples_for_filter,
+        smooth_window=smooth_window,
+        spike_ratio_threshold=spike_ratio_threshold,
     )
 
     coeffs = None
@@ -236,15 +258,14 @@ def summarize_results(
         for point in (selected if should_full else selected[:5]):
             lines.append(
                 "  L={sequence_length}, raw_n={raw_samples}, filt_n={filtered_samples}, "
-                "raw_mean={raw_mean_tpot_ms:.3f}ms, filt_mean={filtered_mean_tpot_ms:.3f}ms, "
-                "filt_median={filtered_median_tpot_ms:.3f}ms, filt_p95={filtered_p95_tpot_ms:.3f}ms, "
-                "outliers={outlier_count}, source={value_source}".format(
+                "outliers={outlier_count}, low_conf={is_low_confidence}, spike={suspicious_spike}, "
+                "filt_median={filtered_median_tpot_ms:.3f}ms, smooth={smoothed_tpot_ms:.3f}ms, "
+                "default={default_tpot_ms:.3f}ms, source={value_source}".format(
                     **{
                         **point,
-                        "raw_mean_tpot_ms": point.get("raw_mean_tpot_ms") or 0.0,
-                        "filtered_mean_tpot_ms": point.get("filtered_mean_tpot_ms") or 0.0,
                         "filtered_median_tpot_ms": point.get("filtered_median_tpot_ms") or 0.0,
-                        "filtered_p95_tpot_ms": point.get("filtered_p95_tpot_ms") or 0.0,
+                        "smoothed_tpot_ms": point.get("smoothed_tpot_ms") or 0.0,
+                        "default_tpot_ms": point.get("default_tpot_ms") or 0.0,
                     }
                 )
             )
@@ -256,7 +277,7 @@ def summarize_results(
     return "\n".join(lines)
 
 
-def fit_tpot_four_term(regressor: TPOTRegressor, label_key: str = "filtered_mean_tpot_ms") -> Dict[str, Any]:
+def fit_tpot_four_term(regressor: TPOTRegressor, label_key: str = "default_tpot_ms") -> Dict[str, Any]:
     return regressor.fit_four_term_regressor(label_key=label_key)
 
 
@@ -266,7 +287,7 @@ def predict_decode_time(
     start_sequence_length: int,
     max_tokens: int,
     prefer_fitted: bool = True,
-    label_key: str = "filtered_mean_tpot_ms",
+    label_key: str = "default_tpot_ms",
 ) -> Dict[str, Any]:
     return regressor.predict_decode_time_ms(
         batch_size=batch_size,

@@ -33,9 +33,9 @@ class TPOTFourTermRegressor:
     def __init__(self):
         self._fitted = False
         self._coeffs = {"a1": 0.0, "a2": 0.0, "a3": 0.0, "a4": 0.0}
-        self._label_key = "filtered_mean_tpot_ms"
+        self._label_key = "filtered_median_tpot_ms"
 
-    def fit(self, points: List[Dict[str, Any]], label_key: str = "filtered_mean_tpot_ms") -> Dict[str, Any]:
+    def fit(self, points: List[Dict[str, Any]], label_key: str = "filtered_median_tpot_ms") -> Dict[str, Any]:
         self._label_key = label_key
         X_rows = []
         y_rows = []
@@ -95,15 +95,34 @@ class TPOTRegressor:
         outlier_method: str = "mad",
         outlier_threshold: float = 3.5,
         min_samples_for_filter: int = 5,
+        smooth_window: int = 5,
+        spike_ratio_threshold: float = 1.8,
     ):
         self._records: Dict[Tuple[int, int], List[TPOTTaskRecord]] = {}
         self._four_term_regressor: Optional[TPOTFourTermRegressor] = None
-        self.set_outlier_config(outlier_method, outlier_threshold, min_samples_for_filter)
+        self.set_outlier_config(
+            outlier_method,
+            outlier_threshold,
+            min_samples_for_filter,
+            smooth_window,
+            spike_ratio_threshold,
+        )
 
-    def set_outlier_config(self, outlier_method: str, outlier_threshold: float, min_samples_for_filter: int):
+    def set_outlier_config(
+        self,
+        outlier_method: str,
+        outlier_threshold: float,
+        min_samples_for_filter: int,
+        smooth_window: int = 5,
+        spike_ratio_threshold: float = 1.8,
+    ):
         self._outlier_method = str(outlier_method).lower()
         self._outlier_threshold = float(outlier_threshold)
         self._min_samples_for_filter = int(min_samples_for_filter)
+        self._smooth_window = max(3, int(smooth_window))
+        if self._smooth_window % 2 == 0:
+            self._smooth_window += 1
+        self._spike_ratio_threshold = float(spike_ratio_threshold)
 
     def clear_data(self):
         self._records = {}
@@ -141,9 +160,7 @@ class TPOTRegressor:
             return list(values), 0
 
         arr = np.asarray(values, dtype=float)
-        method = self._outlier_method
-
-        if method == "mad":
+        if self._outlier_method == "mad":
             median = np.median(arr)
             abs_dev = np.abs(arr - median)
             mad = np.median(abs_dev)
@@ -151,7 +168,7 @@ class TPOTRegressor:
                 return list(values), 0
             robust_z = 0.6745 * (arr - median) / mad
             mask = np.abs(robust_z) <= self._outlier_threshold
-        elif method == "iqr":
+        elif self._outlier_method == "iqr":
             q1 = np.percentile(arr, 25)
             q3 = np.percentile(arr, 75)
             iqr = q3 - q1
@@ -168,6 +185,20 @@ class TPOTRegressor:
             return list(values), 0
         return filtered, len(values) - len(filtered)
 
+    def _rolling_median(self, points: List[Dict[str, Any]], value_key: str) -> List[Optional[float]]:
+        half = self._smooth_window // 2
+        values = [p.get(value_key) for p in points]
+        smoothed: List[Optional[float]] = []
+        for i in range(len(values)):
+            lo = max(0, i - half)
+            hi = min(len(values), i + half + 1)
+            window_vals = [v for v in values[lo:hi] if v is not None]
+            if not window_vals:
+                smoothed.append(None)
+            else:
+                smoothed.append(float(statistics.median(window_vals)))
+        return smoothed
+
     async def trigger_benchmark_requests(
         self,
         test_configs: List[Tuple[int, int]],
@@ -183,7 +214,6 @@ class TPOTRegressor:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             for bs, target_pl in test_configs:
                 print(f"[TPOT] Start config BS={bs}, target_PL={target_pl}, repeats={repeats_per_config}")
-
                 for r in range(repeats_per_config):
                     prompts = [generate_prompt_with_tokens(tokenizer, target_pl) for _ in range(bs)]
                     real_input_lengths = [self._compute_real_input_length(tokenizer, p) for p in prompts]
@@ -277,7 +307,7 @@ class TPOTRegressor:
 
         curves_by_bs: List[Dict[str, Any]] = []
         for bs, m in sorted(bucket_by_bs_len.items(), key=lambda x: x[0]):
-            points = []
+            points: List[Dict[str, Any]] = []
             for seq_len, vals in sorted(m.items(), key=lambda x: x[0]):
                 raw_vals = list(vals)
                 filtered_vals, outlier_count = self._filter_outliers(raw_vals)
@@ -297,9 +327,53 @@ class TPOTRegressor:
                         "filtered_median_tpot_ms": filtered_median,
                         "filtered_p95_tpot_ms": (filtered_p95 * 1000) if filtered_p95 is not None else None,
                         "outlier_count": outlier_count,
+                        "is_low_confidence": len(filtered_vals) < self._min_samples_for_filter,
+                        "suspicious_spike": False,
+                        "smoothed_tpot_ms": None,
+                        "default_tpot_ms": None,
                         "value_source": "observed",
                     }
                 )
+
+            # 同 bs 内滑动中位数平滑（用 filtered_median 优先）
+            for p in points:
+                p["_base_for_smooth"] = p.get("filtered_median_tpot_ms") if p.get("filtered_median_tpot_ms") is not None else p.get("filtered_mean_tpot_ms")
+            smoothed = self._rolling_median(points, "_base_for_smooth")
+            for i, s in enumerate(smoothed):
+                points[i]["smoothed_tpot_ms"] = s
+
+            # 邻域突增检测：低置信点 + 相邻长度比较
+            for i, p in enumerate(points):
+                if not p.get("is_low_confidence"):
+                    continue
+                cur = p.get("filtered_median_tpot_ms") or p.get("filtered_mean_tpot_ms")
+                if cur is None:
+                    continue
+                neigh = []
+                if i > 0:
+                    left = points[i - 1].get("filtered_median_tpot_ms") or points[i - 1].get("filtered_mean_tpot_ms")
+                    if left is not None:
+                        neigh.append(left)
+                if i + 1 < len(points):
+                    right = points[i + 1].get("filtered_median_tpot_ms") or points[i + 1].get("filtered_mean_tpot_ms")
+                    if right is not None:
+                        neigh.append(right)
+                if not neigh:
+                    continue
+                neigh_ref = float(statistics.median(neigh))
+                if neigh_ref > 0 and cur > neigh_ref * self._spike_ratio_threshold:
+                    p["suspicious_spike"] = True
+
+            # default 值优先级：filtered_median -> smoothed -> filtered_mean
+            for p in points:
+                p["default_tpot_ms"] = (
+                    p.get("filtered_median_tpot_ms")
+                    if p.get("filtered_median_tpot_ms") is not None
+                    else p.get("smoothed_tpot_ms")
+                    if p.get("smoothed_tpot_ms") is not None
+                    else p.get("filtered_mean_tpot_ms")
+                )
+                p.pop("_base_for_smooth", None)
 
             curves_by_bs.append(
                 {
@@ -317,9 +391,11 @@ class TPOTRegressor:
                 "outlier_method": self._outlier_method,
                 "outlier_threshold": self._outlier_threshold,
                 "min_samples_for_filter": self._min_samples_for_filter,
+                "smooth_window": self._smooth_window,
+                "spike_ratio_threshold": self._spike_ratio_threshold,
             },
-            "default_value_for_fit_and_decode": "filtered_mean_tpot_ms",
-            "note": "sequence_length = real_input_length + token_index - 1; minimal observable length depends on chat template offset and sampled target prompt lengths.",
+            "default_value_for_fit_and_decode": "filtered_median_tpot_ms",
+            "note": "TPOT step delta is measured using client-side stream arrival timestamps (time.perf_counter) between decoded token events.",
         }
 
     def get_lengthwise_points(self) -> List[Dict[str, Any]]:
@@ -331,7 +407,7 @@ class TPOTRegressor:
                 rows.append({"batch_size": bs, **p})
         return rows
 
-    def fit_four_term_regressor(self, label_key: str = "filtered_mean_tpot_ms") -> Dict[str, Any]:
+    def fit_four_term_regressor(self, label_key: str = "filtered_median_tpot_ms") -> Dict[str, Any]:
         model = TPOTFourTermRegressor()
         coeffs = model.fit(self.get_lengthwise_points(), label_key=label_key)
         self._four_term_regressor = model
@@ -371,7 +447,7 @@ class TPOTRegressor:
         length_start: int,
         length_end: int,
         prefer_fitted: bool = True,
-        label_key: str = "filtered_mean_tpot_ms",
+        label_key: str = "default_tpot_ms",
     ) -> List[Dict[str, Any]]:
         rows = []
         for length in range(length_start, length_end + 1):
@@ -390,10 +466,14 @@ class TPOTRegressor:
                     "raw_samples": 0,
                     "filtered_samples": 0,
                     "raw_mean_tpot_ms": None,
-                    "filtered_mean_tpot_ms": value,
+                    "filtered_mean_tpot_ms": None,
                     "filtered_median_tpot_ms": None,
                     "filtered_p95_tpot_ms": None,
                     "outlier_count": 0,
+                    "is_low_confidence": True,
+                    "suspicious_spike": False,
+                    "smoothed_tpot_ms": None,
+                    "default_tpot_ms": value,
                     "value_source": source,
                 }
             )
@@ -402,7 +482,6 @@ class TPOTRegressor:
         for i, row in enumerate(rows):
             k = (row["batch_size"], row["sequence_length"])
             if k in observed:
-                # 保留观测字段，并把 source 设为 observed
                 merged = dict(observed[k])
                 merged["batch_size"] = row["batch_size"]
                 merged["value_source"] = "observed"
@@ -415,7 +494,7 @@ class TPOTRegressor:
         start_sequence_length: int,
         max_tokens: int,
         prefer_fitted: bool = True,
-        label_key: str = "filtered_mean_tpot_ms",
+        label_key: str = "default_tpot_ms",
     ) -> Dict[str, Any]:
         curve = self.build_length_range_curve(
             batch_size=batch_size,
@@ -451,6 +530,10 @@ class TPOTRegressor:
             "filtered_median_tpot_ms",
             "filtered_p95_tpot_ms",
             "outlier_count",
+            "is_low_confidence",
+            "suspicious_spike",
+            "smoothed_tpot_ms",
+            "default_tpot_ms",
             "value_source",
         ]
 
