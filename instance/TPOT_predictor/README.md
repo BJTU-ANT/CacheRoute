@@ -85,6 +85,24 @@ collect_tpot_range(
 2. 输出 `sequence_length=a..b` 的连续曲线；
 3. 对每个点标记来源：`observed / interpolated / fitted / none`。
 
+### 4.1 连续长度采样主模式（推荐）
+
+```python
+collect_continuous_tpot_curve(
+    batch_size=1,
+    real_input_length=128,
+    length_start=128,
+    length_end=256,
+    max_tokens=32,
+    repeats=3,
+)
+```
+
+思路是固定一个 real_input_length 起点，单请求直接覆盖一段连续长度：
+
+- 一次请求覆盖 `sequence_length = L0, L0+1, ..., L0+max_tokens-1`
+- 多个起点窗口按 stride 规划并允许重叠（`overlap_tokens`），让 `[a,b]` 覆盖更完整。
+
 ---
 
 ## 5. 导出字段（csv/json/xlsx）
@@ -122,17 +140,31 @@ summarize_results(summary, full_curve_bs=1, length_range=(a,b))
 - `is_low_confidence / suspicious_spike`
 - `filtered_median_tpot_ms / smoothed_tpot_ms / default_tpot_ms`
 
+并且可以用覆盖诊断函数：
+
+```python
+check_length_coverage(regressor, batch_size=1, length_start=a, length_end=b)
+```
+
+返回：
+
+- `covered_lengths`
+- `missing_lengths`
+- `coverage_ratio`
+- `max_gap`
+
 ---
 
 ## 7. 最小调用样例
 
 ```python
 import asyncio
-from tpot_predictor import collect_tpot_range, summarize_results
+from tpot_predictor import collect_continuous_tpot_curve, summarize_results
 
 async def main():
-    result = await collect_tpot_range(
-        batch_sizes=[1, 2, 4],
+    result = await collect_continuous_tpot_curve(
+        batch_size=1,
+        real_input_length=128,
         length_start=128,
         length_end=192,
         max_tokens=16,
@@ -150,7 +182,7 @@ async def main():
 
     reg = result["regressor"]
     reg.export_lengthwise_curve(
-        "instance/TPOT_predictor/output/range_128_192_bs124.xlsx",
+        "instance/TPOT_predictor/output/range_128_192_bs1.xlsx",
         rows=result["range_curve"],
     )
 

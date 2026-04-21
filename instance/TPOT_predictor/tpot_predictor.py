@@ -127,6 +127,47 @@ def _build_configs_for_sequence_range(
     return uniq
 
 
+def _build_continuous_configs_for_single_bs(
+    batch_size: int,
+    length_start: int,
+    length_end: int,
+    max_tokens: int,
+    tokenizer,
+    real_input_length: Optional[int] = None,
+    overlap_tokens: int = 4,
+) -> List[Tuple[int, int]]:
+    """
+    为单个 bs 规划“连续长度采样模式”：
+    通过若干 real_input_length 起点 + 固定 max_tokens，尽量覆盖 [length_start, length_end]。
+    """
+    offset = _estimate_offset(tokenizer)
+    window = max(1, int(max_tokens))
+    stride = max(1, window - max(0, int(overlap_tokens)))
+
+    starts: List[int] = []
+    if real_input_length is not None:
+        starts.append(int(real_input_length))
+    if length_start not in starts:
+        starts.append(length_start)
+
+    s = min(starts)
+    while s <= length_end:
+        starts.append(s)
+        s += stride
+
+    starts = sorted(set(starts))
+    configs: List[Tuple[int, int]] = []
+    for real_start in starts:
+        # 这个请求观测窗口是 [real_start, real_start + max_tokens - 1]
+        if real_start > length_end:
+            continue
+        if real_start + window - 1 < length_start:
+            continue
+        target_pl = max(1, real_start - offset)
+        configs.append((batch_size, target_pl))
+    return sorted(set(configs), key=lambda x: (x[0], x[1]))
+
+
 async def collect_tpot_range(
     batch_sizes: List[int],
     length_start: int,
@@ -199,6 +240,91 @@ async def collect_tpot_range(
         "planned_test_configs": configs,
         "fit_coefficients": coeffs,
         "range_curve": range_rows,
+        "summary": regressor.build_summary(),
+        "regressor": regressor,
+    }
+
+
+async def collect_continuous_tpot_curve(
+    batch_size: int,
+    real_input_length: int,
+    length_start: int,
+    length_end: int,
+    vllm_config: Dict[str, Any] = VLLM_CONFIG_DEFAULT,
+    max_tokens: int = 32,
+    repeats: int = 3,
+    concurrency: Optional[int] = None,
+    overlap_tokens: int = 4,
+    prefer_fitted: bool = True,
+    fit_after_collect: bool = True,
+    fit_label_key: str = "default_tpot_ms",
+    outlier_method: str = "mad",
+    outlier_threshold: float = 3.5,
+    min_samples_for_filter: int = 5,
+    smooth_window: int = 5,
+    spike_ratio_threshold: float = 1.8,
+):
+    """
+    连续长度采样主模式（单 bs）：
+    用 real_input_length 起点 + max_tokens 窗口覆盖 [length_start, length_end]。
+    """
+    tokenizer = AutoTokenizer.from_pretrained(vllm_config["tokenizer_path"])
+    configs = _build_continuous_configs_for_single_bs(
+        batch_size=batch_size,
+        length_start=length_start,
+        length_end=length_end,
+        max_tokens=max_tokens,
+        tokenizer=tokenizer,
+        real_input_length=real_input_length,
+        overlap_tokens=overlap_tokens,
+    )
+
+    regressor = await collect_tpot_matrix(
+        configs=configs,
+        vllm_config=vllm_config,
+        max_tokens=max_tokens,
+        repeats=repeats,
+        concurrency=concurrency,
+        outlier_method=outlier_method,
+        outlier_threshold=outlier_threshold,
+        min_samples_for_filter=min_samples_for_filter,
+        smooth_window=smooth_window,
+        spike_ratio_threshold=spike_ratio_threshold,
+    )
+
+    coeffs = None
+    if fit_after_collect:
+        try:
+            coeffs = regressor.fit_four_term_regressor(label_key=fit_label_key)
+        except Exception as exc:
+            print(f"[TPOT][WARN] fit_after_collect failed: {exc}")
+
+    range_rows = regressor.build_length_range_curve(
+        batch_size=batch_size,
+        length_start=length_start,
+        length_end=length_end,
+        prefer_fitted=prefer_fitted,
+        label_key=fit_label_key,
+    )
+    coverage = regressor.check_length_coverage(batch_size, length_start, length_end)
+    observed = [r["sequence_length"] for r in range_rows if r.get("value_source") == "observed"]
+    interpolated = [r["sequence_length"] for r in range_rows if r.get("value_source") == "interpolated"]
+    fitted = [r["sequence_length"] for r in range_rows if r.get("value_source") == "fitted"]
+
+    return {
+        "requested": {
+            "batch_size": batch_size,
+            "real_input_length": real_input_length,
+            "length_range": [length_start, length_end],
+            "length_semantics": "real sequence_length",
+        },
+        "planned_test_configs": configs,
+        "fit_coefficients": coeffs,
+        "range_curve": range_rows,
+        "coverage": coverage,
+        "observed_continuous_points": observed,
+        "interpolated_points": interpolated,
+        "fitted_points": fitted,
         "summary": regressor.build_summary(),
         "regressor": regressor,
     }
@@ -295,6 +421,19 @@ def predict_decode_time(
         max_tokens=max_tokens,
         prefer_fitted=prefer_fitted,
         label_key=label_key,
+    )
+
+
+def check_length_coverage(
+    regressor: TPOTRegressor,
+    batch_size: int,
+    length_start: int,
+    length_end: int,
+) -> Dict[str, Any]:
+    return regressor.check_length_coverage(
+        batch_size=batch_size,
+        length_start=length_start,
+        length_end=length_end,
     )
 
 

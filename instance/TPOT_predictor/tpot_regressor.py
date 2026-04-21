@@ -407,6 +407,39 @@ class TPOTRegressor:
                 rows.append({"batch_size": bs, **p})
         return rows
 
+    def check_length_coverage(self, batch_size: int, length_start: int, length_end: int) -> Dict[str, Any]:
+        observed_lengths = sorted(
+            {
+                int(p["sequence_length"])
+                for p in self.get_lengthwise_points()
+                if int(p["batch_size"]) == int(batch_size)
+                and length_start <= int(p["sequence_length"]) <= length_end
+            }
+        )
+        expected = list(range(length_start, length_end + 1))
+        observed_set = set(observed_lengths)
+        missing = [x for x in expected if x not in observed_set]
+
+        max_gap = 0
+        cur_gap = 0
+        for x in expected:
+            if x in observed_set:
+                max_gap = max(max_gap, cur_gap)
+                cur_gap = 0
+            else:
+                cur_gap += 1
+        max_gap = max(max_gap, cur_gap)
+
+        ratio = (len(observed_lengths) / len(expected)) if expected else 0.0
+        return {
+            "batch_size": batch_size,
+            "length_range": [length_start, length_end],
+            "covered_lengths": observed_lengths,
+            "missing_lengths": missing,
+            "coverage_ratio": ratio,
+            "max_gap": max_gap,
+        }
+
     def fit_four_term_regressor(self, label_key: str = "filtered_median_tpot_ms") -> Dict[str, Any]:
         model = TPOTFourTermRegressor()
         coeffs = model.fit(self.get_lengthwise_points(), label_key=label_key)
