@@ -295,6 +295,24 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=0.0000381,
         help="KVCache size(GB) per token for kvcache-size estimation",
     )
+    parser.add_argument(
+        "--decode-length",
+        type=int,
+        default=None,
+        help="optional: decode predictor input length tokens",
+    )
+    parser.add_argument(
+        "--decode-bs",
+        type=int,
+        default=1,
+        help="decode predictor batch size, default=1",
+    )
+    parser.add_argument(
+        "--tpot-coeff-path",
+        type=str,
+        default=str(DEFAULT_TPOT_COEFF_PATH),
+        help="TPOT coefficient json path",
+    )
     return parser
 
 
@@ -340,6 +358,17 @@ def main() -> None:
         print(f"  predicted_remaining_compute_ms={breakdown['predicted_pure_compute_ms']:.3f}")
         print(f"  predicted_redis_pull_ms={breakdown['predicted_redis_pull_ms']:.3f}")
         print(f"  predicted_kvcache_total_ms={breakdown['predicted_kvcache_total_ms']:.3f}")
+    if args.decode_length is not None:
+        decode_seconds = decode_tpot_predictor(
+            length=int(args.decode_length),
+            bs=int(args.decode_bs),
+            coeff_path=args.tpot_coeff_path,
+        )
+        print("[decode-per-token]")
+        print(f"  decode_length_tokens={int(args.decode_length)}")
+        print(f"  decode_bs={int(args.decode_bs)}")
+        print(f"  predicted_decode_tpot_seconds={decode_seconds:.9f}")
+        print(f"  predicted_decode_tpot_ms={decode_seconds * 1000.0:.6f}")
 
 
 if __name__ == "__main__":
