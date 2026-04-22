@@ -19,6 +19,7 @@ from typing import Dict, Optional
 
 
 DEFAULT_COEFF_PATH = Path(__file__).with_name("ttft_coefficients.json")
+DEFAULT_TPOT_COEFF_PATH = Path(__file__).with_name("tpot_coefficients.json")
 DEFAULT_REDIS_PULL_COEFF_PATH = Path(__file__).with_name("redis_pull_coefficients.json")
 _SHORT_CALIB_ANCHORS_MS = [
     # (length_token, ttft_ms)
@@ -99,6 +100,23 @@ def load_redis_pull_coefficients(
     return coeffs
 
 
+def load_tpot_coefficients(coeff_path: str | Path = DEFAULT_TPOT_COEFF_PATH) -> Dict[str, float]:
+    """Load TPOT a/b/c/d coefficients from JSON file."""
+    path = Path(coeff_path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    try:
+        coeffs = {
+            "a": float(payload["a"]),
+            "b": float(payload["b"]),
+            "c": float(payload["c"]),
+            "d": float(payload["d"]),
+        }
+    except KeyError as exc:
+        raise ValueError(f"missing coefficient key: {exc}") from exc
+    return coeffs
+
+
 def queue_predictor(
     length: int,
     bs: Optional[int] = None,
@@ -141,6 +159,31 @@ def queue_predictor(
 
     # 中短长度保守策略：只做下限保护，避免低估。
     return max(pred, calibrated_pred)
+
+
+def decode_tpot_predictor(
+    length: int,
+    bs: Optional[int] = None,
+    *,
+    coeffs: Optional[Dict[str, float]] = None,
+    coeff_path: str | Path = DEFAULT_TPOT_COEFF_PATH,
+) -> float:
+    """Predict per-token TPOT(decode) time in seconds by batch-size and length."""
+    if length <= 0:
+        raise ValueError("length must be positive")
+
+    batch_size = 1 if bs is None else int(bs)
+    if batch_size <= 0:
+        raise ValueError("bs must be positive")
+
+    c = coeffs or load_tpot_coefficients(coeff_path)
+    pred = (
+        float(c["a"]) * (batch_size * int(length))
+        + float(c["b"]) * batch_size
+        + float(c["c"]) * int(length)
+        + float(c["d"])
+    )
+    return max(0.0, float(pred))
 
 
 def predict_redis_pull_ms(
