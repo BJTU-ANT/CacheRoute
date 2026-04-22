@@ -88,9 +88,17 @@ class TPOTFourTermRegressor:
                 loaded += 1
         return loaded
 
-    def fit(self) -> FourTermCoefficients:
+    def fit(
+        self,
+        *,
+        lambda_interaction: float = 1e-3,
+        lambda_bs: float = 0.0,
+        lambda_length: float = 1e-2,
+    ) -> FourTermCoefficients:
         if len(self._samples) < 4:
             raise ValueError("at least 4 valid samples are required")
+        if lambda_interaction < 0 or lambda_bs < 0 or lambda_length < 0:
+            raise ValueError("ridge penalties must be non-negative")
 
         x = np.array(
             [[bs * length, bs, length, 1.0] for bs, length, _ in self._samples],
@@ -98,7 +106,14 @@ class TPOTFourTermRegressor:
         )
         y = np.array([tpot for _, _, tpot in self._samples], dtype=np.float64)
 
-        coeff, _, _, _ = np.linalg.lstsq(x, y, rcond=None)
+        # Ridge with per-feature penalties:
+        # - interaction/length terms are penalized by default to keep TPOT
+        #   primarily batch-size sensitive (observed empirical pattern).
+        # - intercept stays unpenalized.
+        reg = np.diag([lambda_interaction, lambda_bs, lambda_length, 0.0])
+        xtx = x.T @ x
+        xty = x.T @ y
+        coeff = np.linalg.solve(xtx + reg, xty)
         self._coeffs = FourTermCoefficients(
             a=float(coeff[0]), b=float(coeff[1]), c=float(coeff[2]), d=float(coeff[3])
         )
