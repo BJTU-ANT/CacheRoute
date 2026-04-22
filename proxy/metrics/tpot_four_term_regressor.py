@@ -1,7 +1,7 @@
-"""TPOT four-term regressor for proxy-side decode estimation.
+"""TPOT regressor for proxy-side decode estimation.
 
 Model form:
-    tpot = a * (batch_size * length) + b * batch_size + c * length + d
+    tpot = a * batch_size + b * length + c
 
 Notes:
 - TPOT here means per-token decode time.
@@ -22,19 +22,18 @@ DEFAULT_COEFF_PATH = Path(__file__).with_name("tpot_coefficients.json")
 
 
 @dataclass
-class FourTermCoefficients:
+class ThreeTermCoefficients:
     a: float
     b: float
     c: float
-    d: float
 
 
 class TPOTFourTermRegressor:
-    """Fit and predict TPOT with 4-term linear features: [B*L, B, L, 1]."""
+    """Fit and predict TPOT with 3-term linear features: [B, L, 1]."""
 
     def __init__(self) -> None:
         self._samples: List[Tuple[int, int, float]] = []
-        self._coeffs: Optional[FourTermCoefficients] = None
+        self._coeffs: Optional[ThreeTermCoefficients] = None
 
     def add_sample(self, batch_size: int, length: int, tpot: float) -> None:
         if batch_size <= 0 or length <= 0:
@@ -88,35 +87,18 @@ class TPOTFourTermRegressor:
                 loaded += 1
         return loaded
 
-    def fit(
-        self,
-        *,
-        lambda_interaction: float = 1e-3,
-        lambda_bs: float = 0.0,
-        lambda_length: float = 1e-2,
-    ) -> FourTermCoefficients:
+    def fit(self) -> ThreeTermCoefficients:
         if len(self._samples) < 4:
             raise ValueError("at least 4 valid samples are required")
-        if lambda_interaction < 0 or lambda_bs < 0 or lambda_length < 0:
-            raise ValueError("ridge penalties must be non-negative")
 
         x = np.array(
-            [[bs * length, bs, length, 1.0] for bs, length, _ in self._samples],
+            [[bs, length, 1.0] for bs, length, _ in self._samples],
             dtype=np.float64,
         )
         y = np.array([tpot for _, _, tpot in self._samples], dtype=np.float64)
 
-        # Ridge with per-feature penalties:
-        # - interaction/length terms are penalized by default to keep TPOT
-        #   primarily batch-size sensitive (observed empirical pattern).
-        # - intercept stays unpenalized.
-        reg = np.diag([lambda_interaction, lambda_bs, lambda_length, 0.0])
-        xtx = x.T @ x
-        xty = x.T @ y
-        coeff = np.linalg.solve(xtx + reg, xty)
-        self._coeffs = FourTermCoefficients(
-            a=float(coeff[0]), b=float(coeff[1]), c=float(coeff[2]), d=float(coeff[3])
-        )
+        coeff, _, _, _ = np.linalg.lstsq(x, y, rcond=None)
+        self._coeffs = ThreeTermCoefficients(a=float(coeff[0]), b=float(coeff[1]), c=float(coeff[2]))
         return self._coeffs
 
     def predict(self, batch_size: int, length: int) -> float:
@@ -124,7 +106,7 @@ class TPOTFourTermRegressor:
             raise RuntimeError("regressor is not fitted yet")
         bs = float(batch_size)
         l = float(length)
-        pred = self._coeffs.a * (bs * l) + self._coeffs.b * bs + self._coeffs.c * l + self._coeffs.d
+        pred = self._coeffs.a * bs + self._coeffs.b * l + self._coeffs.c
         return max(0.0, float(pred))
 
     def save_coefficients_json(
@@ -140,9 +122,8 @@ class TPOTFourTermRegressor:
             "a": self._coeffs.a,
             "b": self._coeffs.b,
             "c": self._coeffs.c,
-            "d": self._coeffs.d,
             "unit": unit,
-            "source": "TPOTFourTermRegressor",
+            "source": "TPOTThreeTermRegressor",
         }
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return path
@@ -154,7 +135,6 @@ class TPOTFourTermRegressor:
             "a": self._coeffs.a,
             "b": self._coeffs.b,
             "c": self._coeffs.c,
-            "d": self._coeffs.d,
         }
 
     @property
@@ -206,6 +186,6 @@ if __name__ == "__main__":
     print(f"[TPOT4] loaded points: {loaded}")
     print(
         "[TPOT4] coeffs (seconds): "
-        f"a={coeffs.a:.6e}, b={coeffs.b:.6e}, c={coeffs.c:.6e}, d={coeffs.d:.6e}"
+        f"a={coeffs.a:.6e}, b={coeffs.b:.6e}, c={coeffs.c:.6e}"
     )
     print(f"[TPOT4] coefficients saved to: {coeff_file}")

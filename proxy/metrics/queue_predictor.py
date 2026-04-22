@@ -101,7 +101,7 @@ def load_redis_pull_coefficients(
 
 
 def load_tpot_coefficients(coeff_path: str | Path = DEFAULT_TPOT_COEFF_PATH) -> Dict[str, float]:
-    """Load TPOT a/b/c/d coefficients from JSON file."""
+    """Load TPOT a/b/c coefficients from JSON file."""
     path = Path(coeff_path)
     payload = json.loads(path.read_text(encoding="utf-8"))
 
@@ -110,7 +110,6 @@ def load_tpot_coefficients(coeff_path: str | Path = DEFAULT_TPOT_COEFF_PATH) -> 
             "a": float(payload["a"]),
             "b": float(payload["b"]),
             "c": float(payload["c"]),
-            "d": float(payload["d"]),
         }
     except KeyError as exc:
         raise ValueError(f"missing coefficient key: {exc}") from exc
@@ -178,10 +177,9 @@ def decode_tpot_predictor(
 
     c = coeffs or load_tpot_coefficients(coeff_path)
     pred = (
-        float(c["a"]) * (batch_size * int(length))
-        + float(c["b"]) * batch_size
-        + float(c["c"]) * int(length)
-        + float(c["d"])
+        float(c["a"]) * batch_size
+        + float(c["b"]) * int(length)
+        + float(c["c"])
     )
     return max(0.0, float(pred))
 
