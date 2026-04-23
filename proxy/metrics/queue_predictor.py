@@ -19,6 +19,7 @@ from typing import Dict, Optional
 
 
 DEFAULT_COEFF_PATH = Path(__file__).with_name("ttft_coefficients.json")
+DEFAULT_TPOT_COEFF_PATH = Path(__file__).with_name("tpot_coefficients.json")
 DEFAULT_REDIS_PULL_COEFF_PATH = Path(__file__).with_name("redis_pull_coefficients.json")
 _SHORT_CALIB_ANCHORS_MS = [
     # (length_token, ttft_ms)
@@ -99,11 +100,46 @@ def load_redis_pull_coefficients(
     return coeffs
 
 
+def load_tpot_coefficients(coeff_path: str | Path = DEFAULT_TPOT_COEFF_PATH) -> Dict[str, object]:
+    """Load TPOT coefficients from JSON file.
+
+    Supported formats:
+    1) per-bs linear:
+       {"mode":"per_bs_linear","by_bs":{"1":{"slope":...,"intercept":...}, ...}}
+    2) legacy global linear:
+       {"a":...,"b":...,"c":...}
+    """
+    path = Path(coeff_path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    if payload.get("mode") == "per_bs_linear":
+        raw_by_bs = payload.get("by_bs")
+        if not isinstance(raw_by_bs, dict) or not raw_by_bs:
+            raise ValueError("invalid per_bs_linear coeff format: by_bs must be non-empty dict")
+        by_bs: Dict[int, Dict[str, float]] = {}
+        for bs_key, item in raw_by_bs.items():
+            by_bs[int(bs_key)] = {
+                "slope": float(item["slope"]),
+                "intercept": float(item["intercept"]),
+            }
+        return {"mode": "per_bs_linear", "by_bs": by_bs}
+
+    try:
+        return {
+            "mode": "global_linear",
+            "a": float(payload["a"]),
+            "b": float(payload["b"]),
+            "c": float(payload["c"]),
+        }
+    except KeyError as exc:
+        raise ValueError(f"missing coefficient key: {exc}") from exc
+
+
 def queue_predictor(
     length: int,
     bs: Optional[int] = None,
     *,
-    coeffs: Optional[Dict[str, float]] = None,
+    coeffs: Optional[Dict[str, object]] = None,
     coeff_path: str | Path = DEFAULT_COEFF_PATH,
 ) -> float:
     """Predict TTFT compute time by batch-size and prompt length.
@@ -141,6 +177,41 @@ def queue_predictor(
 
     # 中短长度保守策略：只做下限保护，避免低估。
     return max(pred, calibrated_pred)
+
+
+def decode_tpot_predictor(
+    length: int,
+    bs: Optional[int] = None,
+    *,
+    coeffs: Optional[Dict[str, float]] = None,
+    coeff_path: str | Path = DEFAULT_TPOT_COEFF_PATH,
+) -> float:
+    """Predict per-token TPOT(decode) time in seconds by batch-size and length."""
+    if length <= 0:
+        raise ValueError("length must be positive")
+
+    batch_size = 1 if bs is None else int(bs)
+    if batch_size <= 0:
+        raise ValueError("bs must be positive")
+
+    c = coeffs or load_tpot_coefficients(coeff_path)
+    if c.get("mode") == "per_bs_linear":
+        by_bs = c.get("by_bs")
+        if not isinstance(by_bs, dict) or not by_bs:
+            raise ValueError("invalid tpot per_bs_linear coefficients")
+        if batch_size in by_bs:
+            line = by_bs[batch_size]
+        else:
+            nearest_bs = min(by_bs.keys(), key=lambda k: abs(int(k) - batch_size))
+            line = by_bs[nearest_bs]
+        pred = float(line["slope"]) * int(length) + float(line["intercept"])
+    else:
+        pred = (
+            float(c["a"]) * batch_size
+            + float(c["b"]) * int(length)
+            + float(c["c"])
+        )
+    return max(0.0, float(pred))
 
 
 def predict_redis_pull_ms(
@@ -252,6 +323,24 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=0.0000381,
         help="KVCache size(GB) per token for kvcache-size estimation",
     )
+    parser.add_argument(
+        "--decode-length",
+        type=int,
+        default=None,
+        help="optional: decode predictor input length tokens",
+    )
+    parser.add_argument(
+        "--decode-bs",
+        type=int,
+        default=1,
+        help="decode predictor batch size, default=1",
+    )
+    parser.add_argument(
+        "--tpot-coeff-path",
+        type=str,
+        default=str(DEFAULT_TPOT_COEFF_PATH),
+        help="TPOT coefficient json path",
+    )
     return parser
 
 
@@ -297,6 +386,17 @@ def main() -> None:
         print(f"  predicted_remaining_compute_ms={breakdown['predicted_pure_compute_ms']:.3f}")
         print(f"  predicted_redis_pull_ms={breakdown['predicted_redis_pull_ms']:.3f}")
         print(f"  predicted_kvcache_total_ms={breakdown['predicted_kvcache_total_ms']:.3f}")
+    if args.decode_length is not None:
+        decode_seconds = decode_tpot_predictor(
+            length=int(args.decode_length),
+            bs=int(args.decode_bs),
+            coeff_path=args.tpot_coeff_path,
+        )
+        print("[decode-per-token]")
+        print(f"  decode_length_tokens={int(args.decode_length)}")
+        print(f"  decode_bs={int(args.decode_bs)}")
+        print(f"  predicted_decode_tpot_seconds={decode_seconds:.9f}")
+        print(f"  predicted_decode_tpot_ms={decode_seconds * 1000.0:.6f}")
 
 
 if __name__ == "__main__":

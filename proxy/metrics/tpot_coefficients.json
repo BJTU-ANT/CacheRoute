@@ -1,0 +1,11 @@
+{
+  "mode": "per_bs_linear",
+  "by_bs": {
+    "1": {
+      "slope": 0.0,
+      "intercept": 0.0
+    }
+  },
+  "unit": "seconds",
+  "source": "TPOTPerBSLinearRegressor"
+}
