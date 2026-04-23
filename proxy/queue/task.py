@@ -58,6 +58,9 @@ class ProxyTask:
     pred_forward_start_ts_ms: int = 0
     pred_prefill_start_ts_ms: int = 0
     pred_first_token_ts_ms: int = 0
+    pred_decode_ms: int = 0
+    pred_forward_end_ts_ms: int = 0
+    pred_worker_free_ts_ms: int = 0
     pred_service_ms: int = 0
     has_started_forward: bool = False
     has_seen_first_token: bool = False
