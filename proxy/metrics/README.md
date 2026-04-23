@@ -61,7 +61,9 @@ python3 queue_predictor.py \
   --bs 1 \
   --knowledge-length 1330 \
   --align-size 256 \
-  --kv-gb-per-token 0.0000381
+  --kv-gb-per-token 0.0000381 \
+  --decode-length 1000 \
+  --decode-bs 1 \
 ```
 会结构化输出两类场景：
 - `text-based`：基于 `--length`（即 total_length）四项式估算的纯计算时间。
