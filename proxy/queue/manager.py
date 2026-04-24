@@ -178,9 +178,14 @@ class QueueManager:
             # In current ordered-dispatch mode, forward start follows reservation prefill start.
             forward_start_s = prefill_start_s
             first_token_s = prefill_start_s + compute_s
+<<<<<<< codex/add-fields-for-decode-prediction-preparation
             decode_s = self._predict_decode_for_stage_s(task, start_length=length, decode_bs=3)
             forward_end_s = first_token_s + decode_s
             worker_free_s = forward_end_s
+=======
+            decode_s = 0.0   # Step1: keep decode modeling disabled to preserve current behavior.
+            forward_end_s = first_token_s + decode_s
+>>>>>>> main
 
             slot_free[slot_idx] = first_token_s
             self._instance_prefill_free_ts_s[task.instance_id] = first_token_s
@@ -194,7 +199,11 @@ class QueueManager:
             task.pred_first_token_ts_ms = int(first_token_s * 1000)
             task.pred_decode_ms = int(decode_s * 1000)
             task.pred_forward_end_ts_ms = int(forward_end_s * 1000)
+<<<<<<< codex/add-fields-for-decode-prediction-preparation
             task.pred_worker_free_ts_ms = int(worker_free_s * 1000)
+=======
+            task.pred_worker_free_ts_ms = int(forward_end_s * 1000)
+>>>>>>> main
             task.pred_service_ms = int(compute_s * 1000)
             task.reservation_seq = int(reservation_seq)
             task.recompute_generation = 0
@@ -208,11 +217,15 @@ class QueueManager:
             task.trace["predict_decode_ms"] = task.pred_decode_ms
             # vllm_internal: from forward_start to first_token, includes vllm queue + prefill compute
             task.trace["predict_vllm_internal_ms"] = max(0, int((first_token_s - forward_start_s) * 1000))
+<<<<<<< codex/add-fields-for-decode-prediction-preparation
             task.trace["predict_total_ms"] = (
                 int(task.trace["predict_queue_wait_ms"])
                 + int(task.trace["predict_vllm_internal_ms"])
                 + int(task.trace["predict_decode_ms"])
             )
+=======
+            task.trace["predict_total_ms"] = int((know_prepare_s + (first_token_s - ready_enqueue_s)) * 1000)
+>>>>>>> main
             task.trace["pred_first_token_ts_ms"] = task.pred_first_token_ts_ms
             task.trace["pred_forward_end_ts_ms"] = task.pred_forward_end_ts_ms
             task.trace["pred_worker_free_ts_ms"] = task.pred_worker_free_ts_ms
@@ -268,31 +281,45 @@ class QueueManager:
                 forward_start_s = prefill_start_s
                 service_s = max(0.0, task.pred_service_ms / 1000.0)
                 first_token_s = prefill_start_s + service_s
+<<<<<<< codex/add-fields-for-decode-prediction-preparation
                 length = int(task.trace.get("predict_length_tokens", self._estimate_request_length(task)))
                 decode_s = self._predict_decode_for_stage_s(task, start_length=length, decode_bs=3)
                 forward_end_s = first_token_s + decode_s
                 worker_free_s = forward_end_s
+=======
+                decode_s = task.pred_decode_ms / 1000.0
+                forward_end_s = first_token_s + decode_s
+>>>>>>> main
 
                 task.pred_slot_idx = int(slot_idx)
                 task.pred_slot_ready_ts_ms = int(slot_ready_s * 1000)
                 task.pred_forward_start_ts_ms = int(forward_start_s * 1000)
                 task.pred_prefill_start_ts_ms = int(prefill_start_s * 1000)
                 task.pred_first_token_ts_ms = int(first_token_s * 1000)
+<<<<<<< codex/add-fields-for-decode-prediction-preparation
                 task.pred_decode_ms = int(decode_s * 1000)
                 task.pred_forward_end_ts_ms = int(forward_end_s * 1000)
                 task.pred_worker_free_ts_ms = int(worker_free_s * 1000)
+=======
+                task.pred_forward_end_ts_ms = int(forward_end_s * 1000)
+                task.pred_worker_free_ts_ms = int(forward_end_s * 1000)
+>>>>>>> main
                 task.recompute_generation += 1
 
                 know_prepare_ms = int(task.trace.get("predict_know_prepare_ms", 0) or 0)
                 task.trace["pred_forward_start_ts_ms"] = task.pred_forward_start_ts_ms
                 task.trace["predict_queue_wait_ms"] = max(0, int((forward_start_s - ready_enqueue_s) * 1000))
                 task.trace["predict_vllm_internal_ms"] = max(0, int((first_token_s - forward_start_s) * 1000))
+<<<<<<< codex/add-fields-for-decode-prediction-preparation
                 task.trace["predict_decode_ms"] = task.pred_decode_ms
                 task.trace["predict_total_ms"] = (
                     int(task.trace["predict_queue_wait_ms"])
                     + int(task.trace["predict_vllm_internal_ms"])
                     + int(task.trace["predict_decode_ms"])
                 )
+=======
+                task.trace["predict_total_ms"] = int(know_prepare_ms + (first_token_s - ready_enqueue_s) * 1000)
+>>>>>>> main
                 task.trace["pred_first_token_ts_ms"] = task.pred_first_token_ts_ms
                 task.trace["pred_forward_end_ts_ms"] = task.pred_forward_end_ts_ms
                 task.trace["pred_worker_free_ts_ms"] = task.pred_worker_free_ts_ms
@@ -622,6 +649,36 @@ class QueueManager:
                                     # compatibility field
                                     task.trace["actual_compute_ms"] = task.trace["actual_vllm_internal_ms"]
                                 await self._mark_task_first_token_and_recompute(task, instance_id)
+<<<<<<< codex/add-fields-for-decode-prediction-preparation
+=======
+                                pred_total_ms = task.trace.get("predict_total_ms")
+                                actual_total_ms = task.trace.get("actual_total_ms")
+                                if isinstance(pred_total_ms, int) and isinstance(actual_total_ms, int):
+                                    task.trace["predict_error_ms"] = int(actual_total_ms - pred_total_ms)
+
+                                logger.info(
+                                    "[Timing] rid=%s instance=%s "
+                                    "pred(total/know_prepare/queue_wait/vllm_internal/decode)=%s/%s/%s/%s/%s ms "
+                                    "pred_ts(first_token/forward_end/worker_free)=%s/%s/%s "
+                                    "actual(total/know_prepare/ready_queue/vllm_internal)=%s/%s/%s/%s ms "
+                                    "predict_error=%s ms",
+                                    task.request_id,
+                                    instance_id,
+                                    task.trace.get("predict_total_ms"),
+                                    task.trace.get("predict_know_prepare_ms"),
+                                    task.trace.get("predict_queue_wait_ms"),
+                                    task.trace.get("predict_vllm_internal_ms"),
+                                    task.trace.get("predict_decode_ms"),
+                                    task.trace.get("pred_first_token_ts_ms"),
+                                    task.trace.get("pred_forward_end_ts_ms"),
+                                    task.trace.get("pred_worker_free_ts_ms"),
+                                    task.trace.get("actual_total_ms"),
+                                    task.trace.get("actual_know_prepare_ms"),
+                                    task.trace.get("actual_ready_queue_ms"),
+                                    task.trace.get("actual_vllm_internal_ms"),
+                                    task.trace.get("predict_error_ms"),
+                                )
+>>>>>>> main
                             else:
                                 logger.info(
                                     "[Timing] rid=%s instance=%s skip_correction=non_stream_response",
