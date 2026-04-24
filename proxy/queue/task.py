@@ -53,6 +53,8 @@ class ProxyTask:
     trace: Dict[str, int] = field(default_factory=dict)
 
     # reservation state for ready/prefill timeline
+    # prediction stage: "prefill" (default) or "decode" (reserved for future modeling)
+    predict_stage: str = "prefill"
     pred_slot_idx: int = -1
     pred_slot_ready_ts_ms: int = 0
     pred_forward_start_ts_ms: int = 0
