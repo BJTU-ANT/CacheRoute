@@ -9,7 +9,7 @@ import logging
 from typing import Dict, Optional, AsyncGenerator, Any, List
 
 from core import forward_request,config
-from proxy.metrics.queue_predictor import queue_predictor
+from proxy.metrics.queue_predictor import queue_predictor, decode_tpot_predictor
 from proxy.resource import p_control_plane
 
 from .task import ProxyTask
@@ -40,6 +40,7 @@ class QueueManager:
     _PREDICT_HEADER_OVERHEAD_TOKENS = 36
     _KNOW_PREPARE_FIXED_OVERHEAD_MS = 3.0
     _READY_DEQUEUE_INTERVAL_S = 0.02
+    _PREFILL_DECODE_TAIL_TOKENS = 1
 
     def __init__(self) -> None:
         self._prepare_concurrency_per_instance = int(os.environ.get("PREPARE_CONCURRENCY", config.PREPARE_CONCURRENCY))
@@ -125,6 +126,9 @@ class QueueManager:
         know_prepare_ms = int(task.trace.get("predict_know_prepare_ms", 0) or 0)
         know_prepare_s = know_prepare_ms / 1000.0
 
+        predict_stage = str(getattr(task, "predict_stage", "prefill") or "prefill").strip().lower()
+        task.predict_stage = predict_stage if predict_stage in ("prefill", "decode") else "prefill"
+
         lock = self._get_reservation_lock(task.instance_id)
         async with lock:
             self._ensure_instance_reservation_state(task.instance_id, now_s=ts_s)
@@ -136,7 +140,7 @@ class QueueManager:
             # In current ordered-dispatch mode, forward start follows reservation prefill start.
             forward_start_s = prefill_start_s
             first_token_s = prefill_start_s + compute_s
-            decode_s = 0.0   # Step1: keep decode modeling disabled to preserve current behavior.
+            decode_s = self._predict_decode_total_s(task) if task.predict_stage == "prefill" else 0.0
             forward_end_s = first_token_s + decode_s
 
             slot_free[slot_idx] = first_token_s
@@ -158,6 +162,7 @@ class QueueManager:
 
             task.trace["predict_length_tokens"] = int(length)
             task.trace["predict_bs"] = int(bs)
+            task.trace["predict_stage"] = str(task.predict_stage)
             task.trace["pred_forward_start_ts_ms"] = task.pred_forward_start_ts_ms
             # queue_wait: ready_enqueue -> predicted forward_start
             task.trace["predict_queue_wait_ms"] = max(0, int((forward_start_s - ready_enqueue_s) * 1000))
@@ -165,7 +170,8 @@ class QueueManager:
             task.trace["predict_decode_ms"] = task.pred_decode_ms
             # vllm_internal: from forward_start to first_token, includes vllm queue + prefill compute
             task.trace["predict_vllm_internal_ms"] = max(0, int((first_token_s - forward_start_s) * 1000))
-            task.trace["predict_total_ms"] = int((know_prepare_s + (first_token_s - ready_enqueue_s)) * 1000)
+            # For prefill stage, predict_total focuses on TTFT + 1-token decode tail.
+            task.trace["predict_total_ms"] = int((know_prepare_s + (first_token_s - ready_enqueue_s) + decode_s) * 1000)
             task.trace["pred_first_token_ts_ms"] = task.pred_first_token_ts_ms
             task.trace["pred_forward_end_ts_ms"] = task.pred_forward_end_ts_ms
             task.trace["pred_worker_free_ts_ms"] = task.pred_worker_free_ts_ms
@@ -178,17 +184,34 @@ class QueueManager:
 
             logger.debug(
                 "[Reserve] rid=%s instance=%s seq=%s slot=%s slot_free=%s prefill_free=%.3f "
-                "slot_ready=%.3f prefill_start=%.3f first_token=%.3f",
+                "stage=%s slot_ready=%.3f prefill_start=%.3f first_token=%.3f",
                 task.request_id,
                 task.instance_id,
                 task.reservation_seq,
                 slot_idx,
                 [round(v, 3) for v in slot_free],
                 prefill_free_s,
+                task.predict_stage,
                 slot_ready_s,
                 prefill_start_s,
                 first_token_s,
             )
+
+    def _predict_decode_total_s(self, task: ProxyTask) -> float:
+        """
+        Decode stage predictor hook.
+        - prefill stage: estimate only 1-token decode tail.
+        - decode stage: keep interface only; return 0 for now.
+        """
+        if str(getattr(task, "predict_stage", "prefill")).lower() != "prefill":
+            return 0.0
+        try:
+            length = self._estimate_request_length(task)
+            per_token_s = max(0.0, decode_tpot_predictor(length=length, bs=1))
+            return per_token_s * float(self._PREFILL_DECODE_TAIL_TOKENS)
+        except Exception as e:
+            logger.debug("[Predict] rid=%s decode tail predict failed: %s", task.request_id, e)
+            return 0.0
 
     async def predict_new_task_wait_ms(self, instance_id: str) -> int:
         now_s = time.time()
@@ -210,6 +233,7 @@ class QueueManager:
             pending.sort(key=lambda t: t.reservation_seq)
 
             # Rebuild reservation chain from real "now" baseline.
+            # Decode/worker_free does not drive slot_free in prefill main chain.
             slot_count = len(self._instance_slot_free_ts_s[instance_id])
             slot_free = [ts_s for _ in range(slot_count)]
             prefill_cursor_s = ts_s
@@ -223,7 +247,7 @@ class QueueManager:
                 forward_start_s = prefill_start_s
                 service_s = max(0.0, task.pred_service_ms / 1000.0)
                 first_token_s = prefill_start_s + service_s
-                decode_s = task.pred_decode_ms / 1000.0
+                decode_s = self._predict_decode_total_s(task) if task.predict_stage == "prefill" else 0.0
                 forward_end_s = first_token_s + decode_s
 
                 task.pred_slot_idx = int(slot_idx)
@@ -231,6 +255,7 @@ class QueueManager:
                 task.pred_forward_start_ts_ms = int(forward_start_s * 1000)
                 task.pred_prefill_start_ts_ms = int(prefill_start_s * 1000)
                 task.pred_first_token_ts_ms = int(first_token_s * 1000)
+                task.pred_decode_ms = int(decode_s * 1000)
                 task.pred_forward_end_ts_ms = int(forward_end_s * 1000)
                 task.pred_worker_free_ts_ms = int(forward_end_s * 1000)
                 task.recompute_generation += 1
@@ -239,7 +264,8 @@ class QueueManager:
                 task.trace["pred_forward_start_ts_ms"] = task.pred_forward_start_ts_ms
                 task.trace["predict_queue_wait_ms"] = max(0, int((forward_start_s - ready_enqueue_s) * 1000))
                 task.trace["predict_vllm_internal_ms"] = max(0, int((first_token_s - forward_start_s) * 1000))
-                task.trace["predict_total_ms"] = int(know_prepare_ms + (first_token_s - ready_enqueue_s) * 1000)
+                task.trace["predict_decode_ms"] = int(decode_s * 1000)
+                task.trace["predict_total_ms"] = int(know_prepare_ms + (first_token_s - ready_enqueue_s + decode_s) * 1000)
                 task.trace["pred_first_token_ts_ms"] = task.pred_first_token_ts_ms
                 task.trace["pred_forward_end_ts_ms"] = task.pred_forward_end_ts_ms
                 task.trace["pred_worker_free_ts_ms"] = task.pred_worker_free_ts_ms
@@ -257,9 +283,7 @@ class QueueManager:
         async with lock:
             self._ensure_instance_reservation_state(instance_id, now_s=now_s)
             task.has_seen_first_token = True
-            if 0 <= task.pred_slot_idx < len(self._instance_slot_free_ts_s[instance_id]):
-                self._instance_slot_free_ts_s[instance_id][task.pred_slot_idx] = now_s
-            # Important: recycle shared prefill timeline to the real current time.
+            # First-token is the prefill completion point.
             self._instance_prefill_free_ts_s[instance_id] = now_s
             self._instance_pending_tasks[instance_id] = [
                 t for t in self._instance_pending_tasks[instance_id]
