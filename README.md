@@ -1,7 +1,7 @@
 
 <img width="1400" height="369" alt="CacheRoute" src="https://github.com/user-attachments/assets/6050e71f-0e37-4cf9-b712-26e11242c9cd" />
 
-[![Version](https://img.shields.io/badge/version-0.1.6-blue)](https://github.com/BJTU-ANT/CacheRoute/releases)
+[![Version](https://img.shields.io/badge/version-0.1.7-blue)](https://github.com/BJTU-ANT/CacheRoute/releases)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/BJTU-ANT/CacheRoute?style=social)](https://github.com/BJTU-ANT/CacheRoute)
 
