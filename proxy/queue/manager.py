@@ -62,6 +62,7 @@ class QueueManager:
         self._instance_slot_free_ts_s: Dict[str, List[float]] = {}
         self._instance_prefill_free_ts_s: Dict[str, float] = {}
         self._instance_pending_tasks: Dict[str, List[ProxyTask]] = {}
+        self._instance_decode_tasks: Dict[str, List[ProxyTask]] = {}
         self._instance_next_reservation_seq: Dict[str, int] = {}
         self._reservation_locks: Dict[str, asyncio.Lock] = {}
 
@@ -113,6 +114,8 @@ class QueueManager:
             self._instance_prefill_free_ts_s[instance_id] = ts_s
         if instance_id not in self._instance_pending_tasks:
             self._instance_pending_tasks[instance_id] = []
+        if instance_id not in self._instance_decode_tasks:
+            self._instance_decode_tasks[instance_id] = []
         if instance_id not in self._instance_next_reservation_seq:
             self._instance_next_reservation_seq[instance_id] = 1
 
@@ -283,6 +286,12 @@ class QueueManager:
         async with lock:
             self._ensure_instance_reservation_state(instance_id, now_s=now_s)
             task.has_seen_first_token = True
+            task.predict_stage = "decode"
+            task.trace["predict_stage"] = "decode"
+            task.trace["decode_start_ms"] = int(now_s * 1000)
+            decode_tasks = self._instance_decode_tasks[instance_id]
+            if task not in decode_tasks:
+                decode_tasks.append(task)
             # First-token is the prefill completion point.
             self._instance_prefill_free_ts_s[instance_id] = now_s
             self._instance_pending_tasks[instance_id] = [
@@ -290,6 +299,16 @@ class QueueManager:
                 if t is not task
             ]
         await self._recompute_pending_from_now(instance_id, now_s=now_s)
+
+    async def _mark_task_decode_end(self, task: ProxyTask, instance_id: str) -> None:
+        lock = self._get_reservation_lock(instance_id)
+        async with lock:
+            self._ensure_instance_reservation_state(instance_id)
+            task.trace["decode_end_ms"] = int(task.trace.get("forward_end_ms", _now_ms()))
+            self._instance_decode_tasks[instance_id] = [
+                t for t in self._instance_decode_tasks[instance_id]
+                if t is not task
+            ]
 
     async def _wait_dispatch_turn(self, task: ProxyTask, instance_id: str) -> None:
         """
@@ -586,17 +605,21 @@ class QueueManager:
                                 await self._mark_task_first_token_and_recompute(task, instance_id)
                                 pred_total_ms = task.trace.get("predict_total_ms")
                                 actual_total_ms = task.trace.get("actual_total_ms")
+                                active_decode = len(self._instance_decode_tasks.get(instance_id, []))
                                 if isinstance(pred_total_ms, int) and isinstance(actual_total_ms, int):
                                     task.trace["predict_error_ms"] = int(actual_total_ms - pred_total_ms)
 
                                 logger.info(
                                     "[Timing] rid=%s instance=%s "
+                                    "stage=%s active_decode=%s "
                                     "pred(total/know_prepare/queue_wait/vllm_internal/decode)=%s/%s/%s/%s/%s ms "
                                     "pred_ts(first_token/forward_end/worker_free)=%s/%s/%s "
                                     "actual(total/know_prepare/ready_queue/vllm_internal)=%s/%s/%s/%s ms "
                                     "predict_error=%s ms",
                                     task.request_id,
                                     instance_id,
+                                    task.trace.get("predict_stage"),
+                                    active_decode,
                                     task.trace.get("predict_total_ms"),
                                     task.trace.get("predict_know_prepare_ms"),
                                     task.trace.get("predict_queue_wait_ms"),
@@ -620,6 +643,7 @@ class QueueManager:
                         await task.response_queue.put(chunk)
 
                 task.trace["forward_end_ms"] = _now_ms()
+                await self._mark_task_decode_end(task, instance_id)
 
                 # 结束符
                 await task.response_queue.put(None)
@@ -633,6 +657,7 @@ class QueueManager:
             except Exception as e:
                 task.error = f"ready_failed: {e}"
                 task.trace["forward_end_ms"] = _now_ms()
+                await self._mark_task_decode_end(task, instance_id)
                 logger.exception("[Ready] worker=%s failed rid=%s", worker_idx, task.request_id)
                 # 出错也要通知 handler 结束，否则上游会一直挂着
                 await task.response_queue.put(None)
