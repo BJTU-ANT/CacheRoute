@@ -82,7 +82,7 @@ Python版本：3.12.11<br>
 1. 在系统内/workspace/下放置整体项目CacheRoute<br>
 2. 新建支持vllm的容器，需要镜像`cacheroute:vllm0.13-lmcache3.11-pytorch2.9.1`(源码安装)，如果不知道如何快速部署cacheroute环境和下载模型，见`/env/README.md`<br>
     ```
-    sudo docker run --gpus all -it --name CacheRoute --ipc=host --shm-size=64g --ulimit memlock=-1 --ulimit stack=67108864 --memory=0 --memory-swap=0 -p 8000:8000 -v /llm-stack:/workspace/llm-stack cacheroute:vllm0.13-lmcache3.11-pytorch2.9.1 bash
+    sudo docker run --gpus all -it --name CacheRoute --network host --ipc=host --shm-size=64g --ulimit memlock=-1 --ulimit stack=67108864 --memory=0 --memory-swap=0 -p 8000:8000 -v /llm-stack:/workspace/llm-stack cacheroute:vllm0.13-lmcache3.11-pytorch2.9.1 bash
     ```
 3. 启动并打开容器(涉及开启多个容器命令行时)
     ```
@@ -91,7 +91,7 @@ Python版本：3.12.11<br>
     ```
    先启动一个Redis容器，作为LMcache_connector后续的KVCache store.
     ```
-    sudo docker run -d --name lmcache-redis --network container:vllm_lmcache_test redis:7 redis-server --save "" --appendonly no --maxmemory 200gb --maxmemory-policy allkeys-lru
+    sudo docker run -d --name lmcache-redis --network host redis:7 redis-server --bind 0.0.0.0 --protected-mode no --save "" --appendonly no --maxmemory 200gb --maxmemory-policy allkeys-lru
     ```
 4. 在`core/config.py`内根据实际模型下载路径完成必要的参数配置（scheduler强依赖embedding、tokenizer、model模型）
     ```
