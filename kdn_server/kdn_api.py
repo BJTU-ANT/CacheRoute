@@ -819,6 +819,9 @@ async def inject_ready_kv(payload: Dict[str, Any]):
     )
 
     for kid in requested:
+        kid_request_start_ts = time.time()
+        kid_request_start_perf = time.perf_counter()
+
         if kid in miss_kids:
             continue
 
@@ -846,6 +849,10 @@ async def inject_ready_kv(payload: Dict[str, Any]):
                 "network_queue_ms": 0.0,
                 "network_transfer_ms": 0.0,
                 "network_total_ms": 0.0,
+                "transfer_start_ts": kid_request_start_ts,
+                "transfer_end_ts": kid_request_start_ts,
+                "estimated_bw_mb_s": 0.0,
+                "bandwidth_utilization": 0.0,
             }
 
             if _NETWORK_SIM is not None and int(res.payload_bytes) > 0:
@@ -854,6 +861,27 @@ async def inject_ready_kv(payload: Dict[str, Any]):
                     payload_bytes=int(res.payload_bytes),
                     ready_time=redis_done_ts,
                 )
+                net_result["transfer_start_ts"] = kid_request_start_ts
+                net_result["transfer_end_ts"] = time.time()
+            else:
+                # 未开启网络模拟器时，按完整 kid 请求周期统计真实总时延（直到当前请求结束可返回 ack）。
+                transfer_end_ts = time.time()
+                net_result["transfer_end_ts"] = transfer_end_ts
+                net_result["network_total_ms"] = max(0.0, (time.perf_counter() - kid_request_start_perf) * 1000.0)
+
+            # 基于 payload 与总传输时间估算实际吞吐与带宽利用率（用于实验观测）。
+            total_s = float(net_result["network_total_ms"]) / 1000.0
+            observed_bw_mb_s = 0.0
+            if int(res.payload_bytes) > 0 and total_s > 0.0:
+                observed_bw_mb_s = float(res.payload_bytes) / (1024.0 * 1024.0) / total_s
+            configured_bw_mb_s = float(
+                os.getenv("KDN_NETWORK_BW_MB_S", str(getattr(config, "KDN_NETWORK_BW_MB_S", 125.0))).strip()
+            )
+            utilization = 0.0
+            if configured_bw_mb_s > 0.0:
+                utilization = observed_bw_mb_s / configured_bw_mb_s
+            net_result["estimated_bw_mb_s"] = observed_bw_mb_s
+            net_result["bandwidth_utilization"] = utilization
 
             # 只有真正注入完成 + 网络模拟完成后才记 success
             injected_kids.append(kid)
@@ -864,7 +892,9 @@ async def inject_ready_kv(payload: Dict[str, Any]):
             logging.info(
                 "[KDN] inject_ready_kv ok: kid=%s kv_dir=%s injected=%s missing_files=%s "
                 "payload_bytes=%s payload_files=%s batch_id=%s batch_size=%s "
-                "network_queue_ms=%.3f network_transfer_ms=%.3f network_total_ms=%.3f",
+                "network_queue_ms=%.3f network_transfer_ms=%.3f network_total_ms=%.3f "
+                "transfer_start_ts=%.6f transfer_end_ts=%.6f "
+                "estimated_bw_mb_s=%.3f bandwidth_utilization=%.3f",
                 kid,
                 kv_dir,
                 res.injected,
@@ -876,6 +906,10 @@ async def inject_ready_kv(payload: Dict[str, Any]):
                 net_result["network_queue_ms"],
                 net_result["network_transfer_ms"],
                 net_result["network_total_ms"],
+                net_result["transfer_start_ts"],
+                net_result["transfer_end_ts"],
+                net_result["estimated_bw_mb_s"],
+                net_result["bandwidth_utilization"],
             )
 
         except Exception as e:
