@@ -839,6 +839,7 @@ async def inject_ready_kv(payload: Dict[str, Any]):
         try:
             res = injector.inject_kv_dir(kv_dir)
             redis_done_ts = time.perf_counter()
+            transfer_start_ts = time.time()
 
             net_result = {
                 "batch_id": None,
@@ -846,6 +847,8 @@ async def inject_ready_kv(payload: Dict[str, Any]):
                 "network_queue_ms": 0.0,
                 "network_transfer_ms": 0.0,
                 "network_total_ms": 0.0,
+                "transfer_start_ts": transfer_start_ts,
+                "transfer_end_ts": transfer_start_ts,
             }
 
             if _NETWORK_SIM is not None and int(res.payload_bytes) > 0:
@@ -854,6 +857,13 @@ async def inject_ready_kv(payload: Dict[str, Any]):
                     payload_bytes=int(res.payload_bytes),
                     ready_time=redis_done_ts,
                 )
+                net_result["transfer_start_ts"] = transfer_start_ts
+                net_result["transfer_end_ts"] = time.time()
+            else:
+                # 未开启网络模拟器时，记录真实时间戳与真实耗时，便于实验观测。
+                transfer_end_ts = time.time()
+                net_result["transfer_end_ts"] = transfer_end_ts
+                net_result["network_total_ms"] = max(0.0, (transfer_end_ts - transfer_start_ts) * 1000.0)
 
             # 只有真正注入完成 + 网络模拟完成后才记 success
             injected_kids.append(kid)
@@ -864,7 +874,8 @@ async def inject_ready_kv(payload: Dict[str, Any]):
             logging.info(
                 "[KDN] inject_ready_kv ok: kid=%s kv_dir=%s injected=%s missing_files=%s "
                 "payload_bytes=%s payload_files=%s batch_id=%s batch_size=%s "
-                "network_queue_ms=%.3f network_transfer_ms=%.3f network_total_ms=%.3f",
+                "network_queue_ms=%.3f network_transfer_ms=%.3f network_total_ms=%.3f "
+                "transfer_start_ts=%.6f transfer_end_ts=%.6f",
                 kid,
                 kv_dir,
                 res.injected,
@@ -876,6 +887,8 @@ async def inject_ready_kv(payload: Dict[str, Any]):
                 net_result["network_queue_ms"],
                 net_result["network_transfer_ms"],
                 net_result["network_total_ms"],
+                net_result["transfer_start_ts"],
+                net_result["transfer_end_ts"],
             )
 
         except Exception as e:
