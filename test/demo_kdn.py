@@ -71,9 +71,9 @@ if __name__ == "__main__":
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
     os.environ.setdefault("SCHEDULER_CP_URL", config.SCHEDULER_CP_URL)
-    os.environ.setdefault("KDN_ID", "kdn_local_1")
-    os.environ.setdefault("KDN_ADVERTISE_HOST", args.host)
-    os.environ.setdefault("KDN_ADVERTISE_PORT", str(args.port))
+    os.environ.setdefault("KDN_ID", "kdn_1")
+    os.environ.setdefault("KDN_ADVERTISE_HOST", config.KDN_HOST)
+    os.environ.setdefault("KDN_ADVERTISE_PORT", str(config.KDN_PORT))
 
     # network simulator config
     os.environ["KDN_NETWORK_ENABLE"] = "1" if args.network else "0"
