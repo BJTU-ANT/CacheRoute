@@ -29,6 +29,38 @@ _HB_TASK: asyncio.Task | None = None
 _HB_STOP: asyncio.Event | None = None
 _KDN_ID: str = ""
 _NETWORK_SIM: Optional["NetworkSimulator"] = None
+_REAL_NET_LINK_BUSY: bool = False
+_REAL_NET_TEXT_WAITERS: int = 0
+_REAL_NET_COND: asyncio.Condition = asyncio.Condition()
+
+
+async def _acquire_real_net_text_slot() -> None:
+    """高优先级文本传输槽位：仅等待当前传输结束。"""
+    global _REAL_NET_LINK_BUSY, _REAL_NET_TEXT_WAITERS
+    async with _REAL_NET_COND:
+        _REAL_NET_TEXT_WAITERS += 1
+        try:
+            while _REAL_NET_LINK_BUSY:
+                await _REAL_NET_COND.wait()
+            _REAL_NET_LINK_BUSY = True
+        finally:
+            _REAL_NET_TEXT_WAITERS -= 1
+
+
+async def _acquire_real_net_kv_slot() -> None:
+    """低优先级 KV 传输槽位：除链路空闲外，还需让出所有待发送文本。"""
+    global _REAL_NET_LINK_BUSY
+    async with _REAL_NET_COND:
+        while _REAL_NET_LINK_BUSY or _REAL_NET_TEXT_WAITERS > 0:
+            await _REAL_NET_COND.wait()
+        _REAL_NET_LINK_BUSY = True
+
+
+async def _release_real_net_slot() -> None:
+    global _REAL_NET_LINK_BUSY
+    async with _REAL_NET_COND:
+        _REAL_NET_LINK_BUSY = False
+        _REAL_NET_COND.notify_all()
 
 
 def _resolve_redis_target_host(request_host: str) -> str:
@@ -569,46 +601,50 @@ async def knowledge_text(payload: Dict[str, Any]):
         else:
             return JSONResponse(status_code=400, content={"error": "knowledge_ids elements must be strings (kid)"})
 
-    items, miss = _TEXT_DB.get_many(kids)
-    need_fields = payload.get("need_fields") or []
-    if need_fields and not isinstance(need_fields, list):
-        return JSONResponse(status_code=400, content={"error": "need_fields must be a list"})
+    await _acquire_real_net_text_slot()
+    try:
+        items, miss = _TEXT_DB.get_many(kids)
+        need_fields = payload.get("need_fields") or []
+        if need_fields and not isinstance(need_fields, list):
+            return JSONResponse(status_code=400, content={"error": "need_fields must be a list"})
 
-    allow = set(need_fields) if need_fields else None
+        allow = set(need_fields) if need_fields else None
 
-    def _pick(it):
-        d = {"id": it.id}  # 保持旧字段 id，避免 proxy 侧再改一堆
-        # 无 need_fields → 保持原行为（兼容）
-        if allow is None:
-            d.update({
-                "content": it.content,
-                "length": it.length,
-                "rel_path": it.rel_path,
-                "embedding": it.embedding,
-                "embed_dim": it.embed_dim,
-                "kv_ready": it.kv_ready,
-                "kv_rel_dir": it.kv_rel_dir,
-                "kv_dumped_keys": it.kv_dumped_keys,
-                "kv_updated_at": it.kv_updated_at,
-            })
+        def _pick(it):
+            d = {"id": it.id}  # 保持旧字段 id，避免 proxy 侧再改一堆
+            # 无 need_fields → 保持原行为（兼容）
+            if allow is None:
+                d.update({
+                    "content": it.content,
+                    "length": it.length,
+                    "rel_path": it.rel_path,
+                    "embedding": it.embedding,
+                    "embed_dim": it.embed_dim,
+                    "kv_ready": it.kv_ready,
+                    "kv_rel_dir": it.kv_rel_dir,
+                    "kv_dumped_keys": it.kv_dumped_keys,
+                    "kv_updated_at": it.kv_updated_at,
+                })
+                return d
+
+            # 有 need_fields → 只返回指定字段
+            if "content" in allow: d["content"] = it.content
+            if "length" in allow: d["length"] = it.length
+            if "rel_path" in allow: d["rel_path"] = it.rel_path
+            if "embed_dim" in allow: d["embed_dim"] = it.embed_dim
+            if "embedding" in allow: d["embedding"] = it.embedding
+            if "embedding_head" in allow:
+                d["embedding_head"] = (it.embedding[:10] if it.embedding else None)
+            if "kv_ready" in allow: d["kv_ready"] = it.kv_ready
+            if "kv_rel_dir" in allow: d["kv_rel_dir"] = it.kv_rel_dir
+            if "kv_dumped_keys" in allow: d["kv_dumped_keys"] = it.kv_dumped_keys
+            if "kv_updated_at" in allow: d["kv_updated_at"] = it.kv_updated_at
             return d
 
-        # 有 need_fields → 只返回指定字段
-        if "content" in allow: d["content"] = it.content
-        if "length" in allow: d["length"] = it.length
-        if "rel_path" in allow: d["rel_path"] = it.rel_path
-        if "embed_dim" in allow: d["embed_dim"] = it.embed_dim
-        if "embedding" in allow: d["embedding"] = it.embedding
-        if "embedding_head" in allow:
-            d["embedding_head"] = (it.embedding[:10] if it.embedding else None)
-        if "kv_ready" in allow: d["kv_ready"] = it.kv_ready
-        if "kv_rel_dir" in allow: d["kv_rel_dir"] = it.kv_rel_dir
-        if "kv_dumped_keys" in allow: d["kv_dumped_keys"] = it.kv_dumped_keys
-        if "kv_updated_at" in allow: d["kv_updated_at"] = it.kv_updated_at
-        return d
-
-    resp_items = [_pick(it) for it in items]
-    return JSONResponse(content={"items": resp_items, "miss": miss})
+        resp_items = [_pick(it) for it in items]
+        return JSONResponse(content={"items": resp_items, "miss": miss})
+    finally:
+        await _release_real_net_slot()
 
 
 @kdn.post("/knowledge/delete")
@@ -819,6 +855,8 @@ async def inject_ready_kv(payload: Dict[str, Any]):
     )
 
     for kid in requested:
+        kid_request_start_ts = time.time()
+
         if kid in miss_kids:
             continue
 
@@ -837,23 +875,59 @@ async def inject_ready_kv(payload: Dict[str, Any]):
         kv_dir = os.path.join(kv_root, kid)
 
         try:
-            res = injector.inject_kv_dir(kv_dir)
-            redis_done_ts = time.perf_counter()
-
             net_result = {
                 "batch_id": None,
                 "batch_size": 1,
                 "network_queue_ms": 0.0,
                 "network_transfer_ms": 0.0,
                 "network_total_ms": 0.0,
+                "transfer_start_ts": kid_request_start_ts,
+                "transfer_end_ts": kid_request_start_ts,
+                "estimated_bw_mb_s": 0.0,
+                "bandwidth_utilization": 0.0,
             }
 
-            if _NETWORK_SIM is not None and int(res.payload_bytes) > 0:
-                net_result = await _NETWORK_SIM.submit_transfer(
-                    task_id=f"{kid}:{time.time_ns()}",
-                    payload_bytes=int(res.payload_bytes),
-                    ready_time=redis_done_ts,
-                )
+            if _NETWORK_SIM is None:
+                # 无模拟器时：按 KDN->Instance 单链路 FIFO 串行模型统计真实排队与传输时间。
+                enqueue_ts = time.perf_counter()
+                await _acquire_real_net_kv_slot()
+                try:
+                    transfer_start_perf = time.perf_counter()
+                    net_result["network_queue_ms"] = max(0.0, (transfer_start_perf - enqueue_ts) * 1000.0)
+                    net_result["transfer_start_ts"] = time.time()
+
+                    res = injector.inject_kv_dir(kv_dir)
+                    transfer_end_perf = time.perf_counter()
+                    net_result["transfer_end_ts"] = time.time()
+                    net_result["network_transfer_ms"] = max(0.0, (transfer_end_perf - transfer_start_perf) * 1000.0)
+                    net_result["network_total_ms"] = net_result["network_queue_ms"] + net_result["network_transfer_ms"]
+                finally:
+                    await _release_real_net_slot()
+            else:
+                res = injector.inject_kv_dir(kv_dir)
+                redis_done_ts = time.perf_counter()
+                if int(res.payload_bytes) > 0:
+                    net_result = await _NETWORK_SIM.submit_transfer(
+                        task_id=f"{kid}:{time.time_ns()}",
+                        payload_bytes=int(res.payload_bytes),
+                        ready_time=redis_done_ts,
+                    )
+                net_result["transfer_start_ts"] = kid_request_start_ts
+                net_result["transfer_end_ts"] = time.time()
+
+            # 基于 payload 与总传输时间估算实际吞吐与带宽利用率（用于实验观测）。
+            total_s = float(net_result["network_total_ms"]) / 1000.0
+            observed_bw_mb_s = 0.0
+            if int(res.payload_bytes) > 0 and total_s > 0.0:
+                observed_bw_mb_s = float(res.payload_bytes) / (1024.0 * 1024.0) / total_s
+            configured_bw_mb_s = float(
+                os.getenv("KDN_NETWORK_BW_MB_S", str(getattr(config, "KDN_NETWORK_BW_MB_S", 125.0))).strip()
+            )
+            utilization = 0.0
+            if configured_bw_mb_s > 0.0:
+                utilization = observed_bw_mb_s / configured_bw_mb_s
+            net_result["estimated_bw_mb_s"] = observed_bw_mb_s
+            net_result["bandwidth_utilization"] = utilization
 
             # 只有真正注入完成 + 网络模拟完成后才记 success
             injected_kids.append(kid)
@@ -864,7 +938,9 @@ async def inject_ready_kv(payload: Dict[str, Any]):
             logging.info(
                 "[KDN] inject_ready_kv ok: kid=%s kv_dir=%s injected=%s missing_files=%s "
                 "payload_bytes=%s payload_files=%s batch_id=%s batch_size=%s "
-                "network_queue_ms=%.3f network_transfer_ms=%.3f network_total_ms=%.3f",
+                "network_queue_ms=%.3f network_transfer_ms=%.3f network_total_ms=%.3f "
+                "transfer_start_ts=%.6f transfer_end_ts=%.6f "
+                "estimated_bw_mb_s=%.3f bandwidth_utilization=%.3f",
                 kid,
                 kv_dir,
                 res.injected,
@@ -876,6 +952,10 @@ async def inject_ready_kv(payload: Dict[str, Any]):
                 net_result["network_queue_ms"],
                 net_result["network_transfer_ms"],
                 net_result["network_total_ms"],
+                net_result["transfer_start_ts"],
+                net_result["transfer_end_ts"],
+                net_result["estimated_bw_mb_s"],
+                net_result["bandwidth_utilization"],
             )
 
         except Exception as e:
