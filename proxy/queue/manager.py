@@ -43,6 +43,7 @@ class QueueManager:
     _PREFILL_DECODE_TAIL_TOKENS = 1
     _KV_ALIGN_TOKENS = 256
     _KV_MB_PER_TOKEN = 0.096
+    _KV_GB_PER_TOKEN = 0.0000381
     _KV_BW_UTIL = 0.825
 
     def __init__(self) -> None:
@@ -104,7 +105,9 @@ class QueueManager:
         effective_knowledge_len = self._effective_knowledge_len(knowledge_len)
         residual_tokens = max(1, prompt_len + (knowledge_len - effective_knowledge_len) + header_overhead)
         kv_size_mb = effective_knowledge_len * self._KV_MB_PER_TOKEN
-        redis_kv_load_ms = float(predict_redis_pull_ms(kvcache_size_gb=(kv_size_mb / 1024.0)))
+        redis_kv_load_ms = float(
+            predict_redis_pull_ms(kvcache_size_gb=effective_knowledge_len * self._KV_GB_PER_TOKEN)
+        )
         residual_prefill_s = max(0.0, queue_predictor(length=residual_tokens, bs=1))
         task.trace["predict_text_prefill_ms"] = 0
         task.trace["predict_redis_kv_load_ms"] = int(redis_kv_load_ms)
