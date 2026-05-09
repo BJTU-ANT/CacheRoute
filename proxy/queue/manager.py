@@ -68,7 +68,11 @@ class QueueManager:
         self._instance_pending_tasks: Dict[str, List[ProxyTask]] = {}
         self._instance_decode_tasks: Dict[str, List[ProxyTask]] = {}
         self._instance_next_reservation_seq: Dict[str, int] = {}
+        self._instance_next_prepare_seq: Dict[str, int] = {}
+        self._instance_next_ready_release_seq: Dict[str, int] = {}
+        self._instance_prepared_buffer: Dict[str, Dict[int, ProxyTask]] = {}
         self._reservation_locks: Dict[str, asyncio.Lock] = {}
+        self._prepared_flush_locks: Dict[str, asyncio.Lock] = {}
         self._kdn_kv_link_free_ts_s: Dict[str, float] = {}
         self._kdn_kv_link_locks: Dict[str, asyncio.Lock] = {}
         self._kdn_kv_pending_tasks: Dict[str, List[ProxyTask]] = {}
@@ -200,6 +204,13 @@ class QueueManager:
             self._reservation_locks[instance_id] = lock
         return lock
 
+    def _get_prepared_flush_lock(self, instance_id: str) -> asyncio.Lock:
+        lock = self._prepared_flush_locks.get(instance_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._prepared_flush_locks[instance_id] = lock
+        return lock
+
     def _ensure_instance_reservation_state(self, instance_id: str, now_s: Optional[float] = None) -> None:
         ts_s = time.time() if now_s is None else now_s
         if instance_id not in self._instance_slot_free_ts_s:
@@ -212,6 +223,41 @@ class QueueManager:
             self._instance_decode_tasks[instance_id] = []
         if instance_id not in self._instance_next_reservation_seq:
             self._instance_next_reservation_seq[instance_id] = 1
+        if instance_id not in self._instance_next_prepare_seq:
+            self._instance_next_prepare_seq[instance_id] = 1
+        if instance_id not in self._instance_next_ready_release_seq:
+            self._instance_next_ready_release_seq[instance_id] = 1
+        if instance_id not in self._instance_prepared_buffer:
+            self._instance_prepared_buffer[instance_id] = {}
+
+    async def _mark_prepare_done_and_flush(self, instance_id: str, task: ProxyTask) -> None:
+        lock = self._get_prepared_flush_lock(instance_id)
+        async with lock:
+            self._ensure_instance_reservation_state(instance_id)
+            seq = int(getattr(task, "prepare_seq", 0) or 0)
+            self._instance_prepared_buffer[instance_id][seq] = task
+            await self._flush_prepared_to_ready(instance_id)
+
+    async def _flush_prepared_to_ready(self, instance_id: str) -> None:
+        q = self._qmap.get(instance_id)
+        buf = self._instance_prepared_buffer.get(instance_id, {})
+        next_seq = int(self._instance_next_ready_release_seq.get(instance_id, 1) or 1)
+        while True:
+            task = buf.get(next_seq)
+            if task is None:
+                break
+            del buf[next_seq]
+            task.trace["ready_release_seq"] = int(next_seq)
+            task.trace["prepared_buffer_size"] = int(len(buf))
+            task.trace["ready_enqueue_ms"] = _now_ms()
+            await self._reserve_ready_task(task, now_s=time.time())
+            await q.ready_q.put(task)
+            logger.info(
+                "[Queue] enqueue_ready rid=%s instance=%s ready_len=%s prepare_seq=%s ready_release_seq=%s",
+                task.request_id, instance_id, q.ready_q.qsize(), task.trace.get("prepare_seq"), task.trace.get("ready_release_seq")
+            )
+            next_seq += 1
+        self._instance_next_ready_release_seq[instance_id] = next_seq
 
     async def _reserve_ready_task(self, task: ProxyTask, now_s: Optional[float] = None) -> None:
         ts_s = time.time() if now_s is None else now_s
@@ -470,6 +516,11 @@ class QueueManager:
         """
         # 懒启动该 instance 的 workers
         self._start_workers_for_instance(task.instance_id)
+        self._ensure_instance_reservation_state(task.instance_id)
+        prepare_seq = int(self._instance_next_prepare_seq.get(task.instance_id, 1) or 1)
+        self._instance_next_prepare_seq[task.instance_id] = prepare_seq + 1
+        task.prepare_seq = prepare_seq
+        task.trace["prepare_seq"] = int(prepare_seq)
 
         # 预测总处理时间 = 等待时间 + 处理时间（bs 当前固定 1）
         try:
@@ -716,20 +767,19 @@ class QueueManager:
                         task.request_id, enable_rag, len(knowledge_ids)
                     )
 
-                task.trace["ready_enqueue_ms"] = _now_ms()
-                await self._reserve_ready_task(task, now_s=time.time())
-                await q.ready_q.put(task)
-                logger.info(
-                    "[Queue] enqueue_ready rid=%s instance=%s ready_len=%s",
-                    task.request_id, instance_id, q.ready_q.qsize()
-                )
+                if str(injection_type).strip().lower() == "text":
+                    prepare_done_ms = _now_ms()
+                    proxy_enqueue_ms = int(task.trace.get("proxy_enqueue_ms", prepare_done_ms) or prepare_done_ms)
+                    actual_prepare_total_ms = max(0, prepare_done_ms - proxy_enqueue_ms)
+                    task.trace["actual_prepare_total_ms"] = int(actual_prepare_total_ms)
+                    task.trace["predict_know_prepare_ms"] = int(actual_prepare_total_ms)
+                    task.trace["predict_prepare_ms"] = int(actual_prepare_total_ms)
+                await self._mark_prepare_done_and_flush(instance_id, task)
 
             except Exception as e:
                 task.error = f"prepare_failed: {e}"
                 logger.exception("[Prepare] failed rid=%s fallback no-rag", task.request_id)
-                task.trace["ready_enqueue_ms"] = _now_ms()
-                await self._reserve_ready_task(task, now_s=time.time())
-                await q.ready_q.put(task)
+                await self._mark_prepare_done_and_flush(instance_id, task)
             finally:
                 q.active_prepare = max(0, q.active_prepare - 1)
 
@@ -811,10 +861,11 @@ class QueueManager:
                                 logger.info(
                                     "[Timing] rid=%s instance=%s "
                                     "injection_mode=%s stage=%s active_decode=%s "
+                                    "prepare_seq=%s ready_release_seq=%s prepared_buffer_size=%s "
                                     "pred(total/know_prepare/queue_wait/vllm_internal/decode)=%s/%s/%s/%s/%s ms "
                                     "pred(text text_prefill/prefill_service/total_tokens)=%s/%s/%s "
                                     "pred(kvcache prepare_prefix/kv_prepare_service/redis_load/residual_prefill)=%s/%s/%s/%s ms "
-                                    "pred(extra prepare_initial/prepare_qwait/kv_transfer)=%s/%s/%s ms "
+                                    "pred(extra predict_prepare/prepare_initial/prepare_qwait/kv_transfer)=%s/%s/%s/%s ms "
                                     "pred(tokens total/reused/residual)=%s/%s/%s "
                                     "kv_ack(payload_bytes/net_q/net_xfer/net_total)=%s/%s/%s/%s "
                                     "timeline(proxy_enqueue/kdn_wait_start/kv_ack_start/kv_ack_end/ready_enqueue)=%s/%s/%s/%s/%s "
@@ -826,6 +877,9 @@ class QueueManager:
                                     task.trace.get("injection_mode"),
                                     task.trace.get("predict_stage"),
                                     active_decode,
+                                    task.trace.get("prepare_seq"),
+                                    task.trace.get("ready_release_seq"),
+                                    task.trace.get("prepared_buffer_size"),
                                     task.trace.get("predict_total_ms"),
                                     task.trace.get("predict_know_prepare_ms"),
                                     task.trace.get("predict_queue_wait_ms"),
@@ -838,6 +892,7 @@ class QueueManager:
                                     task.trace.get("predict_kv_prepare_service_ms"),
                                     task.trace.get("predict_redis_kv_load_ms"),
                                     task.trace.get("predict_residual_prefill_ms"),
+                                    task.trace.get("predict_prepare_ms"),
                                     task.trace.get("predict_prepare_initial_ms"),
                                     task.trace.get("predict_prepare_queue_wait_ms"),
                                     task.trace.get("predict_kv_transfer_ms"),
