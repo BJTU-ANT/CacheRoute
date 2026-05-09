@@ -802,9 +802,11 @@ class QueueManager:
 
                                 logger.info(
                                     "[Timing] rid=%s instance=%s "
-                                    "stage=%s active_decode=%s "
+                                    "injection_mode=%s stage=%s active_decode=%s "
                                     "pred(total/know_prepare/queue_wait/vllm_internal/decode)=%s/%s/%s/%s/%s ms "
-                                    "pred(extra prepare_prefix/kv_prepare_service/prepare_initial/prepare_qwait/kv_transfer/redis_load/residual_prefill/prefill_service)=%s/%s/%s/%s/%s/%s/%s/%s ms "
+                                    "pred(text text_prefill/prefill_service/total_tokens)=%s/%s/%s "
+                                    "pred(kvcache prepare_prefix/kv_prepare_service/redis_load/residual_prefill)=%s/%s/%s/%s ms "
+                                    "pred(extra prepare_initial/prepare_qwait/kv_transfer)=%s/%s/%s ms "
                                     "pred(tokens total/reused/residual)=%s/%s/%s "
                                     "kv_ack(payload_bytes/net_q/net_xfer/net_total)=%s/%s/%s/%s "
                                     "timeline(proxy_enqueue/kdn_wait_start/kv_ack_start/kv_ack_end/ready_enqueue)=%s/%s/%s/%s/%s "
@@ -813,6 +815,7 @@ class QueueManager:
                                     "predict_error=%s ms",
                                     task.request_id,
                                     instance_id,
+                                    task.trace.get("injection_mode"),
                                     task.trace.get("predict_stage"),
                                     active_decode,
                                     task.trace.get("predict_total_ms"),
@@ -820,14 +823,16 @@ class QueueManager:
                                     task.trace.get("predict_queue_wait_ms"),
                                     task.trace.get("predict_vllm_internal_ms"),
                                     task.trace.get("predict_decode_ms"),
+                                    task.trace.get("predict_text_prefill_ms"),
+                                    task.trace.get("predict_prefill_service_ms"),
+                                    task.trace.get("predict_total_tokens"),
                                     task.trace.get("predict_prepare_prefix_ms"),
                                     task.trace.get("predict_kv_prepare_service_ms"),
+                                    task.trace.get("predict_redis_kv_load_ms"),
+                                    task.trace.get("predict_residual_prefill_ms"),
                                     task.trace.get("predict_prepare_initial_ms"),
                                     task.trace.get("predict_prepare_queue_wait_ms"),
                                     task.trace.get("predict_kv_transfer_ms"),
-                                    task.trace.get("predict_redis_kv_load_ms"),
-                                    task.trace.get("predict_residual_prefill_ms"),
-                                    task.trace.get("predict_prefill_service_ms"),
                                     task.trace.get("predict_total_tokens"),
                                     task.trace.get("predict_reused_tokens"),
                                     task.trace.get("predict_residual_tokens"),
