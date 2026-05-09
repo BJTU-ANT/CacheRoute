@@ -1,7 +1,7 @@
 
 <img width="1400" height="369" alt="CacheRoute" src="https://github.com/user-attachments/assets/6050e71f-0e37-4cf9-b712-26e11242c9cd" />
 
-[![Version](https://img.shields.io/badge/version-0.1.7-blue)](https://github.com/BJTU-ANT/CacheRoute/releases)
+[![Version](https://img.shields.io/badge/version-0.1.8-blue)](https://github.com/BJTU-ANT/CacheRoute/releases)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/BJTU-ANT/CacheRoute?style=social)](https://github.com/BJTU-ANT/CacheRoute)
 
@@ -201,8 +201,11 @@ scheduler任务调度实例
 Proxy任务调度实例
 <img width="1200" height="288" alt="image" src="https://github.com/user-attachments/assets/bc24230e-0167-469b-9e6a-a7be9f5d26f0" />
 
+Proxy注入策略选择
+<img width="1200" height="746" alt="image" src="https://github.com/user-attachments/assets/930575a6-dba2-465d-aff2-b511099a25a4" />
+
 vLLM+LMCache复用实例
-<img width="1200" height="163" alt="image" src="https://github.com/user-attachments/assets/7506da90-9978-41fe-8288-cc53bc3678a7" />
+<img width="1200" height="224" alt="image" src="https://github.com/user-attachments/assets/558be19f-c801-4182-b9cd-7daee7fd0a80" />
 
 客户端响应
 <img width="1200" height="374" alt="image" src="https://github.com/user-attachments/assets/5c2c891b-8eeb-4a69-85f9-f7bc588f38bc" />
