@@ -44,6 +44,7 @@ python3 proxy/proxy_cli.py
 `:scheduler`: 查询 Scheduler 控制平面，看当前 proxy_id 是否已注册/在线<br>
 `:exit/:quit`: 退出 REPL<br>
 
+### 实际截图
 启动<br>
 <img width="1200" height="125" alt="图片" src="https://github.com/user-attachments/assets/07b78380-bd7d-47ae-8f7d-f45cdd7882cb" />
 
@@ -56,3 +57,6 @@ python3 proxy/proxy_cli.py
 查看实例池<br>
 <img width="1200" height="144" alt="图片" src="https://github.com/user-attachments/assets/183ccc5b-65dc-426d-843a-c8c1509fb7ab" />
 
+排队、选slot_worker支持并发，以及预测任务
+<img width="1200" height="1319" alt="image" src="https://github.com/user-attachments/assets/afc7a7e5-bf38-4520-9b4a-8b354d1ee089" />
+<img width="1200" height="1340" alt="image" src="https://github.com/user-attachments/assets/35429add-d4d7-431d-bca4-344c67c6f966" />
