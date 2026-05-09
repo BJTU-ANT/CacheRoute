@@ -72,6 +72,7 @@ class QueueManager:
         self._kdn_kv_link_free_ts_s: Dict[str, float] = {}
         self._kdn_kv_link_locks: Dict[str, asyncio.Lock] = {}
         self._kdn_kv_pending_tasks: Dict[str, List[ProxyTask]] = {}
+        self._instance_cold_start_pending: Dict[str, bool] = {}
 
     def _get_kdn_kv_link_lock(self, link_key: str) -> asyncio.Lock:
         lock = self._kdn_kv_link_locks.get(link_key)
@@ -266,8 +267,13 @@ class QueueManager:
             task.trace["predict_decode_ms"] = task.pred_decode_ms
             # vllm_internal: from forward_start to first_token, includes vllm queue + prefill compute
             task.trace["predict_vllm_internal_ms"] = max(0, int((first_token_s - forward_start_s) * 1000))
+            cold_start_extra_ms = 0
+            if self._instance_cold_start_pending.get(task.instance_id, False):
+                cold_start_extra_ms = 600
+                self._instance_cold_start_pending[task.instance_id] = False
+            task.trace["predict_cold_start_extra_ms"] = int(cold_start_extra_ms)
             # For prefill stage, predict_total focuses on TTFT + 1-token decode tail.
-            task.trace["predict_total_ms"] = int((know_prepare_s + (first_token_s - ready_enqueue_s) + decode_s) * 1000)
+            task.trace["predict_total_ms"] = int((know_prepare_s + (first_token_s - ready_enqueue_s) + decode_s) * 1000) + int(cold_start_extra_ms)
             task.trace["injection_mode"] = str(getattr(getattr(task.req_obj, "Service", None), "Injection_type", "text") or "text").lower()
             task.trace["pred_first_token_ts_ms"] = task.pred_first_token_ts_ms
             task.trace["pred_forward_end_ts_ms"] = task.pred_forward_end_ts_ms
@@ -436,6 +442,8 @@ class QueueManager:
                 self._start_workers_for_instance(iid)
 
     def _start_workers_for_instance(self, instance_id: str) -> None:
+        if instance_id not in self._instance_cold_start_pending:
+            self._instance_cold_start_pending[instance_id] = True
         self._ensure_instance_reservation_state(instance_id)
         if f"prepare_dispatch:{instance_id}" not in self._worker_tasks:
             self._worker_tasks[f"prepare_dispatch:{instance_id}"] = asyncio.create_task(
@@ -812,7 +820,7 @@ class QueueManager:
                                     "timeline(proxy_enqueue/kdn_wait_start/kv_ack_start/kv_ack_end/ready_enqueue)=%s/%s/%s/%s/%s "
                                     "actual(total/know_prepare/ready_queue/vllm_internal)=%s/%s/%s/%s ms "
                                     "actual_prepare_total=%s ms "
-                                    "predict_error=%s ms",
+                                    "cold_start_extra_ms=%s predict_error=%s ms",
                                     task.request_id,
                                     instance_id,
                                     task.trace.get("injection_mode"),
@@ -850,6 +858,7 @@ class QueueManager:
                                     task.trace.get("actual_ready_queue_ms"),
                                     task.trace.get("actual_vllm_internal_ms"),
                                     task.trace.get("actual_prepare_total_ms"),
+                                    task.trace.get("predict_cold_start_extra_ms"),
                                     task.trace.get("predict_error_ms"),
                                 )
                             else:
