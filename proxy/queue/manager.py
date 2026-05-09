@@ -71,6 +71,8 @@ class QueueManager:
         self._reservation_locks: Dict[str, asyncio.Lock] = {}
         self._kdn_kv_link_free_ts_s: Dict[str, float] = {}
         self._kdn_kv_link_locks: Dict[str, asyncio.Lock] = {}
+        self._kdn_kv_pending_tasks: Dict[str, List[ProxyTask]] = {}
+        self._instance_cold_start_pending: Dict[str, bool] = {}
 
     def _get_kdn_kv_link_lock(self, link_key: str) -> asyncio.Lock:
         lock = self._kdn_kv_link_locks.get(link_key)
@@ -150,6 +152,47 @@ class QueueManager:
         rtt_ms = float(item.get("latency_ms", item.get("rtt_ms", 0.0)) or 0.0)
         return max(0.0, rtt_ms + self._KNOW_PREPARE_FIXED_OVERHEAD_MS)
 
+    async def _predict_kv_transfer_s(self, task: ProxyTask) -> float:
+        svc = getattr(task.req_obj, "Service", None)
+        know_len = int(getattr(svc, "Knowledge_length", 0) or 0)
+        effective_knowledge_len = self._effective_knowledge_len(know_len)
+        kv_size_mb = effective_knowledge_len * self._KV_MB_PER_TOKEN
+        kdn_addr = str(task.kdn_addr or "").strip()
+        links = await p_control_plane.get_kdn_links_snapshot()
+        item = links.get(kdn_addr) or links.get(f"kdn://{kdn_addr}") or links.get(f"http://{kdn_addr}") or {}
+        bandwidth_mbps = float(item.get("bandwidth_mbps", 0.0) or 0.0)
+        bandwidth_MBps = bandwidth_mbps / 8.0
+        effective_bandwidth_MBps = bandwidth_MBps * self._KV_BW_UTIL
+        if effective_bandwidth_MBps <= 0:
+            return 0.0
+        return max(0.0, kv_size_mb / effective_bandwidth_MBps)
+
+    async def _recompute_kdn_kv_pending_predictions(self, link_key: str) -> None:
+        pending = self._kdn_kv_pending_tasks.get(link_key, [])
+        if not pending:
+            return
+        cursor_s = self._kdn_kv_link_free_ts_s.get(link_key, time.time())
+        now_s = time.time()
+        for task in pending:
+            if int(task.trace.get("kv_link_reserved", 0) or 0) == 1:
+                continue
+            if task.trace.get("kv_ack_start_ms"):
+                continue
+            kv_transfer_s = await self._predict_kv_transfer_s(task)
+            start_s = max(cursor_s, now_s)
+            wait_s = max(0.0, start_s - now_s)
+            now_ms = int(now_s * 1000.0)
+            proxy_enqueue_ms = int(task.trace.get("proxy_enqueue_ms", now_ms) or now_ms)
+            prefix_ms = max(0, now_ms - proxy_enqueue_ms)
+            kv_prepare_service_ms = int((wait_s + kv_transfer_s) * 1000.0)
+            task.trace["predict_prepare_queue_wait_ms"] = int(wait_s * 1000.0)
+            task.trace["predict_kv_transfer_ms"] = int(kv_transfer_s * 1000.0)
+            task.trace["predict_prepare_prefix_ms"] = int(prefix_ms)
+            task.trace["predict_kv_prepare_service_ms"] = int(kv_prepare_service_ms)
+            task.trace["predict_know_prepare_ms"] = int(prefix_ms + kv_prepare_service_ms)
+            task.trace["predict_prepare_ms"] = int(task.trace["predict_know_prepare_ms"])
+            cursor_s = start_s + kv_transfer_s
+
     def _get_reservation_lock(self, instance_id: str) -> asyncio.Lock:
         lock = self._reservation_locks.get(instance_id)
         if lock is None:
@@ -224,8 +267,13 @@ class QueueManager:
             task.trace["predict_decode_ms"] = task.pred_decode_ms
             # vllm_internal: from forward_start to first_token, includes vllm queue + prefill compute
             task.trace["predict_vllm_internal_ms"] = max(0, int((first_token_s - forward_start_s) * 1000))
+            cold_start_extra_ms = 0
+            if self._instance_cold_start_pending.get(task.instance_id, False):
+                cold_start_extra_ms = 600
+                self._instance_cold_start_pending[task.instance_id] = False
+            task.trace["predict_cold_start_extra_ms"] = int(cold_start_extra_ms)
             # For prefill stage, predict_total focuses on TTFT + 1-token decode tail.
-            task.trace["predict_total_ms"] = int((know_prepare_s + (first_token_s - ready_enqueue_s) + decode_s) * 1000)
+            task.trace["predict_total_ms"] = int((know_prepare_s + (first_token_s - ready_enqueue_s) + decode_s) * 1000) + int(cold_start_extra_ms)
             task.trace["injection_mode"] = str(getattr(getattr(task.req_obj, "Service", None), "Injection_type", "text") or "text").lower()
             task.trace["pred_first_token_ts_ms"] = task.pred_first_token_ts_ms
             task.trace["pred_forward_end_ts_ms"] = task.pred_forward_end_ts_ms
@@ -394,6 +442,8 @@ class QueueManager:
                 self._start_workers_for_instance(iid)
 
     def _start_workers_for_instance(self, instance_id: str) -> None:
+        if instance_id not in self._instance_cold_start_pending:
+            self._instance_cold_start_pending[instance_id] = True
         self._ensure_instance_reservation_state(instance_id)
         if f"prepare_dispatch:{instance_id}" not in self._worker_tasks:
             self._worker_tasks[f"prepare_dispatch:{instance_id}"] = asyncio.create_task(
@@ -430,32 +480,21 @@ class QueueManager:
             kv_queue_wait_ms = 0.0
             kv_transfer_ms = 0.0
             if injection_mode == "kvcache":
-                links = await p_control_plane.get_kdn_links_snapshot()
+                kv_transfer_s = await self._predict_kv_transfer_s(task)
                 kdn_addr = str(task.kdn_addr or "").strip()
-                item = links.get(kdn_addr) or links.get(f"kdn://{kdn_addr}") or links.get(f"http://{kdn_addr}") or {}
-                bandwidth_mbps = float(item.get("bandwidth_mbps", 0.0) or 0.0)
-                bandwidth_MBps = max(1e-9, bandwidth_mbps / 8.0)
-                effective_bandwidth = bandwidth_MBps * self._KV_BW_UTIL
-                know_len = int(getattr(svc, "Knowledge_length", 0) or 0)
-                effective_knowledge_len = self._effective_knowledge_len(know_len)
-                kv_size_mb = effective_knowledge_len * self._KV_MB_PER_TOKEN
-                kv_transfer_s = (kv_size_mb / effective_bandwidth) if effective_bandwidth > 0 else 0.0
                 link_key = f"{task.instance_id}|{kdn_addr or 'unknown'}"
-                now_s = time.time()
-                lock = self._get_kdn_kv_link_lock(link_key)
-                async with lock:
-                    free_s = self._kdn_kv_link_free_ts_s.get(link_key, now_s)
-                    start_s = max(now_s, free_s)
-                    kv_queue_wait_ms = max(0.0, (start_s - now_s) * 1000.0)
-                    self._kdn_kv_link_free_ts_s[link_key] = start_s + kv_transfer_s
+                self._kdn_kv_pending_tasks.setdefault(link_key, []).append(task)
                 kv_transfer_ms = kv_transfer_s * 1000.0
-                know_prepare_ms = kv_queue_wait_ms + kv_transfer_ms
+                know_prepare_ms = kv_transfer_ms
+                task.trace["predict_prepare_initial_ms"] = int(know_prepare_ms)
             else:
                 know_prepare_ms = await self._estimate_know_prepare_ms(task)
             task.trace["predict_prepare_queue_wait_ms"] = int(kv_queue_wait_ms)
             task.trace["predict_kv_transfer_ms"] = int(kv_transfer_ms)
             task.trace["predict_prepare_ms"] = int(know_prepare_ms)
             task.trace["predict_know_prepare_ms"] = int(know_prepare_ms)
+            task.trace["predict_prepare_prefix_ms"] = int(task.trace.get("predict_prepare_prefix_ms", 0) or 0)
+            task.trace["predict_kv_prepare_service_ms"] = int(task.trace.get("predict_kv_prepare_service_ms", int(know_prepare_ms)) or 0)
         except Exception as e:
             logger.warning("[Predict] rid=%s failed: %s", task.request_id, e)
 
@@ -558,9 +597,80 @@ class QueueManager:
                     if injection_type == "kvcache":
                         if task.kv_ready_kids:
                             try:
+                                kdn_addr = str(task.kdn_addr or "").strip()
+                                link_key = f"{task.instance_id}|{kdn_addr or 'unknown'}"
+                                kv_transfer_s = await self._predict_kv_transfer_s(task)
+                                now_s = time.time()
+                                lock = self._get_kdn_kv_link_lock(link_key)
+                                async with lock:
+                                    free_s = self._kdn_kv_link_free_ts_s.get(link_key, now_s)
+                                    start_s = max(now_s, free_s)
+                                    kv_queue_wait_s = max(0.0, start_s - now_s)
+                                    self._kdn_kv_link_free_ts_s[link_key] = start_s + kv_transfer_s
+                                task.trace["kdn_link_wait_start_ms"] = int(now_s * 1000.0)
+                                task.trace["kdn_link_wait_end_ms"] = int(start_s * 1000.0)
+                                proxy_enqueue_ms = int(
+                                    task.trace.get("proxy_enqueue_ms", task.trace["kdn_link_wait_start_ms"])
+                                    or task.trace["kdn_link_wait_start_ms"]
+                                )
+                                prefix_ms = max(0, int(task.trace["kdn_link_wait_start_ms"]) - proxy_enqueue_ms)
+                                task.trace["predict_prepare_queue_wait_ms"] = int(kv_queue_wait_s * 1000.0)
+                                task.trace["predict_kv_transfer_ms"] = int(kv_transfer_s * 1000.0)
+                                task.trace["predict_prepare_prefix_ms"] = int(prefix_ms)
+                                task.trace["predict_kv_prepare_service_ms"] = (
+                                    int(task.trace["predict_prepare_queue_wait_ms"]) + int(task.trace["predict_kv_transfer_ms"])
+                                )
+                                task.trace["predict_know_prepare_ms"] = (
+                                    int(task.trace["predict_prepare_prefix_ms"]) + int(task.trace["predict_kv_prepare_service_ms"])
+                                )
+                                task.trace["predict_prepare_ms"] = int(task.trace["predict_know_prepare_ms"])
+                                if kv_queue_wait_s > 0:
+                                    await asyncio.sleep(kv_queue_wait_s)
+                                task.trace["kv_link_reserved"] = 1
                                 task.trace["kv_ack_start_ms"] = _now_ms()
                                 kv_ack = await self._inject_ready_kv_via_instance(task)
                                 task.trace["kv_ack_end_ms"] = _now_ms()
+                                kv_ack_end_ms = float(task.trace.get("kv_ack_end_ms", 0) or 0)
+                                kv_ack_start_ms = float(task.trace.get("kv_ack_start_ms", 0) or 0)
+                                if kv_ack_end_ms > 0:
+                                    actual_done_s = kv_ack_end_ms / 1000.0
+                                    async with lock:
+                                        old_free_s = self._kdn_kv_link_free_ts_s.get(link_key, actual_done_s)
+                                        self._kdn_kv_link_free_ts_s[link_key] = max(old_free_s, actual_done_s)
+                                        kdn_link_free_after = self._kdn_kv_link_free_ts_s[link_key]
+                                    task.trace["kdn_link_free_before"] = int(old_free_s * 1000.0)
+                                    task.trace["kdn_link_free_after"] = int(kdn_link_free_after * 1000.0)
+                                else:
+                                    task.trace["kdn_link_free_before"] = int(time.time() * 1000.0)
+                                    task.trace["kdn_link_free_after"] = task.trace["kdn_link_free_before"]
+                                task.trace["actual_prepare_ms"] = int(max(0.0, kv_ack_end_ms - kv_ack_start_ms))
+                                actual_prepare_total_ms = int(
+                                    max(0.0, kv_ack_end_ms - float(task.trace.get("proxy_enqueue_ms", kv_ack_end_ms) or kv_ack_end_ms))
+                                )
+                                task.trace["actual_prepare_total_ms"] = actual_prepare_total_ms
+                                task.trace["predict_know_prepare_ms"] = actual_prepare_total_ms
+                                task.trace["predict_prepare_ms"] = actual_prepare_total_ms
+                                pending = self._kdn_kv_pending_tasks.get(link_key, [])
+                                self._kdn_kv_pending_tasks[link_key] = [x for x in pending if x is not task]
+                                await self._recompute_kdn_kv_pending_predictions(link_key)
+                                logger.info(
+                                    "[Prepare][KVLink] rid=%s predict_prepare_ms=%s predict_prepare_queue_wait_ms=%s "
+                                    "predict_kv_transfer_ms=%s actual_prepare_ms=%s kdn_link_wait_start_ms=%s "
+                                    "kdn_link_wait_end_ms=%s kdn_link_free_before=%s kdn_link_free_after=%s "
+                                    "kv_ack_start_ms=%s kv_ack_end_ms=%s pending_count=%s",
+                                    task.request_id,
+                                    task.trace.get("predict_prepare_ms"),
+                                    task.trace.get("predict_prepare_queue_wait_ms"),
+                                    task.trace.get("predict_kv_transfer_ms"),
+                                    task.trace.get("actual_prepare_ms"),
+                                    task.trace.get("kdn_link_wait_start_ms"),
+                                    task.trace.get("kdn_link_wait_end_ms"),
+                                    task.trace.get("kdn_link_free_before"),
+                                    task.trace.get("kdn_link_free_after"),
+                                    task.trace.get("kv_ack_start_ms"),
+                                    task.trace.get("kv_ack_end_ms"),
+                                    len(self._kdn_kv_pending_tasks.get(link_key, [])),
+                                )
 
                                 task.kv_ack = kv_ack
                                 logger.info(
@@ -574,6 +684,8 @@ class QueueManager:
                                 )
                             except Exception as e:
                                 task.trace["kv_ack_end_ms"] = _now_ms()
+                                pending = self._kdn_kv_pending_tasks.get(link_key, [])
+                                self._kdn_kv_pending_tasks[link_key] = [x for x in pending if x is not task]
                                 task.kv_ack = {
                                     "ok": False,
                                     "injected_kids": [],
@@ -585,6 +697,10 @@ class QueueManager:
                                 logger.exception("[Prepare] rid=%s kv inject ack failed, fallback text-only",
                                                  task.request_id)
                         else:
+                            kdn_addr = str(task.kdn_addr or "").strip()
+                            link_key = f"{task.instance_id}|{kdn_addr or 'unknown'}"
+                            pending = self._kdn_kv_pending_tasks.get(link_key, [])
+                            self._kdn_kv_pending_tasks[link_key] = [x for x in pending if x is not task]
                             task.kv_ack = {
                                 "ok": True,
                                 "injected_kids": [],
@@ -694,15 +810,20 @@ class QueueManager:
 
                                 logger.info(
                                     "[Timing] rid=%s instance=%s "
-                                    "stage=%s active_decode=%s "
+                                    "injection_mode=%s stage=%s active_decode=%s "
                                     "pred(total/know_prepare/queue_wait/vllm_internal/decode)=%s/%s/%s/%s/%s ms "
-                                    "pred(extra prepare_qwait/kv_transfer/redis_load/residual_prefill/prefill_service)=%s/%s/%s/%s/%s ms "
+                                    "pred(text text_prefill/prefill_service/total_tokens)=%s/%s/%s "
+                                    "pred(kvcache prepare_prefix/kv_prepare_service/redis_load/residual_prefill)=%s/%s/%s/%s ms "
+                                    "pred(extra prepare_initial/prepare_qwait/kv_transfer)=%s/%s/%s ms "
                                     "pred(tokens total/reused/residual)=%s/%s/%s "
                                     "kv_ack(payload_bytes/net_q/net_xfer/net_total)=%s/%s/%s/%s "
+                                    "timeline(proxy_enqueue/kdn_wait_start/kv_ack_start/kv_ack_end/ready_enqueue)=%s/%s/%s/%s/%s "
                                     "actual(total/know_prepare/ready_queue/vllm_internal)=%s/%s/%s/%s ms "
-                                    "predict_error=%s ms",
+                                    "actual_prepare_total=%s ms "
+                                    "cold_start_extra_ms=%s predict_error=%s ms",
                                     task.request_id,
                                     instance_id,
+                                    task.trace.get("injection_mode"),
                                     task.trace.get("predict_stage"),
                                     active_decode,
                                     task.trace.get("predict_total_ms"),
@@ -710,11 +831,16 @@ class QueueManager:
                                     task.trace.get("predict_queue_wait_ms"),
                                     task.trace.get("predict_vllm_internal_ms"),
                                     task.trace.get("predict_decode_ms"),
-                                    task.trace.get("predict_prepare_queue_wait_ms"),
-                                    task.trace.get("predict_kv_transfer_ms"),
+                                    task.trace.get("predict_text_prefill_ms"),
+                                    task.trace.get("predict_prefill_service_ms"),
+                                    task.trace.get("predict_total_tokens"),
+                                    task.trace.get("predict_prepare_prefix_ms"),
+                                    task.trace.get("predict_kv_prepare_service_ms"),
                                     task.trace.get("predict_redis_kv_load_ms"),
                                     task.trace.get("predict_residual_prefill_ms"),
-                                    task.trace.get("predict_prefill_service_ms"),
+                                    task.trace.get("predict_prepare_initial_ms"),
+                                    task.trace.get("predict_prepare_queue_wait_ms"),
+                                    task.trace.get("predict_kv_transfer_ms"),
                                     task.trace.get("predict_total_tokens"),
                                     task.trace.get("predict_reused_tokens"),
                                     task.trace.get("predict_residual_tokens"),
@@ -722,10 +848,17 @@ class QueueManager:
                                     task.kv_ack.get("network_queue_ms"),
                                     task.kv_ack.get("network_transfer_ms"),
                                     task.kv_ack.get("network_total_ms"),
+                                    task.trace.get("proxy_enqueue_ms"),
+                                    task.trace.get("kdn_link_wait_start_ms"),
+                                    task.trace.get("kv_ack_start_ms"),
+                                    task.trace.get("kv_ack_end_ms"),
+                                    task.trace.get("ready_enqueue_ms"),
                                     task.trace.get("actual_total_ms"),
                                     task.trace.get("actual_know_prepare_ms"),
                                     task.trace.get("actual_ready_queue_ms"),
                                     task.trace.get("actual_vllm_internal_ms"),
+                                    task.trace.get("actual_prepare_total_ms"),
+                                    task.trace.get("predict_cold_start_extra_ms"),
                                     task.trace.get("predict_error_ms"),
                                 )
                             else:
