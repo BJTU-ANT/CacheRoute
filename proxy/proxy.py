@@ -52,6 +52,13 @@ PROXY_MAX_CAPACITY = int(os.environ.get("PROXY_MAX_CAPACITY", config.PROXY_MAX_C
 PROXY_INSTANCE_COUNT = int(os.environ.get("PROXY_INSTANCE_COUNT", config.PROXY_INSTANCE_COUNT))
 PROXY_KV_MEM_PER_INSTANCE_GB = float(os.environ.get("PROXY_KV_MEM_PER_INSTANCE_GB", config.PROXY_KV_MEM_PER_INSTANCE_GB))
 PROXY_KV_CACHE_UPDATE_POLICY = os.environ.get("PROXY_KV_CACHE_UPDATE_POLICY", config.PROXY_KV_CACHE_UPDATE_POLICY)
+PROXY_INJECTION_STRATEGY = os.environ.get("PROXY_INJECTION_STRATEGY", "default").strip().lower()
+if PROXY_INJECTION_STRATEGY not in {"default", "iws"}:
+    logger.warning(
+        "[Proxy] invalid PROXY_INJECTION_STRATEGY=%s, fallback to default",
+        PROXY_INJECTION_STRATEGY,
+    )
+    PROXY_INJECTION_STRATEGY = "default"
 
 # NOTE:
 # This is a TEMPORARY fallback for legacy request path.
@@ -106,6 +113,8 @@ async def lifespan(app: FastAPI):
       - shutdown: 优雅注销（非强依赖，kill -9 情况靠 TTL 清理）
     """
     _squelch_noisy_loggers()
+    app.state.injection_strategy_name = PROXY_INJECTION_STRATEGY  # type: ignore
+    logger.info("[Proxy] injection strategy=%s", app.state.injection_strategy_name)
     # --- 初始化实例池，并注入proxy控制平面 ---
     ttl_s = int(os.environ.get("PROXY_INSTANCE_TTL_S", config.INSTANCE_ALIVE_TTL_S))
     app.state.instance_pool = InstancePool(ttl_s=ttl_s)  # type: ignore
@@ -469,6 +478,12 @@ async def proxy_chat_completions(request: FastAPIRequest):
     port = int(chosen.port)
     url_path = "/v1/chat/completions"
     logger.info("[Proxy] instance chosen(chat): id=%s addr=%s:%s", getattr(chosen, "instance_id", "?"), host, port)
+    strategy_name = getattr(proxy.state, "injection_strategy_name", "default")
+    if strategy_name == "iws":
+        logger.info(
+            "[Proxy][IWS] dry-run disabled, keep request Injection_type=%s",
+            getattr(req_obj.Service, "Injection_type", None),
+        )
 
     # ====================================
     # 送入队列enqueue -> manager -> forward
@@ -540,6 +555,12 @@ async def proxy_completions(request: FastAPIRequest):
     url_path = "/v1/completions"
 
     logger.info("[Proxy] instance chosen(completions): id=%s addr=%s:%s", getattr(chosen, "instance_id", "?"), host, port)
+    strategy_name = getattr(proxy.state, "injection_strategy_name", "default")
+    if strategy_name == "iws":
+        logger.info(
+            "[Proxy][IWS] dry-run disabled, keep request Injection_type=%s",
+            getattr(req_obj.Service, "Injection_type", None),
+        )
 
     # ==================================
     # 送入队列enqueue -> drain -> forward
