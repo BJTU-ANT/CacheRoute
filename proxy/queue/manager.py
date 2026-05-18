@@ -74,6 +74,7 @@ class QueueManager:
         self._reservation_locks: Dict[str, asyncio.Lock] = {}
         self._prepared_flush_locks: Dict[str, asyncio.Lock] = {}
         self._kdn_kv_link_free_ts_s: Dict[str, float] = {}
+        self._kdn_kv_active_until_ts_s: Dict[str, float] = {}
         self._kdn_kv_link_locks: Dict[str, asyncio.Lock] = {}
         self._kdn_kv_pending_tasks: Dict[str, List[ProxyTask]] = {}
         self._instance_cold_start_pending: Dict[str, bool] = {}
@@ -385,6 +386,140 @@ class QueueManager:
             prefill_start_s = max(slot_ready_s, self._instance_prefill_free_ts_s[instance_id])
             return max(0, int((prefill_start_s - now_s) * 1000))
 
+    async def estimate_ready_wait_ms(self, instance_id: str) -> int:
+        return await self.predict_new_task_wait_ms(instance_id)
+
+    @staticmethod
+    def _extract_prompt_and_knowledge_len(req_obj: Any) -> tuple[int, int]:
+        prompt = getattr(req_obj, "Prompt", None)
+        service = getattr(req_obj, "Service", None)
+        prompt_len = int(getattr(prompt, "token_length", 0) or 0)
+        knowledge_len = int(getattr(service, "Knowledge_length", 0) or 0)
+        return prompt_len, knowledge_len
+
+    def estimate_text_service_ms(self, req_obj: Any) -> int:
+        prompt_len, knowledge_len = self._extract_prompt_and_knowledge_len(req_obj)
+        total_len = max(1, prompt_len + knowledge_len + int(self._PREDICT_HEADER_OVERHEAD_TOKENS))
+        text_prefill_s = max(0.0, queue_predictor(length=total_len, bs=1))
+        return int(text_prefill_s * 1000)
+
+    def estimate_kvcache_service_ms(self, req_obj: Any) -> Dict[str, int]:
+        prompt_len, knowledge_len = self._extract_prompt_and_knowledge_len(req_obj)
+        effective_knowledge_len = self._effective_knowledge_len(knowledge_len)
+        residual_tokens = max(1, prompt_len + (knowledge_len - effective_knowledge_len) + int(self._PREDICT_HEADER_OVERHEAD_TOKENS))
+        redis_load_ms = float(
+            predict_redis_pull_ms(kvcache_size_gb=effective_knowledge_len * self._KV_GB_PER_TOKEN)
+        )
+        residual_prefill_ms = int(max(0.0, queue_predictor(length=residual_tokens, bs=1)) * 1000)
+        return {
+            "kvcache_service_ms": int(redis_load_ms) + residual_prefill_ms,
+            "redis_load_ms": int(redis_load_ms),
+            "residual_prefill_ms": int(residual_prefill_ms),
+            "effective_knowledge_len": int(effective_knowledge_len),
+            "residual_tokens": int(residual_tokens),
+        }
+
+    @staticmethod
+    def _resolve_bandwidth_mbps(item: Dict[str, Any]) -> tuple[float, str]:
+        bandwidth_mbps = float(item.get("bandwidth_mbps", 0.0) or 0.0)
+        bandwidth_source = "link_snapshot"
+        if bandwidth_mbps <= 0:
+            env_bw = float(os.environ.get("KDN_DEFAULT_BANDWIDTH_MBPS", "0") or 0.0)
+            if env_bw > 0:
+                bandwidth_mbps = env_bw
+                bandwidth_source = "env"
+            else:
+                bandwidth_mbps = 1000.0
+                bandwidth_source = "default"
+        return bandwidth_mbps, bandwidth_source
+
+    async def estimate_kv_prepare_ms(self, req_obj: Any, instance_id: str, kdn_addr: str) -> Dict[str, Any]:
+        _, knowledge_len = self._extract_prompt_and_knowledge_len(req_obj)
+        effective_knowledge_len = self._effective_knowledge_len(knowledge_len)
+        kv_size_mb = effective_knowledge_len * self._KV_MB_PER_TOKEN
+        kdn_addr = str(kdn_addr or "").strip()
+        links = await p_control_plane.get_kdn_links_snapshot()
+        item = links.get(kdn_addr) or links.get(f"kdn://{kdn_addr}") or links.get(f"http://{kdn_addr}") or {}
+        bandwidth_mbps, bandwidth_source = self._resolve_bandwidth_mbps(item)
+        bandwidth_MBps = bandwidth_mbps / 8.0
+        effective_bandwidth_MBps = bandwidth_MBps * self._KV_BW_UTIL
+        kv_transfer_ms = 0.0 if effective_bandwidth_MBps <= 0 else max(0.0, (kv_size_mb / effective_bandwidth_MBps) * 1000.0)
+
+        link_key = f"{instance_id}|{kdn_addr or 'unknown'}"
+        now_s = time.time()
+        free_s = self._kdn_kv_link_free_ts_s.get(link_key, now_s)
+        kv_queue_wait_ms = max(0.0, free_s - now_s) * 1000.0
+        kv_prepare_ms = kv_queue_wait_ms + kv_transfer_ms
+        return {
+            "kv_prepare_ms": int(kv_prepare_ms),
+            "kv_queue_wait_ms": int(kv_queue_wait_ms),
+            "kv_transfer_ms": int(kv_transfer_ms),
+            "bandwidth_mbps": float(bandwidth_mbps),
+            "bandwidth_source": str(bandwidth_source),
+        }
+
+    async def estimate_text_prepare_wait_ms(self, req_obj: Any, instance_id: str, kdn_addr: str) -> Dict[str, Any]:
+        prompt_len, knowledge_len = self._extract_prompt_and_knowledge_len(req_obj)
+        service = getattr(req_obj, "Service", None)
+        rag_enabled = bool(getattr(service, "Enable_know_injection", False))
+        knowledge_list = getattr(service, "Knowledge_List", []) or []
+        kdn_addr = str(kdn_addr or "").strip()
+        now_s = time.time()
+        if (not rag_enabled) or prompt_len < 0 or knowledge_len <= 0 or (not knowledge_list) or (not kdn_addr):
+            return {
+                "text_prepare_wait_ms": 0,
+                "text_net_wait_ms": 0,
+                "text_fetch_fixed_ms": 0,
+                "kdn_active_until_ms": int(now_s * 1000.0),
+            }
+
+        link_key = f"{instance_id}|{kdn_addr or 'unknown'}"
+        active_until_s = self._kdn_kv_active_until_ts_s.get(link_key, now_s)
+        text_net_wait_ms = max(0.0, active_until_s - now_s) * 1000.0
+
+        links = await p_control_plane.get_kdn_links_snapshot()
+        item = (
+            links.get(kdn_addr)
+            or links.get(f"kdn://{kdn_addr}")
+            or links.get(f"http://{kdn_addr}")
+            or {}
+        )
+        rtt_ms = float(item.get("latency_ms", item.get("rtt_ms", 0.0)) or 0.0)
+        text_fetch_fixed_ms = max(0.0, rtt_ms + self._KNOW_PREPARE_FIXED_OVERHEAD_MS)
+        text_prepare_wait_ms = text_net_wait_ms + text_fetch_fixed_ms
+        return {
+            "text_prepare_wait_ms": int(text_prepare_wait_ms),
+            "text_net_wait_ms": int(text_net_wait_ms),
+            "text_fetch_fixed_ms": int(text_fetch_fixed_ms),
+            "kdn_active_until_ms": int(active_until_s * 1000.0),
+        }
+
+    async def estimate_iws_costs(self, req_obj: Any, instance_id: str, kdn_addr: str) -> Dict[str, Any]:
+        ready_wait_ms = await self.estimate_ready_wait_ms(instance_id)
+        text_service_ms = self.estimate_text_service_ms(req_obj)
+        text_prepare = await self.estimate_text_prepare_wait_ms(req_obj, instance_id=instance_id, kdn_addr=kdn_addr)
+        kv_prepare = await self.estimate_kv_prepare_ms(req_obj, instance_id=instance_id, kdn_addr=kdn_addr)
+        kvcache_service = self.estimate_kvcache_service_ms(req_obj)
+
+        text_prepare_wait_ms = int(text_prepare["text_prepare_wait_ms"])
+        kvcache_prepare_ms = int(kv_prepare["kv_prepare_ms"])
+        kvcache_service_ms = int(kvcache_service["kvcache_service_ms"])
+        return {
+            "ready_wait_ms": int(ready_wait_ms),
+            "text_prepare_wait_ms": int(text_prepare_wait_ms),
+            "text_net_wait_ms": int(text_prepare["text_net_wait_ms"]),
+            "text_fetch_fixed_ms": int(text_prepare["text_fetch_fixed_ms"]),
+            "kdn_active_until_ms": int(text_prepare["kdn_active_until_ms"]),
+            "text_service_ms": int(text_service_ms),
+            "text_total_ms": int(text_prepare_wait_ms + ready_wait_ms + text_service_ms),
+            "kvcache_prepare_ms": int(kvcache_prepare_ms),
+            "kvcache_service_ms": int(kvcache_service_ms),
+            "kvcache_total_ms": int(max(ready_wait_ms, kvcache_prepare_ms) + kvcache_service_ms),
+            "kv_hidden_by_ready_wait": bool(kvcache_prepare_ms <= ready_wait_ms),
+            **kv_prepare,
+            **kvcache_service,
+        }
+
     async def _recompute_pending_from_now(self, instance_id: str, now_s: Optional[float] = None) -> None:
         ts_s = time.time() if now_s is None else now_s
         lock = self._get_reservation_lock(instance_id)
@@ -669,7 +804,9 @@ class QueueManager:
                                     free_s = self._kdn_kv_link_free_ts_s.get(link_key, now_s)
                                     start_s = max(now_s, free_s)
                                     kv_queue_wait_s = max(0.0, start_s - now_s)
-                                    self._kdn_kv_link_free_ts_s[link_key] = start_s + kv_transfer_s
+                                    active_until_s = start_s + kv_transfer_s
+                                    self._kdn_kv_link_free_ts_s[link_key] = active_until_s
+                                    self._kdn_kv_active_until_ts_s[link_key] = active_until_s
                                 task.trace["kdn_link_wait_start_ms"] = int(now_s * 1000.0)
                                 task.trace["kdn_link_wait_end_ms"] = int(start_s * 1000.0)
                                 proxy_enqueue_ms = int(
@@ -701,6 +838,9 @@ class QueueManager:
                                     async with lock:
                                         old_free_s = self._kdn_kv_link_free_ts_s.get(link_key, actual_done_s)
                                         self._kdn_kv_link_free_ts_s[link_key] = max(old_free_s, actual_done_s)
+                                        old_active_until_s = self._kdn_kv_active_until_ts_s.get(link_key, actual_done_s)
+                                        if actual_done_s >= old_active_until_s:
+                                            self._kdn_kv_active_until_ts_s[link_key] = actual_done_s
                                         kdn_link_free_after = self._kdn_kv_link_free_ts_s[link_key]
                                     task.trace["kdn_link_free_before"] = int(old_free_s * 1000.0)
                                     task.trace["kdn_link_free_after"] = int(kdn_link_free_after * 1000.0)
