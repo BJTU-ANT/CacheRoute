@@ -487,13 +487,21 @@ async def proxy_chat_completions(request: FastAPIRequest):
                 instance_id=chosen.instance_id,
                 kdn_addr=getattr(req_obj.Task, "KDN_server_addr", None),
             )
+            if costs.get("kv_hidden_by_ready_wait"):
+                iws_suggest = "kvcache"
+            elif (costs.get("kvcache_total_ms") or 0) < (costs.get("text_total_ms") or 0):
+                iws_suggest = "kvcache"
+            else:
+                iws_suggest = "text"
             logger.info(
-                "[Proxy][IWS][DryRun] rid=%s original=%s ready_wait=%s "
+                "[Proxy][IWS][DryRun] rid=%s original=%s iws_suggest=%s applied=%s ready_wait=%s "
                 "kv_prepare=%s kv_hidden=%s text_total=%s kvcache_total=%s "
                 "text_service=%s kvcache_service=%s kv_transfer=%s kv_queue_wait=%s "
                 "redis_load=%s residual_prefill=%s effective_len=%s residual_tokens=%s "
-                "bw=%s bw_src=%s keep=%s",
+                "bw=%s bw_src=%s",
                 req_obj.Request_ID,
+                original_mode,
+                iws_suggest,
                 original_mode,
                 costs.get("ready_wait_ms"),
                 costs.get("kvcache_prepare_ms"),
@@ -510,7 +518,6 @@ async def proxy_chat_completions(request: FastAPIRequest):
                 costs.get("residual_tokens"),
                 costs.get("bandwidth_mbps"),
                 costs.get("bandwidth_source"),
-                original_mode,
             )
         except Exception as e:
             logger.warning(
@@ -599,13 +606,21 @@ async def proxy_completions(request: FastAPIRequest):
                 instance_id=chosen.instance_id,
                 kdn_addr=getattr(req_obj.Task, "KDN_server_addr", None),
             )
+            if costs.get("kv_hidden_by_ready_wait"):
+                iws_suggest = "kvcache"
+            elif (costs.get("kvcache_total_ms") or 0) < (costs.get("text_total_ms") or 0):
+                iws_suggest = "kvcache"
+            else:
+                iws_suggest = "text"
             logger.info(
-                "[Proxy][IWS][DryRun] rid=%s original=%s ready_wait=%s "
+                "[Proxy][IWS][DryRun] rid=%s original=%s iws_suggest=%s applied=%s ready_wait=%s "
                 "kv_prepare=%s kv_hidden=%s text_total=%s kvcache_total=%s "
                 "text_service=%s kvcache_service=%s kv_transfer=%s kv_queue_wait=%s "
                 "redis_load=%s residual_prefill=%s effective_len=%s residual_tokens=%s "
-                "bw=%s bw_src=%s keep=%s",
+                "bw=%s bw_src=%s",
                 req_obj.Request_ID,
+                original_mode,
+                iws_suggest,
                 original_mode,
                 costs.get("ready_wait_ms"),
                 costs.get("kvcache_prepare_ms"),
@@ -622,7 +637,6 @@ async def proxy_completions(request: FastAPIRequest):
                 costs.get("residual_tokens"),
                 costs.get("bandwidth_mbps"),
                 costs.get("bandwidth_source"),
-                original_mode,
             )
         except Exception as e:
             logger.warning(
