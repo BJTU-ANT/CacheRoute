@@ -481,6 +481,7 @@ async def proxy_chat_completions(request: FastAPIRequest):
     strategy_name = getattr(proxy.state, "injection_strategy_name", "default")
     if strategy_name == "iws":
         original_mode = getattr(req_obj.Service, "Injection_type", "text")
+        applied_mode = original_mode
         try:
             costs = await queue_mgr.estimate_iws_costs(
                 req_obj=req_obj,
@@ -502,8 +503,10 @@ async def proxy_chat_completions(request: FastAPIRequest):
             else:
                 iws_suggest = "text"
                 iws_reason = "text_total_smaller"
+            req_obj.Service.Injection_type = iws_suggest
+            applied_mode = iws_suggest
             logger.info(
-                "[Proxy][IWS][DryRun] rid=%s original=%s iws_suggest=%s applied=%s reason=%s ready_wait=%s "
+                "[Proxy][IWS] rid=%s original=%s iws_suggest=%s applied=%s reason=%s ready_wait=%s "
                 "kv_prepare=%s kv_hidden=%s text_total=%s kvcache_total=%s "
                 "text_service=%s kvcache_service=%s kv_transfer=%s kv_queue_wait=%s "
                 "redis_load=%s residual_prefill=%s effective_len=%s residual_tokens=%s "
@@ -511,7 +514,7 @@ async def proxy_chat_completions(request: FastAPIRequest):
                 req_obj.Request_ID,
                 original_mode,
                 iws_suggest,
-                original_mode,
+                applied_mode,
                 iws_reason,
                 costs.get("ready_wait_ms"),
                 costs.get("kvcache_prepare_ms"),
@@ -531,7 +534,7 @@ async def proxy_chat_completions(request: FastAPIRequest):
             )
         except Exception as e:
             logger.warning(
-                "[Proxy][IWS][DryRun] estimate_iws_costs failed rid=%s err=%s keep=%s",
+                "[Proxy][IWS] estimate_iws_costs failed rid=%s err=%s keep=%s",
                 req_obj.Request_ID,
                 str(e),
                 original_mode,
@@ -610,6 +613,7 @@ async def proxy_completions(request: FastAPIRequest):
     strategy_name = getattr(proxy.state, "injection_strategy_name", "default")
     if strategy_name == "iws":
         original_mode = getattr(req_obj.Service, "Injection_type", "text")
+        applied_mode = original_mode
         try:
             costs = await queue_mgr.estimate_iws_costs(
                 req_obj=req_obj,
@@ -631,8 +635,10 @@ async def proxy_completions(request: FastAPIRequest):
             else:
                 iws_suggest = "text"
                 iws_reason = "text_total_smaller"
+            req_obj.Service.Injection_type = iws_suggest
+            applied_mode = iws_suggest
             logger.info(
-                "[Proxy][IWS][DryRun] rid=%s original=%s iws_suggest=%s applied=%s reason=%s ready_wait=%s "
+                "[Proxy][IWS] rid=%s original=%s iws_suggest=%s applied=%s reason=%s ready_wait=%s "
                 "kv_prepare=%s kv_hidden=%s text_total=%s kvcache_total=%s "
                 "text_service=%s kvcache_service=%s kv_transfer=%s kv_queue_wait=%s "
                 "redis_load=%s residual_prefill=%s effective_len=%s residual_tokens=%s "
@@ -640,7 +646,7 @@ async def proxy_completions(request: FastAPIRequest):
                 req_obj.Request_ID,
                 original_mode,
                 iws_suggest,
-                original_mode,
+                applied_mode,
                 iws_reason,
                 costs.get("ready_wait_ms"),
                 costs.get("kvcache_prepare_ms"),
@@ -660,7 +666,7 @@ async def proxy_completions(request: FastAPIRequest):
             )
         except Exception as e:
             logger.warning(
-                "[Proxy][IWS][DryRun] estimate_iws_costs failed rid=%s err=%s keep=%s",
+                "[Proxy][IWS] estimate_iws_costs failed rid=%s err=%s keep=%s",
                 req_obj.Request_ID,
                 str(e),
                 original_mode,
