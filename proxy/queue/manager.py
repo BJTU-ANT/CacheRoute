@@ -255,6 +255,24 @@ class QueueManager:
         q = self._qmap.get(instance_id)
         buf = self._instance_prepared_buffer.get(instance_id, {})
         next_seq = int(self._instance_next_ready_release_seq.get(instance_id, 1) or 1)
+        blocked_task = buf.get(next_seq)
+        if blocked_task is None:
+            text_candidates = [
+                (seq, t) for seq, t in buf.items()
+                if seq > next_seq
+                and str(getattr(getattr(getattr(t, "req_obj", None), "Service", None), "Injection_type", "text")).strip().lower() == "text"
+            ]
+            if text_candidates:
+                candidate_seq, candidate_task = min(text_candidates, key=lambda x: x[0])
+                logger.info(
+                    "[ReadyRelease][BypassCandidate] instance=%s blocked_next_seq=%s candidate_seq=%s candidate_rid=%s "
+                    "candidate_mode=text buffer_size=%s",
+                    instance_id,
+                    next_seq,
+                    candidate_seq,
+                    candidate_task.request_id,
+                    len(buf),
+                )
         while True:
             task = buf.get(next_seq)
             if task is None:
@@ -262,7 +280,16 @@ class QueueManager:
             del buf[next_seq]
             task.trace["ready_release_seq"] = int(next_seq)
             task.trace["prepared_buffer_size"] = int(len(buf))
-            task.trace["ready_enqueue_ms"] = _now_ms()
+            ready_enqueue_ms = _now_ms()
+            task.trace["ready_enqueue_ms"] = ready_enqueue_ms
+            proxy_enqueue_ms = int(task.trace.get("proxy_enqueue_ms", ready_enqueue_ms) or ready_enqueue_ms)
+            full_prepare_ms = max(0, ready_enqueue_ms - proxy_enqueue_ms)
+            task.trace["predict_know_prepare_ms"] = int(full_prepare_ms)
+            task.trace["predict_prepare_ms"] = int(full_prepare_ms)
+            task.trace["actual_prepare_total_ms"] = int(full_prepare_ms)
+            prepare_self_done_ms = int(task.trace.get("prepare_self_done_ms", 0) or 0)
+            if prepare_self_done_ms > 0:
+                task.trace["prepare_buffer_wait_ms"] = max(0, ready_enqueue_ms - prepare_self_done_ms)
             await self._reserve_ready_task(task, now_s=time.time())
             await q.ready_q.put(task)
             logger.info(
@@ -511,7 +538,8 @@ class QueueManager:
             "text_fetch_fixed_ms": int(text_prepare["text_fetch_fixed_ms"]),
             "kdn_active_until_ms": int(text_prepare["kdn_active_until_ms"]),
             "text_service_ms": int(text_service_ms),
-            "text_total_ms": int(text_prepare_wait_ms + ready_wait_ms + text_service_ms),
+            "text_overlap_hidden_ms": int(min(text_prepare_wait_ms, ready_wait_ms)),
+            "text_total_ms": int(max(text_prepare_wait_ms, ready_wait_ms) + text_service_ms),
             "kvcache_prepare_ms": int(kvcache_prepare_ms),
             "kvcache_service_ms": int(kvcache_service_ms),
             "kvcache_total_ms": int(max(ready_wait_ms, kvcache_prepare_ms) + kvcache_service_ms),
@@ -831,6 +859,7 @@ class QueueManager:
                                 task.trace["kv_ack_start_ms"] = _now_ms()
                                 kv_ack = await self._inject_ready_kv_via_instance(task)
                                 task.trace["kv_ack_end_ms"] = _now_ms()
+                                task.trace["prepare_self_done_ms"] = int(task.trace.get("kv_ack_end_ms", 0) or 0)
                                 kv_ack_end_ms = float(task.trace.get("kv_ack_end_ms", 0) or 0)
                                 kv_ack_start_ms = float(task.trace.get("kv_ack_start_ms", 0) or 0)
                                 if kv_ack_end_ms > 0:
@@ -895,6 +924,7 @@ class QueueManager:
                                 )
                             except Exception as e:
                                 task.trace["kv_ack_end_ms"] = _now_ms()
+                                task.trace["prepare_self_done_ms"] = int(task.trace.get("kv_ack_end_ms", 0) or 0)
                                 pending = self._kdn_kv_pending_tasks.get(link_key, [])
                                 self._kdn_kv_pending_tasks[link_key] = [x for x in pending if x is not task]
                                 task.kv_ack = {
@@ -929,6 +959,7 @@ class QueueManager:
 
                 if str(injection_type).strip().lower() == "text":
                     prepare_done_ms = _now_ms()
+                    task.trace["prepare_self_done_ms"] = prepare_done_ms
                     proxy_enqueue_ms = int(task.trace.get("proxy_enqueue_ms", prepare_done_ms) or prepare_done_ms)
                     actual_prepare_total_ms = max(0, prepare_done_ms - proxy_enqueue_ms)
                     task.trace["actual_prepare_total_ms"] = int(actual_prepare_total_ms)
