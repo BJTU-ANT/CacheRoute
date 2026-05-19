@@ -41,6 +41,13 @@ if __name__ == "__main__":
         default=None,
         help="proxy injection strategy (default|iws)",
     )
+    parser.add_argument(
+        "--ready-release-policy",
+        type=str,
+        default=None,
+        choices=("ordered", "text_bypass"),
+        help="ready release policy (ordered|text_bypass)",
+    )
     args = parser.parse_args()
 
     if args.strategy:
@@ -52,6 +59,8 @@ if __name__ == "__main__":
         os.environ["PROXY_INJECTION_STRATEGY"] = normalized
     if args.kdn_links_json and str(args.kdn_links_json).strip():
         os.environ["PROXY_KDN_LINKS_JSON"] = args.kdn_links_json
+    if args.ready_release_policy:
+        os.environ["PROXY_READY_RELEASE_POLICY"] = args.ready_release_policy
 
     from proxy import proxy  # 确保在设置环境变量后导入
 
