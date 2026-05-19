@@ -529,6 +529,7 @@ async def proxy_chat_completions(request: FastAPIRequest):
                 "[Proxy][IWS] rid=%s original=%s iws_suggest=%s applied=%s reason=%s ready_wait=%s "
                 "text_prepare_wait=%s text_net_wait=%s text_fetch_fixed=%s kdn_active_until=%s "
                 "kv_prepare=%s kv_hidden=%s kv_queue_wait=%s text_total=%s kvcache_total=%s "
+                "text_overlap_hidden=%s text_total_formula=%s "
                 "text_score=%s kvcache_score=%s kdn_queue_penalty=%s iws_alpha=%s iws_margin=%s "
                 "text_service=%s kvcache_service=%s kv_transfer=%s redis_load=%s residual_prefill=%s "
                 "effective_len=%s residual_tokens=%s bw=%s bw_src=%s",
@@ -547,6 +548,8 @@ async def proxy_chat_completions(request: FastAPIRequest):
                 costs.get("kv_queue_wait_ms"),
                 costs.get("text_total_ms"),
                 costs.get("kvcache_total_ms"),
+                costs.get("text_overlap_hidden_ms"),
+                "overlap",
                 costs.get("text_score_ms"),
                 costs.get("kvcache_score_ms"),
                 costs.get("kdn_queue_penalty_ms"),
@@ -689,6 +692,7 @@ async def proxy_completions(request: FastAPIRequest):
                 "[Proxy][IWS] rid=%s original=%s iws_suggest=%s applied=%s reason=%s ready_wait=%s "
                 "text_prepare_wait=%s text_net_wait=%s text_fetch_fixed=%s kdn_active_until=%s "
                 "kv_prepare=%s kv_hidden=%s kv_queue_wait=%s text_total=%s kvcache_total=%s "
+                "text_overlap_hidden=%s text_total_formula=%s "
                 "text_score=%s kvcache_score=%s kdn_queue_penalty=%s iws_alpha=%s iws_margin=%s "
                 "text_service=%s kvcache_service=%s kv_transfer=%s redis_load=%s residual_prefill=%s "
                 "effective_len=%s residual_tokens=%s bw=%s bw_src=%s",
@@ -707,6 +711,8 @@ async def proxy_completions(request: FastAPIRequest):
                 costs.get("kv_queue_wait_ms"),
                 costs.get("text_total_ms"),
                 costs.get("kvcache_total_ms"),
+                costs.get("text_overlap_hidden_ms"),
+                "overlap",
                 costs.get("text_score_ms"),
                 costs.get("kvcache_score_ms"),
                 costs.get("kdn_queue_penalty_ms"),
