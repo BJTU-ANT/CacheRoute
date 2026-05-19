@@ -47,10 +47,24 @@ def is_stream(body: Dict[str, Any]) -> bool:
 
 def check_trace_order(trace: Dict[str, int]) -> List[str]:
     ordered_keys = [
+        "proxy_recv_ms",
         "proxy_enqueue_ms",
+        "prepare_queue_enqueue_ms",
+        "prepare_dequeue_ms",
         "prepare_start_ms",
+        "kdn_fetch_start_ms",
+        "kdn_fetch_end_ms",
+        "kv_ack_start_ms",
+        "kv_ack_end_ms",
+        "kv_inject_queue_enqueue_ms",
+        "kv_inject_start_ms",
+        "kv_inject_end_ms",
+        "text_prefill_build_start_ms",
+        "text_prefill_build_end_ms",
         "ready_enqueue_ms",
         "ready_dequeue_ms",
+        "forward_wait_start_ms",
+        "forward_wait_end_ms",
         "forward_start_ms",
         "first_token_ms",
     ]
@@ -78,16 +92,29 @@ def calc_metrics(trace: Dict[str, int]) -> Dict[str, Optional[int]]:
             return int(trace[end_key]) - int(trace[start_key])
         return None
 
-    prepare_queue_wait_ms = duration("proxy_enqueue_ms", "prepare_start_ms")
+    proxy_admission_ms = duration("proxy_recv_ms", "proxy_enqueue_ms")
+    route_select_ms = duration("route_select_start_ms", "route_select_end_ms")
+    prepare_queue_wait_ms = duration("prepare_queue_enqueue_ms", "prepare_dequeue_ms")
+    if prepare_queue_wait_ms is None:
+        prepare_queue_wait_ms = duration("proxy_enqueue_ms", "prepare_start_ms")
+    prepare_worker_gap_ms = duration("prepare_dequeue_ms", "prepare_start_ms")
     prepare_exec_ms = duration("prepare_start_ms", "ready_enqueue_ms")
+    prepare_total_ms = duration("prepare_start_ms", "ready_enqueue_ms")
     ready_queue_wait_ms = duration("ready_enqueue_ms", "ready_dequeue_ms")
+    forward_wait_ms = duration("forward_wait_start_ms", "forward_wait_end_ms")
     ready_dequeue_to_forward_ms = duration("ready_dequeue_ms", "forward_start_ms")
-    instance_exec_to_first_token_ms = duration("forward_start_ms", "first_token_ms")
+    vllm_first_token_ms = duration("forward_start_ms", "first_token_ms")
+    instance_exec_to_first_token_ms = vllm_first_token_ms
 
     total_prefill_ms = duration("proxy_enqueue_ms", "first_token_ms")
     proxy_before_vllm_ms = duration("proxy_enqueue_ms", "forward_start_ms")
+    proxy_recv_to_forward_ms = duration("proxy_recv_ms", "forward_start_ms")
     knowledge_fetch_ms = duration("kdn_fetch_start_ms", "kdn_fetch_end_ms")
+    kdn_fetch_ms = knowledge_fetch_ms
     kv_ack_ms = duration("kv_ack_start_ms", "kv_ack_end_ms")
+    kv_inject_queue_wait_ms = duration("kv_inject_queue_enqueue_ms", "kv_inject_start_ms")
+    kv_inject_exec_ms = duration("kv_inject_start_ms", "kv_inject_end_ms")
+    text_prefill_build_ms = duration("text_prefill_build_start_ms", "text_prefill_build_end_ms")
 
     proxy_queue_wait_ms = None
     if prepare_queue_wait_ms is not None or ready_queue_wait_ms is not None:
@@ -118,15 +145,46 @@ def calc_metrics(trace: Dict[str, int]) -> Dict[str, Optional[int]]:
         "vllm_compute_to_first_token_ms": vllm_compute_to_first_token_ms,
         "proxy_wait_until_forward_ms": proxy_wait_until_forward_ms,
         "proxy_enqueue_to_forward_ms": proxy_enqueue_to_forward_ms,
+        "proxy_recv_to_forward_ms": proxy_recv_to_forward_ms,
+        "proxy_admission_ms": proxy_admission_ms,
+        "route_select_ms": route_select_ms,
 
         # 新拆细口径
         "prepare_queue_wait_ms": prepare_queue_wait_ms,
+        "prepare_worker_gap_ms": prepare_worker_gap_ms,
         "prepare_exec_ms": prepare_exec_ms,
+        "prepare_total_ms": prepare_total_ms,
         "ready_queue_wait_ms": ready_queue_wait_ms,
+        "forward_wait_ms": forward_wait_ms,
         "ready_dequeue_to_forward_ms": ready_dequeue_to_forward_ms,
+        "kdn_fetch_ms": kdn_fetch_ms,
+        "kv_inject_queue_wait_ms": kv_inject_queue_wait_ms,
+        "kv_inject_exec_ms": kv_inject_exec_ms,
+        "text_prefill_build_ms": text_prefill_build_ms,
+        "vllm_first_token_ms": vllm_first_token_ms,
         "instance_exec_to_first_token_ms": instance_exec_to_first_token_ms,
         "kv_ack_ms": kv_ack_ms,
     }
+
+
+def check_trace_integrity(trace: Dict[str, int], injection_type: str) -> List[str]:
+    warnings: List[str] = []
+    mode = str(injection_type or "").strip().lower()
+    if mode == "kvcache":
+        required_pairs = [
+            ("kdn_fetch_start_ms", "kdn_fetch_end_ms"),
+            ("kv_ack_start_ms", "kv_ack_end_ms"),
+            ("kv_inject_start_ms", "kv_inject_end_ms"),
+        ]
+        for sk, ek in required_pairs:
+            if sk not in trace or ek not in trace:
+                warnings.append(f"kvcache trace missing {sk}/{ek}")
+    if mode == "text":
+        if "text_prefill_build_start_ms" not in trace or "text_prefill_build_end_ms" not in trace:
+            warnings.append("text trace missing text_prefill_build_start_ms/text_prefill_build_end_ms")
+        if "prepare_start_ms" not in trace or "ready_enqueue_ms" not in trace:
+            warnings.append("text trace missing prepare_start_ms/ready_enqueue_ms")
+    return warnings
 
 
 async def read_chat_stream_meta(
@@ -304,6 +362,7 @@ async def run_one(
     trace = meta.get("trace", {}) if isinstance(meta, dict) else {}
     metrics = calc_metrics(trace if isinstance(trace, dict) else {})
     trace_warnings = check_trace_order(trace if isinstance(trace, dict) else {})
+    trace_warnings.extend(check_trace_integrity(trace if isinstance(trace, dict) else {}, actual_injection_type))
 
     client_send_delay_ms: Optional[int] = None
     if scheduled_send_ts is not None:
@@ -358,7 +417,10 @@ def summarize(
     print(
         "idx | name | injection | status | total_prefill_ms | "
         "proxy_before_vllm_ms | proxy_queue_wait_ms | ready_dequeue_to_forward_ms | "
-        "proxy_wait_until_forward_ms | proxy_enqueue_to_forward_ms | knowledge_fetch_ms | "
+        "proxy_wait_until_forward_ms | proxy_enqueue_to_forward_ms | proxy_recv_to_forward_ms | "
+        "prepare_queue_wait_ms | prepare_worker_gap_ms | kdn_fetch_ms | kv_ack_ms | "
+        "kv_inject_queue_wait_ms | kv_inject_exec_ms | text_prefill_build_ms | "
+        "ready_queue_wait_ms | forward_wait_ms | knowledge_fetch_ms | "
         "knowledge_preparation_total_ms | vllm_compute_to_first_token_ms | "
         "client_send_delay_ms | wall_ms | error"
     )
@@ -377,6 +439,16 @@ def summarize(
             f"{fmt(m.get('ready_dequeue_to_forward_ms'))} | "
             f"{fmt(m.get('proxy_wait_until_forward_ms'))} | "
             f"{fmt(m.get('proxy_enqueue_to_forward_ms'))} | "
+            f"{fmt(m.get('proxy_recv_to_forward_ms'))} | "
+            f"{fmt(m.get('prepare_queue_wait_ms'))} | "
+            f"{fmt(m.get('prepare_worker_gap_ms'))} | "
+            f"{fmt(m.get('kdn_fetch_ms'))} | "
+            f"{fmt(m.get('kv_ack_ms'))} | "
+            f"{fmt(m.get('kv_inject_queue_wait_ms'))} | "
+            f"{fmt(m.get('kv_inject_exec_ms'))} | "
+            f"{fmt(m.get('text_prefill_build_ms'))} | "
+            f"{fmt(m.get('ready_queue_wait_ms'))} | "
+            f"{fmt(m.get('forward_wait_ms'))} | "
             f"{fmt(m.get('knowledge_fetch_ms'))} | "
             f"{fmt(m.get('knowledge_preparation_total_ms'))} | "
             f"{fmt(m.get('vllm_compute_to_first_token_ms'))} | "
@@ -402,6 +474,17 @@ def summarize(
         ("ready_dequeue_to_forward_ms", "Average wait after ready dequeue before forward"),
         ("proxy_wait_until_forward_ms", "Average total proxy wait until forward"),
         ("proxy_enqueue_to_forward_ms", "Average proxy enqueue to forward time"),
+        ("proxy_recv_to_forward_ms", "Average proxy recv to forward time"),
+        ("proxy_admission_ms", "Average proxy admission time"),
+        ("route_select_ms", "Average route select time"),
+        ("prepare_worker_gap_ms", "Average prepare worker gap time"),
+        ("prepare_total_ms", "Average prepare total time"),
+        ("kdn_fetch_ms", "Average KDN fetch time"),
+        ("kv_inject_queue_wait_ms", "Average KV inject queue wait time"),
+        ("kv_inject_exec_ms", "Average KV inject execution time"),
+        ("text_prefill_build_ms", "Average text prefill build time"),
+        ("forward_wait_ms", "Average forward wait time"),
+        ("vllm_first_token_ms", "Average vLLM first token time"),
         ("instance_exec_to_first_token_ms", "Average instance execution to first token"),
         ("kv_ack_ms", "Average kv ack time"),
     ]

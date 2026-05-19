@@ -788,7 +788,9 @@ class QueueManager:
             logger.warning("[Predict] rid=%s failed: %s", task.request_id, e)
 
         q = self._qmap.get(task.instance_id)
-        task.trace["proxy_enqueue_ms"] = _now_ms()
+        enqueue_ms = _now_ms()
+        task.trace["proxy_enqueue_ms"] = enqueue_ms
+        task.trace["prepare_queue_enqueue_ms"] = enqueue_ms
 
         await q.prepare_q.put(task)
         logger.info(
@@ -854,12 +856,16 @@ class QueueManager:
                     )
 
                     endpoint_type = getattr(svc, "Endpoint_type", "chat/completions")
+                    if str(injection_type).strip().lower() == "text":
+                        task.trace["text_prefill_build_start_ms"] = _now_ms()
                     task.instance_body = inject_rag_into_instance_body(
                         instance_body=task.instance_body,
                         endpoint_type=endpoint_type,
                         retrieved_context=ctx,
                         injection_type=injection_type,
                     )
+                    if str(injection_type).strip().lower() == "text":
+                        task.trace["text_prefill_build_end_ms"] = _now_ms()
                     task.trace["prompt_injected_ms"] = _now_ms()
 
                     task.kv_ready_kids = [
@@ -917,11 +923,18 @@ class QueueManager:
                                 task.trace["predict_prepare_ms"] = int(task.trace["predict_know_prepare_ms"])
                                 task.trace["predict_prepare_model_ms"] = int(task.trace["predict_prepare_ms"])
                                 if kv_queue_wait_s > 0:
+                                    task.trace["kv_inject_queue_enqueue_ms"] = int(task.trace.get("kv_inject_queue_enqueue_ms", int(now_s * 1000.0)) or int(now_s * 1000.0))
+                                    task.trace["kv_inject_start_ms"] = int(start_s * 1000.0)
                                     await asyncio.sleep(kv_queue_wait_s)
+                                else:
+                                    instant_ms = _now_ms()
+                                    task.trace["kv_inject_queue_enqueue_ms"] = int(task.trace.get("kv_inject_queue_enqueue_ms", instant_ms) or instant_ms)
+                                    task.trace["kv_inject_start_ms"] = int(task.trace.get("kv_inject_start_ms", instant_ms) or instant_ms)
                                 task.trace["kv_link_reserved"] = 1
                                 task.trace["kv_ack_start_ms"] = _now_ms()
                                 kv_ack = await self._inject_ready_kv_via_instance(task)
                                 task.trace["kv_ack_end_ms"] = _now_ms()
+                                task.trace["kv_inject_end_ms"] = int(task.trace.get("kv_ack_end_ms", _now_ms()) or _now_ms())
                                 task.trace["prepare_self_done_ms"] = int(task.trace.get("kv_ack_end_ms", 0) or 0)
                                 kv_ack_end_ms = float(task.trace.get("kv_ack_end_ms", 0) or 0)
                                 kv_ack_start_ms = float(task.trace.get("kv_ack_start_ms", 0) or 0)
@@ -1057,6 +1070,7 @@ class QueueManager:
             try:
                 task.trace["ready_dequeue_ms"] = _now_ms()
                 task.trace["ready_worker_idx"] = worker_idx
+                task.trace["forward_wait_start_ms"] = _now_ms()
                 await self._wait_dispatch_turn(task, instance_id)
 
                 target_url = f"http://{task.instance_host}:{task.instance_port}{task.url_path}"
@@ -1071,6 +1085,7 @@ class QueueManager:
 
                 # use_chunked: chat->True, completions->False（由 task.url_path 决定）
                 use_chunked = True if task.url_path.endswith("/chat/completions") else False
+                task.trace["forward_wait_end_ms"] = _now_ms()
                 task.trace["forward_start_ms"] = _now_ms()
 
                 seen_first_chunk = False
@@ -1218,6 +1233,7 @@ class QueueManager:
         q = self._qmap.get(instance_id)
         while True:
             task = await q.prepare_q.get()
+            task.trace["prepare_dequeue_ms"] = _now_ms()
             asyncio.create_task(self._run_prepare_task(instance_id, task))
 
     async def _inject_ready_kv_via_instance(
