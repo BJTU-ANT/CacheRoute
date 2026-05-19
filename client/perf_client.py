@@ -45,6 +45,33 @@ def is_stream(body: Dict[str, Any]) -> bool:
     return parse_bool(body.get("stream", False))
 
 
+def check_trace_order(trace: Dict[str, int]) -> List[str]:
+    ordered_keys = [
+        "proxy_enqueue_ms",
+        "prepare_start_ms",
+        "ready_enqueue_ms",
+        "ready_dequeue_ms",
+        "forward_start_ms",
+        "first_token_ms",
+    ]
+    warnings: List[str] = []
+
+    prev_key: Optional[str] = None
+    prev_val: Optional[int] = None
+    for key in ordered_keys:
+        if key not in trace:
+            continue
+        current_val = int(trace[key])
+        if prev_key is not None and prev_val is not None and current_val < prev_val:
+            warnings.append(
+                f"trace timestamp order violation: {prev_key}={prev_val} > {key}={current_val}"
+            )
+        prev_key = key
+        prev_val = current_val
+
+    return warnings
+
+
 def calc_metrics(trace: Dict[str, int]) -> Dict[str, Optional[int]]:
     def duration(start_key: str, end_key: str) -> Optional[int]:
         if start_key in trace and end_key in trace:
@@ -54,6 +81,7 @@ def calc_metrics(trace: Dict[str, int]) -> Dict[str, Optional[int]]:
     prepare_queue_wait_ms = duration("proxy_enqueue_ms", "prepare_start_ms")
     prepare_exec_ms = duration("prepare_start_ms", "ready_enqueue_ms")
     ready_queue_wait_ms = duration("ready_enqueue_ms", "ready_dequeue_ms")
+    ready_dequeue_to_forward_ms = duration("ready_dequeue_ms", "forward_start_ms")
     instance_exec_to_first_token_ms = duration("forward_start_ms", "first_token_ms")
 
     total_prefill_ms = duration("proxy_enqueue_ms", "first_token_ms")
@@ -64,6 +92,18 @@ def calc_metrics(trace: Dict[str, int]) -> Dict[str, Optional[int]]:
     proxy_queue_wait_ms = None
     if prepare_queue_wait_ms is not None or ready_queue_wait_ms is not None:
         proxy_queue_wait_ms = (prepare_queue_wait_ms or 0) + (ready_queue_wait_ms or 0)
+    proxy_wait_until_forward_ms = None
+    if (
+        prepare_queue_wait_ms is not None
+        or ready_queue_wait_ms is not None
+        or ready_dequeue_to_forward_ms is not None
+    ):
+        proxy_wait_until_forward_ms = (
+            (prepare_queue_wait_ms or 0)
+            + (ready_queue_wait_ms or 0)
+            + (ready_dequeue_to_forward_ms or 0)
+        )
+    proxy_enqueue_to_forward_ms = duration("proxy_enqueue_ms", "forward_start_ms")
 
     knowledge_preparation_total_ms = prepare_exec_ms
     vllm_compute_to_first_token_ms = instance_exec_to_first_token_ms
@@ -76,11 +116,14 @@ def calc_metrics(trace: Dict[str, int]) -> Dict[str, Optional[int]]:
         "knowledge_fetch_ms": knowledge_fetch_ms,
         "knowledge_preparation_total_ms": knowledge_preparation_total_ms,
         "vllm_compute_to_first_token_ms": vllm_compute_to_first_token_ms,
+        "proxy_wait_until_forward_ms": proxy_wait_until_forward_ms,
+        "proxy_enqueue_to_forward_ms": proxy_enqueue_to_forward_ms,
 
         # 新拆细口径
         "prepare_queue_wait_ms": prepare_queue_wait_ms,
         "prepare_exec_ms": prepare_exec_ms,
         "ready_queue_wait_ms": ready_queue_wait_ms,
+        "ready_dequeue_to_forward_ms": ready_dequeue_to_forward_ms,
         "instance_exec_to_first_token_ms": instance_exec_to_first_token_ms,
         "kv_ack_ms": kv_ack_ms,
     }
@@ -260,6 +303,7 @@ async def run_one(
 
     trace = meta.get("trace", {}) if isinstance(meta, dict) else {}
     metrics = calc_metrics(trace if isinstance(trace, dict) else {})
+    trace_warnings = check_trace_order(trace if isinstance(trace, dict) else {})
 
     client_send_delay_ms: Optional[int] = None
     if scheduled_send_ts is not None:
@@ -279,6 +323,7 @@ async def run_one(
         "text_only_kids": meta.get("text_only_kids", []) if isinstance(meta, dict) else [],
         "error": meta.get("error") if isinstance(meta, dict) else None,
         "injection_type": actual_injection_type,
+        "trace_warnings": trace_warnings,
         "rag": body.get("RAG"),
         "stream": body.get("stream"),
         "request_body": body,
@@ -294,6 +339,7 @@ def summarize(
     total_elapsed_s: float,
     peak_inflight: int,
     target_rps: Optional[float] = None,
+    print_trace: bool = False,
 ) -> None:
     def fmt(v: Any) -> str:
         return "N/A" if v is None else str(v)
@@ -311,7 +357,8 @@ def summarize(
     print("=" * 160)
     print(
         "idx | name | injection | status | total_prefill_ms | "
-        "proxy_before_vllm_ms | proxy_queue_wait_ms | knowledge_fetch_ms | "
+        "proxy_before_vllm_ms | proxy_queue_wait_ms | ready_dequeue_to_forward_ms | "
+        "proxy_wait_until_forward_ms | proxy_enqueue_to_forward_ms | knowledge_fetch_ms | "
         "knowledge_preparation_total_ms | vllm_compute_to_first_token_ms | "
         "client_send_delay_ms | wall_ms | error"
     )
@@ -327,6 +374,9 @@ def summarize(
             f"{fmt(m.get('total_prefill_ms'))} | "
             f"{fmt(m.get('proxy_before_vllm_ms'))} | "
             f"{fmt(m.get('proxy_queue_wait_ms'))} | "
+            f"{fmt(m.get('ready_dequeue_to_forward_ms'))} | "
+            f"{fmt(m.get('proxy_wait_until_forward_ms'))} | "
+            f"{fmt(m.get('proxy_enqueue_to_forward_ms'))} | "
             f"{fmt(m.get('knowledge_fetch_ms'))} | "
             f"{fmt(m.get('knowledge_preparation_total_ms'))} | "
             f"{fmt(m.get('vllm_compute_to_first_token_ms'))} | "
@@ -349,6 +399,9 @@ def summarize(
         ("prepare_queue_wait_ms", "Average prepare queue wait time"),
         ("prepare_exec_ms", "Average prepare execution time"),
         ("ready_queue_wait_ms", "Average ready queue wait time"),
+        ("ready_dequeue_to_forward_ms", "Average wait after ready dequeue before forward"),
+        ("proxy_wait_until_forward_ms", "Average total proxy wait until forward"),
+        ("proxy_enqueue_to_forward_ms", "Average proxy enqueue to forward time"),
         ("instance_exec_to_first_token_ms", "Average instance execution to first token"),
         ("kv_ack_ms", "Average kv ack time"),
     ]
@@ -376,6 +429,19 @@ def summarize(
     if delay_vals:
         print(f"Average client send delay: {int(statistics.mean(delay_vals))} ms")
 
+    if print_trace:
+        print("\n" + "=" * 160)
+        print("Per Request Trace JSON")
+        print("=" * 160)
+        for r in results:
+            print(json.dumps({
+                "idx": r.get("req_index"),
+                "name": r.get("name"),
+                "injection": r.get("injection_type"),
+                "trace": r.get("trace", {}),
+                "metrics": r.get("metrics", {}),
+            }, ensure_ascii=False, indent=2))
+
     print(f"Mode: {mode}")
     if target_rps is not None:
         print(f"Target RPS: {target_rps}")
@@ -383,6 +449,18 @@ def summarize(
     if total_elapsed_s > 0:
         print(f"Actual throughput: {len(results) / total_elapsed_s:.3f} req/s")
     print(f"Peak inflight requests: {peak_inflight}")
+
+    warning_results = [
+        (r.get("req_index"), r.get("trace_warnings", []))
+        for r in results
+        if r.get("trace_warnings")
+    ]
+    if warning_results:
+        print("\nTrace order warnings:")
+        for req_idx, warnings in warning_results:
+            for warning in warnings:
+                print(f"  - idx={req_idx}: {warning}")
+
     print("=" * 160)
 
 
@@ -509,6 +587,7 @@ async def main_async(args: argparse.Namespace) -> None:
         total_elapsed_s=(exp_end - exp_start),
         peak_inflight=peak_inflight,
         target_rps=args.rps if args.mode == "rps" else None,
+        print_trace=args.print_trace,
     )
 
 
@@ -603,6 +682,11 @@ def main() -> None:
         "--knowledge-ids",
         default=None,
         help="comma-separated knowledge ids applied globally",
+    )
+    parser.add_argument(
+        "--print-trace",
+        action="store_true",
+        help="print per-request trace and metrics as JSON",
     )
 
     args = parser.parse_args()
