@@ -78,6 +78,17 @@ class QueueManager:
         self._kdn_kv_link_locks: Dict[str, asyncio.Lock] = {}
         self._kdn_kv_pending_tasks: Dict[str, List[ProxyTask]] = {}
         self._instance_cold_start_pending: Dict[str, bool] = {}
+        ready_release_policy = os.environ.get("PROXY_READY_RELEASE_POLICY", "ordered").strip().lower()
+        if ready_release_policy not in ("ordered", "text_bypass"):
+            logger.warning(
+                "[Queue] invalid PROXY_READY_RELEASE_POLICY=%s, fallback to ordered",
+                ready_release_policy,
+            )
+            ready_release_policy = "ordered"
+        self._ready_release_policy = ready_release_policy
+        self._text_bypass_max_per_flush = max(
+            1, int(os.environ.get("PROXY_TEXT_BYPASS_MAX_PER_FLUSH", "1") or 1)
+        )
 
     def _get_kdn_kv_link_lock(self, link_key: str) -> asyncio.Lock:
         lock = self._kdn_kv_link_locks.get(link_key)
@@ -251,52 +262,91 @@ class QueueManager:
             self._instance_prepared_buffer[instance_id][seq] = task
             await self._flush_prepared_to_ready(instance_id)
 
+    async def _release_prepared_task_to_ready(
+        self,
+        instance_id: str,
+        q: Any,
+        buf: Dict[int, ProxyTask],
+        seq: int,
+        task: ProxyTask,
+        bypass: bool,
+        blocked_seq: Optional[int],
+    ) -> None:
+        del buf[seq]
+        task.trace["ready_release_seq"] = int(seq)
+        task.trace["ready_release_policy"] = str(self._ready_release_policy)
+        task.trace["ready_release_bypass"] = 1 if bypass else 0
+        task.trace["ready_release_blocked_seq"] = int(blocked_seq) if (bypass and blocked_seq is not None) else None
+        task.trace["prepared_buffer_size"] = int(len(buf))
+        ready_enqueue_ms = _now_ms()
+        task.trace["ready_enqueue_ms"] = ready_enqueue_ms
+        proxy_enqueue_ms = int(task.trace.get("proxy_enqueue_ms", ready_enqueue_ms) or ready_enqueue_ms)
+        full_prepare_ms = max(0, ready_enqueue_ms - proxy_enqueue_ms)
+        task.trace["predict_know_prepare_ms"] = int(full_prepare_ms)
+        task.trace["predict_prepare_ms"] = int(full_prepare_ms)
+        task.trace["actual_prepare_total_ms"] = int(full_prepare_ms)
+        prepare_self_done_ms = int(task.trace.get("prepare_self_done_ms", 0) or 0)
+        if prepare_self_done_ms > 0:
+            task.trace["prepare_buffer_wait_ms"] = max(0, ready_enqueue_ms - prepare_self_done_ms)
+        await self._reserve_ready_task(task, now_s=time.time())
+        await q.ready_q.put(task)
+        logger.info(
+            "[Queue] enqueue_ready rid=%s instance=%s ready_len=%s prepare_seq=%s ready_release_seq=%s bypass=%s blocked_seq=%s",
+            task.request_id,
+            instance_id,
+            q.ready_q.qsize(),
+            task.trace.get("prepare_seq"),
+            task.trace.get("ready_release_seq"),
+            task.trace.get("ready_release_bypass"),
+            task.trace.get("ready_release_blocked_seq"),
+        )
+
     async def _flush_prepared_to_ready(self, instance_id: str) -> None:
         q = self._qmap.get(instance_id)
         buf = self._instance_prepared_buffer.get(instance_id, {})
         next_seq = int(self._instance_next_ready_release_seq.get(instance_id, 1) or 1)
-        blocked_task = buf.get(next_seq)
-        if blocked_task is None:
+        bypass_count = 0
+        while True:
+            task = buf.get(next_seq)
+            if task is not None:
+                await self._release_prepared_task_to_ready(
+                    instance_id=instance_id, q=q, buf=buf, seq=next_seq, task=task, bypass=False, blocked_seq=None
+                )
+                next_seq += 1
+                continue
+
             text_candidates = [
                 (seq, t) for seq, t in buf.items()
                 if seq > next_seq
                 and str(getattr(getattr(getattr(t, "req_obj", None), "Service", None), "Injection_type", "text")).strip().lower() == "text"
             ]
-            if text_candidates:
-                candidate_seq, candidate_task = min(text_candidates, key=lambda x: x[0])
+            if not text_candidates:
+                break
+            candidate_seq, candidate_task = min(text_candidates, key=lambda x: x[0])
+            if self._ready_release_policy == "ordered":
                 logger.info(
                     "[ReadyRelease][BypassCandidate] instance=%s blocked_next_seq=%s candidate_seq=%s candidate_rid=%s "
                     "candidate_mode=text buffer_size=%s",
-                    instance_id,
-                    next_seq,
-                    candidate_seq,
-                    candidate_task.request_id,
-                    len(buf),
+                    instance_id, next_seq, candidate_seq, candidate_task.request_id, len(buf),
                 )
-        while True:
-            task = buf.get(next_seq)
-            if task is None:
                 break
-            del buf[next_seq]
-            task.trace["ready_release_seq"] = int(next_seq)
-            task.trace["prepared_buffer_size"] = int(len(buf))
-            ready_enqueue_ms = _now_ms()
-            task.trace["ready_enqueue_ms"] = ready_enqueue_ms
-            proxy_enqueue_ms = int(task.trace.get("proxy_enqueue_ms", ready_enqueue_ms) or ready_enqueue_ms)
-            full_prepare_ms = max(0, ready_enqueue_ms - proxy_enqueue_ms)
-            task.trace["predict_know_prepare_ms"] = int(full_prepare_ms)
-            task.trace["predict_prepare_ms"] = int(full_prepare_ms)
-            task.trace["actual_prepare_total_ms"] = int(full_prepare_ms)
-            prepare_self_done_ms = int(task.trace.get("prepare_self_done_ms", 0) or 0)
-            if prepare_self_done_ms > 0:
-                task.trace["prepare_buffer_wait_ms"] = max(0, ready_enqueue_ms - prepare_self_done_ms)
-            await self._reserve_ready_task(task, now_s=time.time())
-            await q.ready_q.put(task)
+
+            if bypass_count >= self._text_bypass_max_per_flush:
+                break
             logger.info(
-                "[Queue] enqueue_ready rid=%s instance=%s ready_len=%s prepare_seq=%s ready_release_seq=%s",
-                task.request_id, instance_id, q.ready_q.qsize(), task.trace.get("prepare_seq"), task.trace.get("ready_release_seq")
+                "[ReadyRelease][Bypass] instance=%s blocked_next_seq=%s candidate_seq=%s candidate_rid=%s buffer_size=%s",
+                instance_id, next_seq, candidate_seq, candidate_task.request_id, len(buf),
             )
-            next_seq += 1
+            await self._release_prepared_task_to_ready(
+                instance_id=instance_id,
+                q=q,
+                buf=buf,
+                seq=candidate_seq,
+                task=candidate_task,
+                bypass=True,
+                blocked_seq=next_seq,
+            )
+            bypass_count += 1
         self._instance_next_ready_release_seq[instance_id] = next_seq
 
     async def _reserve_ready_task(self, task: ProxyTask, now_s: Optional[float] = None) -> None:
@@ -1053,6 +1103,7 @@ class QueueManager:
                                     "[Timing] rid=%s instance=%s "
                                     "injection_mode=%s stage=%s active_decode=%s "
                                     "prepare_seq=%s ready_release_seq=%s prepared_buffer_size=%s "
+                                    "ready_release(policy/bypass/blocked_seq)=%s/%s/%s "
                                     "pred(total/know_prepare/queue_wait/vllm_internal/decode)=%s/%s/%s/%s/%s ms "
                                     "pred(text text_prefill/prefill_service/total_tokens)=%s/%s/%s "
                                     "pred(kvcache prepare_prefix/kv_prepare_service/redis_load/residual_prefill)=%s/%s/%s/%s ms "
@@ -1061,7 +1112,7 @@ class QueueManager:
                                     "kv_ack(payload_bytes/net_q/net_xfer/net_total)=%s/%s/%s/%s "
                                     "timeline(proxy_enqueue/kdn_wait_start/kv_ack_start/kv_ack_end/ready_enqueue)=%s/%s/%s/%s/%s "
                                     "actual(total/know_prepare/ready_queue/vllm_internal)=%s/%s/%s/%s ms "
-                                    "actual_prepare_total=%s ms "
+                                    "actual_prepare_total=%s prepare_buffer_wait=%s ms "
                                     "cold_start_extra_ms=%s predict_error=%s ms",
                                     task.request_id,
                                     instance_id,
@@ -1071,6 +1122,9 @@ class QueueManager:
                                     task.trace.get("prepare_seq"),
                                     task.trace.get("ready_release_seq"),
                                     task.trace.get("prepared_buffer_size"),
+                                    task.trace.get("ready_release_policy"),
+                                    task.trace.get("ready_release_bypass"),
+                                    task.trace.get("ready_release_blocked_seq"),
                                     task.trace.get("predict_total_ms"),
                                     task.trace.get("predict_know_prepare_ms"),
                                     task.trace.get("predict_queue_wait_ms"),
@@ -1108,6 +1162,7 @@ class QueueManager:
                                     task.trace.get("actual_ready_queue_ms"),
                                     task.trace.get("actual_vllm_internal_ms"),
                                     task.trace.get("actual_prepare_total_ms"),
+                                    task.trace.get("prepare_buffer_wait_ms"),
                                     task.trace.get("predict_cold_start_extra_ms"),
                                     task.trace.get("predict_error_ms"),
                                 )
