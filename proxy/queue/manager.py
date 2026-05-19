@@ -6,7 +6,7 @@ import time
 import httpx
 import asyncio
 import logging
-from typing import Dict, Optional, AsyncGenerator, Any, List
+from typing import Dict, Optional, AsyncGenerator, Any, List, Set
 
 from core import forward_request,config
 from proxy.metrics.queue_predictor import queue_predictor, decode_tpot_predictor, predict_redis_pull_ms
@@ -71,6 +71,7 @@ class QueueManager:
         self._instance_next_prepare_seq: Dict[str, int] = {}
         self._instance_next_ready_release_seq: Dict[str, int] = {}
         self._instance_prepared_buffer: Dict[str, Dict[int, ProxyTask]] = {}
+        self._instance_released_prepare_seqs: Dict[str, Set[int]] = {}
         self._reservation_locks: Dict[str, asyncio.Lock] = {}
         self._prepared_flush_locks: Dict[str, asyncio.Lock] = {}
         self._kdn_kv_link_free_ts_s: Dict[str, float] = {}
@@ -88,6 +89,11 @@ class QueueManager:
         self._ready_release_policy = ready_release_policy
         self._text_bypass_max_per_flush = max(
             1, int(os.environ.get("PROXY_TEXT_BYPASS_MAX_PER_FLUSH", "1") or 1)
+        )
+        logger.info(
+            "[Queue] ready_release_policy=%s text_bypass_max_per_flush=%s",
+            self._ready_release_policy,
+            self._text_bypass_max_per_flush,
         )
 
     def _get_kdn_kv_link_lock(self, link_key: str) -> asyncio.Lock:
@@ -253,6 +259,8 @@ class QueueManager:
             self._instance_next_ready_release_seq[instance_id] = 1
         if instance_id not in self._instance_prepared_buffer:
             self._instance_prepared_buffer[instance_id] = {}
+        if instance_id not in self._instance_released_prepare_seqs:
+            self._instance_released_prepare_seqs[instance_id] = set()
 
     async def _mark_prepare_done_and_flush(self, instance_id: str, task: ProxyTask) -> None:
         lock = self._get_prepared_flush_lock(instance_id)
@@ -273,6 +281,7 @@ class QueueManager:
         blocked_seq: Optional[int],
     ) -> None:
         del buf[seq]
+        self._instance_released_prepare_seqs.setdefault(instance_id, set()).add(int(seq))
         task.trace["ready_release_seq"] = int(seq)
         task.trace["ready_release_policy"] = str(self._ready_release_policy)
         task.trace["ready_release_bypass"] = 1 if bypass else 0
@@ -305,8 +314,12 @@ class QueueManager:
         q = self._qmap.get(instance_id)
         buf = self._instance_prepared_buffer.get(instance_id, {})
         next_seq = int(self._instance_next_ready_release_seq.get(instance_id, 1) or 1)
+        released = self._instance_released_prepare_seqs.get(instance_id, set())
         bypass_count = 0
         while True:
+            while next_seq in released:
+                next_seq += 1
+
             task = buf.get(next_seq)
             if task is not None:
                 await self._release_prepared_task_to_ready(
