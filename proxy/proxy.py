@@ -19,6 +19,7 @@ import os
 import json
 import asyncio
 import logging
+import time
 import uvicorn
 
 from contextlib import asynccontextmanager
@@ -447,6 +448,7 @@ async def proxy_chat_completions(request: FastAPIRequest):
     接收来自 Scheduler 的 /v1/chat/completions 请求（payload为 Request JSON）。
     转发为 OpenAI chat/completions body 到 Worker（流式）
     """
+    proxy_recv_ms = int(time.time() * 1000)
     try:
         payload: Dict[str, Any] = await request.json()
     except Exception as e:
@@ -469,7 +471,9 @@ async def proxy_chat_completions(request: FastAPIRequest):
     # 构造 Instance 请求体
     instance_body = build_body_for_instance(req_obj, mode="chat")
 
+    route_select_start_ms = int(time.time() * 1000)
     chosen = select_instance(proxy, req_obj)
+    route_select_end_ms = int(time.time() * 1000)
     if not chosen:
         return JSONResponse(
             status_code=503,
@@ -588,6 +592,9 @@ async def proxy_chat_completions(request: FastAPIRequest):
             kdn_addr=getattr(req_obj.Task, "KDN_server_addr", None),
             url_path=url_path,
         )
+        task.trace["proxy_recv_ms"] = proxy_recv_ms
+        task.trace["route_select_start_ms"] = route_select_start_ms
+        task.trace["route_select_end_ms"] = route_select_end_ms
 
         await queue_mgr.enqueue_prepare(task)
 
@@ -609,6 +616,7 @@ async def proxy_completions(request: FastAPIRequest):
     接收来自 Scheduler 的 /v1/completions 请求。
     Demo 里逻辑与 chat/completions 相同，只是留出扩展空间。
     """
+    proxy_recv_ms = int(time.time() * 1000)
     try:
         payload: Dict[str, Any] = await request.json()
     except Exception as e:
@@ -631,7 +639,9 @@ async def proxy_completions(request: FastAPIRequest):
     # 构造 Instance 请求体
     instance_body = build_body_for_instance(req_obj, mode="completions")
 
+    route_select_start_ms = int(time.time() * 1000)
     chosen = select_instance(proxy, req_obj)
+    route_select_end_ms = int(time.time() * 1000)
     if not chosen:
         return JSONResponse(
             status_code=503,
@@ -750,6 +760,9 @@ async def proxy_completions(request: FastAPIRequest):
             kdn_addr=getattr(req_obj.Task, "KDN_server_addr", None),
             url_path=url_path,
         )
+        task.trace["proxy_recv_ms"] = proxy_recv_ms
+        task.trace["route_select_start_ms"] = route_select_start_ms
+        task.trace["route_select_end_ms"] = route_select_end_ms
 
         await queue_mgr.enqueue_prepare(task)
 
