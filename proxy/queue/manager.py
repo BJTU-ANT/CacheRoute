@@ -788,7 +788,9 @@ class QueueManager:
             logger.warning("[Predict] rid=%s failed: %s", task.request_id, e)
 
         q = self._qmap.get(task.instance_id)
-        task.trace["proxy_enqueue_ms"] = _now_ms()
+        enqueue_ms = _now_ms()
+        task.trace["proxy_enqueue_ms"] = enqueue_ms
+        task.trace["prepare_queue_enqueue_ms"] = enqueue_ms
 
         await q.prepare_q.put(task)
         logger.info(
@@ -823,8 +825,9 @@ class QueueManager:
                 enable_rag = bool(getattr(svc, "Enable_know_injection", False))
                 knowledge_ids = getattr(svc, "Knowledge_List", []) or []
                 injection_type = getattr(svc, "Injection_type", "text")
+                injection_mode = str(injection_type or "text").strip().lower()
 
-                if enable_rag and knowledge_ids and injection_type in ("text", "kvcache"):
+                if enable_rag and knowledge_ids and injection_mode in ("text", "kvcache"):
                     kdn_addr = (task.kdn_addr or "").strip()
                     if not kdn_addr:
                         logger.warning("[Prepare] rid=%s no kdn_addr", task.request_id)
@@ -854,12 +857,17 @@ class QueueManager:
                     )
 
                     endpoint_type = getattr(svc, "Endpoint_type", "chat/completions")
+                    if injection_mode == "text":
+                        task.trace["text_actual_path"] = "text_inject"
+                        task.trace["text_prefill_build_start_ms"] = _now_ms()
                     task.instance_body = inject_rag_into_instance_body(
                         instance_body=task.instance_body,
                         endpoint_type=endpoint_type,
                         retrieved_context=ctx,
                         injection_type=injection_type,
                     )
+                    if injection_mode == "text":
+                        task.trace["text_prefill_build_end_ms"] = _now_ms()
                     task.trace["prompt_injected_ms"] = _now_ms()
 
                     task.kv_ready_kids = [
@@ -883,9 +891,10 @@ class QueueManager:
                         q.active_prepare,
                     )
 
-                    if injection_type == "kvcache":
+                    if injection_mode == "kvcache":
                         if task.kv_ready_kids:
                             try:
+                                task.trace["kvcache_actual_path"] = "kv_inject"
                                 kdn_addr = str(task.kdn_addr or "").strip()
                                 link_key = f"{task.instance_id}|{kdn_addr or 'unknown'}"
                                 kv_transfer_s = await self._predict_kv_transfer_s(task)
@@ -917,11 +926,18 @@ class QueueManager:
                                 task.trace["predict_prepare_ms"] = int(task.trace["predict_know_prepare_ms"])
                                 task.trace["predict_prepare_model_ms"] = int(task.trace["predict_prepare_ms"])
                                 if kv_queue_wait_s > 0:
+                                    task.trace["kv_inject_queue_enqueue_ms"] = int(task.trace.get("kv_inject_queue_enqueue_ms", int(now_s * 1000.0)) or int(now_s * 1000.0))
+                                    task.trace["kv_inject_start_ms"] = int(start_s * 1000.0)
                                     await asyncio.sleep(kv_queue_wait_s)
+                                else:
+                                    instant_ms = _now_ms()
+                                    task.trace["kv_inject_queue_enqueue_ms"] = int(task.trace.get("kv_inject_queue_enqueue_ms", instant_ms) or instant_ms)
+                                    task.trace["kv_inject_start_ms"] = int(task.trace.get("kv_inject_start_ms", instant_ms) or instant_ms)
                                 task.trace["kv_link_reserved"] = 1
                                 task.trace["kv_ack_start_ms"] = _now_ms()
                                 kv_ack = await self._inject_ready_kv_via_instance(task)
                                 task.trace["kv_ack_end_ms"] = _now_ms()
+                                task.trace["kv_inject_end_ms"] = int(task.trace.get("kv_ack_end_ms", _now_ms()) or _now_ms())
                                 task.trace["prepare_self_done_ms"] = int(task.trace.get("kv_ack_end_ms", 0) or 0)
                                 kv_ack_end_ms = float(task.trace.get("kv_ack_end_ms", 0) or 0)
                                 kv_ack_start_ms = float(task.trace.get("kv_ack_start_ms", 0) or 0)
@@ -986,7 +1002,9 @@ class QueueManager:
                                     kv_ack.get("keys_injected", 0),
                                 )
                             except Exception as e:
+                                task.trace["kvcache_actual_path"] = "kv_inject_failed_fallback_text"
                                 task.trace["kv_ack_end_ms"] = _now_ms()
+                                task.trace["kv_inject_end_ms"] = int(task.trace.get("kv_ack_end_ms", _now_ms()) or _now_ms())
                                 task.trace["prepare_self_done_ms"] = int(task.trace.get("kv_ack_end_ms", 0) or 0)
                                 pending = self._kdn_kv_pending_tasks.get(link_key, [])
                                 self._kdn_kv_pending_tasks[link_key] = [x for x in pending if x is not task]
@@ -1001,6 +1019,7 @@ class QueueManager:
                                 logger.exception("[Prepare] rid=%s kv inject ack failed, fallback text-only",
                                                  task.request_id)
                         else:
+                            task.trace["kvcache_actual_path"] = "no_kv_ready_fallback_text"
                             kdn_addr = str(task.kdn_addr or "").strip()
                             link_key = f"{task.instance_id}|{kdn_addr or 'unknown'}"
                             pending = self._kdn_kv_pending_tasks.get(link_key, [])
@@ -1015,12 +1034,14 @@ class QueueManager:
                             }
                             logger.info("[Prepare] rid=%s no kv_ready_kids, fallback text-only", task.request_id)
                 else:
+                    if injection_mode == "text":
+                        task.trace["text_actual_path"] = "no_rag_or_empty_knowledge"
                     logger.info(
                         "[Prepare] skip knowledge injection request_id(rid)=%s enable_rag=%s injection=None kids=%s",
                         task.request_id, enable_rag, len(knowledge_ids)
                     )
 
-                if str(injection_type).strip().lower() == "text":
+                if injection_mode == "text":
                     prepare_done_ms = _now_ms()
                     task.trace["prepare_self_done_ms"] = prepare_done_ms
                     proxy_enqueue_ms = int(task.trace.get("proxy_enqueue_ms", prepare_done_ms) or prepare_done_ms)
@@ -1057,6 +1078,7 @@ class QueueManager:
             try:
                 task.trace["ready_dequeue_ms"] = _now_ms()
                 task.trace["ready_worker_idx"] = worker_idx
+                task.trace["forward_wait_start_ms"] = _now_ms()
                 await self._wait_dispatch_turn(task, instance_id)
 
                 target_url = f"http://{task.instance_host}:{task.instance_port}{task.url_path}"
@@ -1071,6 +1093,7 @@ class QueueManager:
 
                 # use_chunked: chat->True, completions->False（由 task.url_path 决定）
                 use_chunked = True if task.url_path.endswith("/chat/completions") else False
+                task.trace["forward_wait_end_ms"] = _now_ms()
                 task.trace["forward_start_ms"] = _now_ms()
 
                 seen_first_chunk = False
@@ -1218,6 +1241,7 @@ class QueueManager:
         q = self._qmap.get(instance_id)
         while True:
             task = await q.prepare_q.get()
+            task.trace["prepare_dequeue_ms"] = _now_ms()
             asyncio.create_task(self._run_prepare_task(instance_id, task))
 
     async def _inject_ready_kv_via_instance(
