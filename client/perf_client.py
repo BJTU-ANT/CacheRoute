@@ -23,19 +23,28 @@ def parse_bool(v: Any) -> bool:
     return False
 
 
-def resolve_injection_type(base_injection_type: str, req_index: int) -> str:
-    """
-    hybrid 只在 client 侧展开，按 3 个请求为一个周期：
-    - 第 0 个 -> kvcache
-    - 第 1 个 -> kvcache
-    - 第 2 个 -> text
+def parse_hybrid_pattern(pattern: str) -> Tuple[int, int]:
+    if not isinstance(pattern, str):
+        raise ValueError("--hybrid-pattern must be a string in A:B format, e.g. 2:1")
+    parts = pattern.split(":")
+    if len(parts) != 2:
+        raise ValueError(f"--hybrid-pattern '{pattern}' is invalid, expected format A:B (e.g. 2:1)")
+    left, right = parts[0].strip(), parts[1].strip()
+    if not left.isdigit() or not right.isdigit():
+        raise ValueError(f"--hybrid-pattern '{pattern}' is invalid, A and B must be positive integers")
+    a = int(left)
+    b = int(right)
+    if a <= 0 or b <= 0:
+        raise ValueError(f"--hybrid-pattern '{pattern}' is invalid, A and B must be > 0")
+    return a, b
 
-    即模式为：
-    kvcache, kvcache, text, kvcache, kvcache, text, ...
-    """
+
+def resolve_injection_type(base_injection_type: str, req_index: int, hybrid_pattern: str) -> str:
     if base_injection_type == "hybrid":
-        pos = req_index % 3
-        if pos in (0, 1):
+        kv_count, text_count = parse_hybrid_pattern(hybrid_pattern)
+        cycle = kv_count + text_count
+        pos = req_index % cycle
+        if pos < kv_count:
             return "kvcache"
         return "text"
     return base_injection_type
@@ -333,6 +342,7 @@ async def run_one(
     req_index: int,
     base_url: str,
     req_tpl: Dict[str, Any],
+    hybrid_pattern: str,
     scheduled_send_ts: Optional[float] = None,
 ) -> Dict[str, Any]:
     name = req_tpl.get("name", f"req_{req_index}")
@@ -342,6 +352,7 @@ async def run_one(
     actual_injection_type = resolve_injection_type(
         str(body.get("Injection_type", "text")),
         req_index,
+        hybrid_pattern,
     )
     body["Injection_type"] = actual_injection_type
 
@@ -399,6 +410,7 @@ def summarize(
     peak_inflight: int,
     target_rps: Optional[float] = None,
     print_trace: bool = False,
+    hybrid_pattern: str = "2:1",
 ) -> None:
     def fmt(v: Any) -> str:
         return "N/A" if v is None else str(v)
@@ -536,6 +548,7 @@ def summarize(
             }, ensure_ascii=False, indent=2))
 
     print(f"Mode: {mode}")
+    print(f"Hybrid Pattern: {hybrid_pattern}")
     if target_rps is not None:
         print(f"Target RPS: {target_rps}")
     print(f"Total elapsed time: {total_elapsed_s:.3f} s")
@@ -576,6 +589,8 @@ def validate_args(args: argparse.Namespace) -> None:
         if args.rps <= 0:
             raise ValueError("--rps must be > 0 in rps mode")
 
+    parse_hybrid_pattern(args.hybrid_pattern)
+
 
 async def run_concurrent_mode(
     client: httpx.AsyncClient,
@@ -594,7 +609,14 @@ async def run_concurrent_mode(
                 inflight += 1
                 peak_inflight = max(peak_inflight, inflight)
             try:
-                return await run_one(client, i, args.base_url, tpl, scheduled_send_ts=time.time())
+                return await run_one(
+                    client,
+                    i,
+                    args.base_url,
+                    tpl,
+                    args.hybrid_pattern,
+                    scheduled_send_ts=time.time(),
+                )
             finally:
                 async with inflight_lock:
                     inflight -= 1
@@ -626,7 +648,14 @@ async def run_rps_mode(
             inflight += 1
             peak_inflight = max(peak_inflight, inflight)
         try:
-            return await run_one(client, i, args.base_url, tpl, scheduled_send_ts=scheduled_ts)
+            return await run_one(
+                client,
+                i,
+                args.base_url,
+                tpl,
+                args.hybrid_pattern,
+                scheduled_send_ts=scheduled_ts,
+            )
         finally:
             async with inflight_lock:
                 inflight -= 1
@@ -681,6 +710,7 @@ async def main_async(args: argparse.Namespace) -> None:
         peak_inflight=peak_inflight,
         target_rps=args.rps if args.mode == "rps" else None,
         print_trace=args.print_trace,
+        hybrid_pattern=args.hybrid_pattern,
     )
 
 
@@ -747,6 +777,11 @@ def main() -> None:
         choices=["text", "kvcache", "hybrid"],
         default="text",
         help="injection type",
+    )
+    parser.add_argument(
+        "--hybrid-pattern",
+        default="2:1",
+        help="hybrid mode pattern as KVCache:text, e.g. 1:1, 2:1, 3:1",
     )
     parser.add_argument(
         "--max-tokens",
