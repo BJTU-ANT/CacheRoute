@@ -68,6 +68,7 @@ python3 kv_timing_sender.py \
   --stream true \
   --rag true \
   --injection-type kvcache \
+  --hybrid-pattern 1:1\
   --requests 30 \
   --rps 1 \
   --seed 118 \
