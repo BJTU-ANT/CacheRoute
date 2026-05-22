@@ -19,6 +19,7 @@ import os
 import json
 import asyncio
 import logging
+import time
 import uvicorn
 
 from contextlib import asynccontextmanager
@@ -380,39 +381,33 @@ async def _wrap_chat_stream_with_meta(task: ProxyTask, queue_mgr: QueueManager) 
     pending = b""
     done_seen = False
 
-    async for chunk in queue_mgr.iter_response(task):
-        if not chunk:
-            continue
+    try:
+        async for chunk in queue_mgr.iter_response(task):
+            if not chunk:
+                continue
 
-        pending += chunk
+            pending += chunk
 
-        while b"\n" in pending:
-            line, pending = pending.split(b"\n", 1)
-            full_line = line + b"\n"
+            while b"\n" in pending:
+                line, pending = pending.split(b"\n", 1)
+                full_line = line + b"\n"
 
-            if line.startswith(b"data:"):
-                data = line[len(b"data:"):].strip()
-                if data == b"[DONE]":
-                    done_seen = True
-                    continue
+                if line.startswith(b"data:"):
+                    data = line[len(b"data:"):].strip()
+                    if data == b"[DONE]":
+                        done_seen = True
+                        continue
 
-            yield full_line
-
-        # 保守处理：如果 chunk 里没有换行，继续积累
-
-    if pending:
-        # 还有残留未结束行，原样转发
-        yield pending
-        pending = b""
-
-    # 在 [DONE] 之前插入 meta
-    yield _sse_meta_event(task)
-
-    # 再发真正的 done
-    if done_seen:
-        yield b"data: [DONE]\n\n"
-    else:
-        # 即便下游没发，也补一个，避免 client 一直等
+                yield full_line
+    except Exception as e:
+        task.error = f"stream_wrap_failed: {e}"
+        task.trace["stream_exception_ms"] = int(time.time() * 1000)
+        logger.exception("[Proxy] stream wrapper failed rid=%s", task.request_id)
+    finally:
+        if pending:
+            yield pending
+            pending = b""
+        yield _sse_meta_event(task)
         yield b"data: [DONE]\n\n"
 
 
@@ -447,6 +442,7 @@ async def proxy_chat_completions(request: FastAPIRequest):
     接收来自 Scheduler 的 /v1/chat/completions 请求（payload为 Request JSON）。
     转发为 OpenAI chat/completions body 到 Worker（流式）
     """
+    proxy_recv_ms = int(time.time() * 1000)
     try:
         payload: Dict[str, Any] = await request.json()
     except Exception as e:
@@ -469,7 +465,9 @@ async def proxy_chat_completions(request: FastAPIRequest):
     # 构造 Instance 请求体
     instance_body = build_body_for_instance(req_obj, mode="chat")
 
+    route_select_start_ms = int(time.time() * 1000)
     chosen = select_instance(proxy, req_obj)
+    route_select_end_ms = int(time.time() * 1000)
     if not chosen:
         return JSONResponse(
             status_code=503,
@@ -588,6 +586,9 @@ async def proxy_chat_completions(request: FastAPIRequest):
             kdn_addr=getattr(req_obj.Task, "KDN_server_addr", None),
             url_path=url_path,
         )
+        task.trace["proxy_recv_ms"] = proxy_recv_ms
+        task.trace["route_select_start_ms"] = route_select_start_ms
+        task.trace["route_select_end_ms"] = route_select_end_ms
 
         await queue_mgr.enqueue_prepare(task)
 
@@ -609,6 +610,7 @@ async def proxy_completions(request: FastAPIRequest):
     接收来自 Scheduler 的 /v1/completions 请求。
     Demo 里逻辑与 chat/completions 相同，只是留出扩展空间。
     """
+    proxy_recv_ms = int(time.time() * 1000)
     try:
         payload: Dict[str, Any] = await request.json()
     except Exception as e:
@@ -631,7 +633,9 @@ async def proxy_completions(request: FastAPIRequest):
     # 构造 Instance 请求体
     instance_body = build_body_for_instance(req_obj, mode="completions")
 
+    route_select_start_ms = int(time.time() * 1000)
     chosen = select_instance(proxy, req_obj)
+    route_select_end_ms = int(time.time() * 1000)
     if not chosen:
         return JSONResponse(
             status_code=503,
@@ -750,6 +754,9 @@ async def proxy_completions(request: FastAPIRequest):
             kdn_addr=getattr(req_obj.Task, "KDN_server_addr", None),
             url_path=url_path,
         )
+        task.trace["proxy_recv_ms"] = proxy_recv_ms
+        task.trace["route_select_start_ms"] = route_select_start_ms
+        task.trace["route_select_end_ms"] = route_select_end_ms
 
         await queue_mgr.enqueue_prepare(task)
 
