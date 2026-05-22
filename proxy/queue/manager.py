@@ -1234,7 +1234,6 @@ class QueueManager:
                 task.error = f"ready_failed: {e}"
                 if "forward_start_ms" not in task.trace:
                     task.trace["ready_failed_before_forward_ms"] = _now_ms()
-                    task.trace["forward_start_ms"] = int(task.trace["ready_failed_before_forward_ms"])
                 if "first_token_ms" not in task.trace:
                     task.trace["ttft_observable"] = 0
                     task.trace["first_token_missing_reason"] = "ready_failed_before_first_token"

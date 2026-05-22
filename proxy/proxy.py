@@ -359,8 +359,8 @@ def build_body_for_instance(req_obj: SchedulerRequest, mode: str) -> Dict[str, A
     return body
 
 
-def _sse_meta_event(task: ProxyTask) -> bytes:
-    payload = {
+def build_cacheroute_meta(task: ProxyTask) -> Dict[str, Any]:
+    return {
         "trace": task.trace,
         "kv_ack": task.kv_ack,
         "kv_ready_kids": task.kv_ready_kids,
@@ -368,6 +368,10 @@ def _sse_meta_event(task: ProxyTask) -> bytes:
         "miss_kids": task.miss_kids,
         "error": task.error,
     }
+
+
+def _sse_meta_event(task: ProxyTask) -> bytes:
+    payload = build_cacheroute_meta(task)
     return (
         "event: cacheroute_meta\n"
         f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -775,14 +779,14 @@ async def proxy_completions(request: FastAPIRequest):
         # 尝试按 JSON 解析；解析失败就原样返回文本，便于排查
         try:
             obj = json.loads(content_bytes.decode("utf-8", errors="replace"))
-            obj["_cacheroute_meta"] = {"trace": task.trace}
+            obj["_cacheroute_meta"] = build_cacheroute_meta(task)
             return JSONResponse(status_code=200, content=obj)
         except Exception:
             return JSONResponse(
                 status_code=200,
                 content={
                     "raw": content_bytes.decode("utf-8", errors="replace"),
-                    "_cacheroute_meta": {"trace": task.trace},
+                    "_cacheroute_meta": build_cacheroute_meta(task),
                 }
             )
 
