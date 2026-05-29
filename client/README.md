@@ -40,7 +40,7 @@ python3 perf_client.py --base-url http://127.0.0.1:7001 --workload-file taskset/
 ```
  - RPS模式：以预设RPS发送数据包，完成Request个任务结束，统计任务平均性能。`rps`设置RPS模式，`injection-type`：设置任务的知识注入模式，支持‘text’‘kvcache’和‘hybrid’。
 ```
-python3 perf_client.py --mode rps --base-url http://127.0.0.1:7001 --workload-file taskset/workload_nq.json --model llama3-70b --stream true --rag true --injection-type kvcache --requests 30 --rps 0.1 --seed 118
+python3 perf_client.py --mode rps --base-url http://127.0.0.1:7001 --workload-file taskset/workload_nq.json --model llama3-70b --stream true --rag true --injection-type kvcache --requests 30 --rps 0.1 --seed 118 --monitor-gpu --gpu-sample-interval 1.0
 ```
 <img width="1200" height="1193" alt="image" src="https://github.com/user-attachments/assets/f74b8e51-c11b-408a-b422-021f967766ea" />
 
@@ -68,6 +68,7 @@ python3 kv_timing_sender.py \
   --stream true \
   --rag true \
   --injection-type kvcache \
+  --hybrid-pattern 1:1\
   --requests 30 \
   --rps 1 \
   --seed 118 \
