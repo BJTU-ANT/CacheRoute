@@ -170,31 +170,60 @@ pip install -r requirements.txt
     
 12. After the Scheduler, Proxy, and Instance start, they will publish INFO logs and wait for requests. After all components are ready, enter the client. When `<client>` is shown, you can input HTTP requests for a quick demo.
    Note that the URL should be the listening address and port of the Scheduler, so that HTTP requests can be parsed and forwarded to the Scheduler. The following gives three local test request demos.<br>
-- Chat mode, with streaming or non-streaming output, and with or without RAG.
-    ```
-    http://127.0.0.1:7001/v1/chat/completions -H "Content-Type: application/json" -d '{"model": "llama3-70b","messages": [{"role": "user", "content": "What is DeepSeek"}],"max_tokens": 64,"stream":"False","RAG":"True"}'
-    ```
-    ``` 
-    http://127.0.0.1:7001/v1/chat/completions -H "Content-Type: application/json" -d '{"model": "llama3-70b","messages": [{"role": "user", "content": "What is DeepSeek"}],"max_tokens": 64,"stream":"True","RAG":"True"}'
-    ```
-- Completion mode, with or without RAG.
-    ```
-    http://127.0.0.1:7001/v1/completions -H "Content-Type: application/json" -d '{"model": "llama3-70b","prompt": "What is DeepSeek","max_tokens": 64,"RAG":"True"}'
-    ```
-    ```
-    http://127.0.0.1:7001/v1/completions -H "Content-Type: application/json" -d '{"model": "llama3-70b","prompt": "What is DeepSeek","max_tokens": 64,"RAG":"False"}'
-    ```
-- Option descriptions:<br>
-`model`: required. The actual model path enabled by vLLM.<br>
-`message/prompt`: required. Fill it according to the request mode, either chat or completion.<br>
-`max_tokens`: optional. The maximum number of generated tokens.<br>
-`stream`: optional. Whether to enable streaming responses. Note that completion mode only supports non-streaming responses.<br>
-`RAG`: optional. Whether to enable knowledge injection. If set to `False`, the Scheduler will skip knowledge retrieval for this task.
+
+---
+
+## API Usage
+
+### Chat Completion
+
+```bash
+curl http://127.0.0.1:7001/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llama3-70b",
+    "messages": [{"role": "user", "content": "What is DeepSeek"}],
+    "max_tokens": 64,
+    "stream": false,
+    "RAG": true
+  }'
+```
+
+### Completion
+
+```bash
+curl http://127.0.0.1:7001/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llama3-70b",
+    "prompt": "What is DeepSeek",
+    "max_tokens": 64,
+    "RAG": true
+  }'
+```
+
+### Request Options
+
+| Option | Required | Description |
+|---|---|---|
+| `model` | Yes | Model name served by vLLM. |
+| `messages` / `prompt` | Yes | Input content for chat or completion mode. |
+| `max_tokens` | No | Maximum number of generated tokens. |
+| `stream` | No | Whether to enable streaming responses. |
+| `RAG` | No | Whether to enable knowledge injection. |
+
+---
+
+## Demo Screenshots
+
+### Scheduler task scheduling
   
-Scheduler task scheduling example
+The Scheduler selects KDN and Proxy according to knowledge coverage, topology, and current load.
 <img width="1200" height="559" alt="image" src="https://github.com/user-attachments/assets/320b5058-04b2-4de3-aa3b-aaa714b69982" />
 
-Proxy task scheduling example
+### Proxy task scheduling
+
+The Proxy maintains local task queues and prepares requests for instance-level execution.
 <img width="1200" height="288" alt="image" src="https://github.com/user-attachments/assets/bc24230e-0167-469b-9e6a-a7be9f5d26f0" />
 
 Proxy injection strategy selection
@@ -208,7 +237,7 @@ Client response
 
 ---
 
-### Current Status (Scheduler / CacheRoute)
+## Current Status (Scheduler / CacheRoute)
 
 The current version supports the following CacheRoute functions on the Scheduler side through `cacheroute`:
 - KDN selection based on knowledge coverage and overload filtering.
