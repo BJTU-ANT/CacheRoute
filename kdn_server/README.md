@@ -240,7 +240,7 @@ You can limit the number of displayed samples:
 :pool --sample-limit 5
 ```
 
-<img width="600" height="460" alt="KDN pool status" src="https://github.com/user-attachments/assets/eadbd610-4424-4e5e-86ff-dd8dfb9fea2b" />
+<img width="600" height="260" alt="KDN pool status" src="https://github.com/user-attachments/assets/eadbd610-4424-4e5e-86ff-dd8dfb9fea2b" />
 
 ---
 
