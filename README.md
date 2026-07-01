@@ -226,25 +226,36 @@ The Scheduler selects KDN and Proxy according to knowledge coverage, topology, a
 The Proxy maintains local task queues and prepares requests for instance-level execution.
 <img width="1200" height="288" alt="image" src="https://github.com/user-attachments/assets/bc24230e-0167-469b-9e6a-a7be9f5d26f0" />
 
-Proxy injection strategy selection
+### Injection strategy selection
+
+The Proxy dynamically chooses between text-based injection and KVCache-based injection.
 <img width="1200" height="746" alt="image" src="https://github.com/user-attachments/assets/930575a6-dba2-465d-aff2-b511099a25a4" />
 
-vLLM + LMCache reuse example
+### vLLM + LMCache reuse
+
+The instance reuses injected KVCache blocks through LMCache.
 <img width="1200" height="224" alt="image" src="https://github.com/user-attachments/assets/558be19f-c801-4182-b9cd-7daee7fd0a80" />
 
-Client response
+### Client response
+
+The client receives OpenAI-compatible responses through the Scheduler endpoint.
 <img width="1200" height="374" alt="image" src="https://github.com/user-attachments/assets/5c2c891b-8eeb-4a69-85f9-f7bc588f38bc" />
 
 ---
 
-## Current Status (Scheduler / CacheRoute)
+## Current Status
 
-The current version supports the following CacheRoute functions on the Scheduler side through `cacheroute`:
+CacheRoute is under active development. The current release supports:
+
+- Scheduler-side knowledge-oriented routing.
 - KDN selection based on knowledge coverage and overload filtering.
-- Proxy selection based on topology hierarchy, load safety window, and knowledge history preference, using non-weighted lexicographic ordering.
-- Policy observation through `/debug/status` and `/debug/strategy`.
+- Proxy selection based on topology, load safety window, and knowledge history.
+- Proxy-side dynamic injection strategy selection.
+- KDN-based text registration and KVCache registration.
+- Debugging APIs such as `/debug/status` and `/debug/strategy`.
 
 Suggested minimum validation commands:
+
 ```bash
 cd test
 python3 demo_scheduler.py --cacheroute
@@ -252,6 +263,17 @@ curl -s http://127.0.0.1:7001/debug/status
 curl -s http://127.0.0.1:7001/debug/strategy
 ```
 
+---
+
+## Documentation
+
+| Document | Description |
+|---|---|
+| [`env/README.md`](env/README.md) | Environment setup and vLLM + LMCache installation. |
+| [`kdn_server/README.md`](kdn_server/README.md) | KDN server, knowledge registration, and KVCache injection. |
+| [`core/README.md`](core/README.md) | Core configuration and multi-machine setup. |
+| [`scheduler/README.md`](scheduler/README.md) | Scheduler parameters and routing strategies. |
+| [`doc/blog`](doc/blog) | Development logs and update notes. |
 
 
 
