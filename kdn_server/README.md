@@ -336,7 +336,7 @@ In the KDN CLI, run:
   --model llama3-70b
 ```
 
-<img width="600" height="147" alt="KDN buildkv example" src="https://github.com/user-attachments/assets/526aea05-18af-405d-bc0b-355f39c1a97e" />
+<img width="600" height="107" alt="KDN buildkv example" src="https://github.com/user-attachments/assets/526aea05-18af-405d-bc0b-355f39c1a97e" />
 
 ### 4. Clear Redis and restart the model if needed
 
@@ -351,7 +351,7 @@ python3 kv_injector.py \
   --redis-port 6379
 ```
 
-<img width="600" height="168" alt="KVCache injection example" src="https://github.com/user-attachments/assets/372905dc-0201-4108-9fae-f916db5ae997" />
+<img width="600" height="138" alt="KVCache injection example" src="https://github.com/user-attachments/assets/372905dc-0201-4108-9fae-f916db5ae997" />
 
 ### 6. Verify KVCache reuse
 
@@ -363,7 +363,7 @@ python3 test_kv_injector_reuse.py
 
 If the injection succeeds, the instance should reuse the injected KVCache blocks through LMCache.
 
-<img width="600" height="68" alt="KVCache reuse test" src="https://github.com/user-attachments/assets/d02b5d2d-1950-4374-a9da-3483929900bc" />
+<img width="600" height="60" alt="KVCache reuse test" src="https://github.com/user-attachments/assets/d02b5d2d-1950-4374-a9da-3483929900bc" />
 
 ---
 
@@ -408,7 +408,7 @@ Main arguments:
 
 The batch script is useful for preparing knowledge-intensive workloads used in CacheRoute experiments.
 
-<img width="600" height="392" alt="Batch KDN registration" src="https://github.com/user-attachments/assets/2bbbca78-93f2-4b08-aab5-268e413580a9" />
+<img width="600" height="202" alt="Batch KDN registration" src="https://github.com/user-attachments/assets/2bbbca78-93f2-4b08-aab5-268e413580a9" />
 
 ---
 
