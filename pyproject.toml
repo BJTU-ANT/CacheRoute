@@ -2,13 +2,13 @@
 [project]
 name = "cacheroute"
 version = "0.1.0"
-description = "LLM scheduling pipeline with client-scheduler-proxy-instance, including vLLM adapter."
+description = "Compute-network-aware LLM scheduling for flexible KV cache reuse across vLLM and LMCache systems."
 authors = [
   { name = "Heyao Zhang, Zhenghao Hu, Lile Liu, Sihan Yang", email = "23111018@bjtu.edu.cn" }
 ]
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = { text = "Apache-2.0" }
 
 dependencies = [
     "fastapi>=0.115.0",
