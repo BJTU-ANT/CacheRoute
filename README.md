@@ -29,6 +29,15 @@ CacheRoute is an LLM scheduling framework built on [vLLM](https://github.com/vll
 
 CacheRoute addresses this problem by using KDN servers to store KVCache blocks for popular knowledge. For each request, CacheRoute dynamically chooses between text-based injection and KVCache-based injection according to task queues, compute load, and network load. In this way, CacheRoute shifts knowledge injection cost between compute and network resources, improving task latency and system throughput.
 
+<p align="center">
+  <a href="#why-cacheroute">Why CacheRoute?</a> •
+  <a href="#key-features">Features</a> •
+  <a href="#architecture">Architecture</a> •
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#api-usage">API</a> •
+  <a href="#documentation">Docs</a>
+</p>
+
 ## Why CacheRoute?
 
 - 🚀 **Less redundant prefill computation:** reuse repeated knowledge through KV cache instead of recomputing long prompts.
