@@ -85,7 +85,7 @@ curl -s http://127.0.0.1:9101/knowledge/search/text -H "Content-Type: applicatio
 
 ### **260123 KDN_CLI大更新**<br>
 kdn_register_cli对所有KDN数据维护接口进行封装，支持文本注册，KV注册，知识块查询，知识块删除和数据库删除，具体启动方式为`kdn_server/kdn_register_cli.py`，启动后的交互界面如下，脚本内也对使用方法做了详细说明（支持非交互式）。<br>
-<img width="600" height="540" alt="image" src="https://github.com/user-attachments/assets/26de41b7-5f89-47dd-8024-8f2bd1cba141" /><br>
+<img width="600" height="340" alt="image" src="https://github.com/user-attachments/assets/26de41b7-5f89-47dd-8024-8f2bd1cba141" /><br>
 (1) 文本注册:<br>
 ```
 :file /workspace/llm-stack/KDN_server/prompts/req1.txt
