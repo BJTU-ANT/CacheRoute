@@ -371,7 +371,7 @@ curl -s http://127.0.0.1:7001/debug/strategy
 | [`core/README.md`](core/README.md) | Core configuration and multi-machine setup. |
 | [`scheduler/README.md`](scheduler/README.md) | Scheduler parameters and routing strategies. |
 | [`doc/blog`](doc/blog) | Development logs and update notes. |
-| [`doc/integration/lmcache.md`](doc/integration/lmcache.md) | CacheRoute integration with LMCache. |
+| [`doc/integrations/lmcache.md`](doc/integrations/lmcache.md) | CacheRoute integration with LMCache. |
 
 
 
