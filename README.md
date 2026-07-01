@@ -1,4 +1,4 @@
-<h1 align="center">CacheRoute</h1>
+
 <img width="1400" height="369" alt="CacheRoute" src="https://github.com/user-attachments/assets/6050e71f-0e37-4cf9-b712-26e11242c9cd" />
 
 <p align="center">
@@ -36,6 +36,8 @@
   <a href="#api-usage">API</a> •
   <a href="#documentation">Docs</a>
 </p>
+
+## CacheRoute
 
 CacheRoute is an LLM scheduling framework built on [vLLM](https://github.com/vllm-project/vllm) and [LMCache](https://github.com/LMCache/LMCache) to enable flexible KV cache reuse across LLM systems. It targets knowledge-intensive LLM services, such as browser AI and knowledge QA systems, where many requests repeatedly use the same external knowledge. Existing systems usually prepend long knowledge texts to the user question and send the whole prompt to the model for recomputation. Although this approach helps reduce model hallucination and improve answer quality, it introduces heavy prefill overhead and causes redundant computation when the same knowledge appears across many requests.
 
