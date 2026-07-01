@@ -36,6 +36,48 @@ Each knowledge block is identified by a content-based hash ID. Text knowledge an
 
 ---
 
+## API Routes
+
+The KDN Server exposes HTTP APIs for knowledge registration, query, deletion, and metadata synchronization.
+
+```text
+POST /knowledge/search/text       Search text knowledge blocks and metadata.
+POST /knowledge/register_text     Register a new text knowledge block.
+POST /knowledge/delete            Delete a knowledge block.
+POST /knowledge/purge_all         Clear the KDN database.
+POST /knowledge/snapshot          Export KDN metadata for Scheduler synchronization.
+```
+
+Typical metadata fields include:
+
+```text
+content
+length
+rel_path
+embedding
+embed_dim
+kv_ready
+kv_rel_dir
+kv_dumped_keys
+kv_updated_at
+embedding_head
+```
+Example query:
+
+```bash
+curl -s http://127.0.0.1:9101/knowledge/search/text \
+  -H "Content-Type: application/json" \
+  -d '{
+    "knowledge_ids": [
+      "7a2b0b48a2d9b353c57f13c4bf943c9e3c8a6e2dc7cff2619507f39e0447d7fc"
+    ],
+    "need_fields": ["embedding", "length"]
+  }' | head -c 300
+```
+
+---
+
+
 ### KDN服务器
 数据结构：<br>
 kdn_server/<br>
