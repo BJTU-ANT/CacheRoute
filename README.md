@@ -313,6 +313,15 @@ curl -s http://127.0.0.1:7001/debug/status
 curl -s http://127.0.0.1:7001/debug/strategy
 ```
 
+### Roadmap
+- [x] Scheduler-side knowledge-oriented routing
+- [x] Proxy-side dynamic injection strategy selection
+- [x] KDN-based text and KVCache registration
+- [x] OpenAI-compatible request forwarding
+- [ ] More deployment examples
+- [ ] Benchmark scripts and reproducible evaluation
+- [ ] More KV cache placement policies
+- [ ] Paper and citation release
 ---
 
 ## Documentation
