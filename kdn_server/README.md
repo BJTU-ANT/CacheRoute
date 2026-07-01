@@ -4,6 +4,34 @@ The KDN Server is the knowledge management and KVCache injection component in Ca
 
 In CacheRoute, the KDN Server plays two roles:
 
+- **Knowledge metadata plane:** stores text knowledge blocks, embeddings, lengths, file paths, and KVCache readiness information.
+- **KVCache injection plane:** builds, stores, queries, and injects reusable KVCache blocks for knowledge-intensive LLM requests.
+
+This allows the Scheduler and Proxy to make knowledge-aware routing and compute-network-aware injection decisions.
+
+---
+
+## Directory Structure
+
+```text
+kdn_server/
+├── KV_database/
+│   └── <knowledge_id>/
+│       ├── blocks/              # dumped KVCache blocks
+│       ├── manifest.jsonl        # KVCache block metadata
+│       └── run_meta.json         # build-time metadata
+├── text_database/
+│   ├── blocks/                   # registered text blocks
+│   ├── tmp/                      # temporary files
+│   └── index.sqlite3             # text knowledge index
+├── __init__.py
+├── kdn_api.py                    # KDN HTTP service
+├── kdn_register_cli.py           # interactive KDN management CLI
+├── kv_builder.py                 # KVCache construction
+├── kv_injector.py                # KVCache injection into Redis / LMCache backend
+├── text_db.py                    # text knowledge database
+└── README.md
+```
 
 ### KDN服务器
 数据结构：<br>
