@@ -67,7 +67,7 @@ CacheRoute addresses this problem by using KDN servers to store KVCache blocks f
 
 ---
 
-### Architecture
+## Architecture
 
 CacheRoute separates global routing, local injection decision, and KV cache management into Scheduler, Proxy, Instance, and KDN Server.
 
