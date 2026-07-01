@@ -47,15 +47,16 @@ CacheRoute addresses this problem by using KDN servers to store KVCache blocks f
 
 ### Architecture
 
+CacheRoute separates global routing, local injection decision, and KV cache management into Scheduler, Proxy, Instance, and KDN Server.
+
 <p align="center">
   <img width="600" alt="CacheRoute" src="https://github.com/user-attachments/assets/9150a874-4e04-4499-821b-39a850e56db6" />
 </p>
 
-- The Client sends an inference request to the Scheduler for global resource-pool selection.<br>
-- After receiving the request, the Scheduler parses the request information, builds the request scheduling policy, and enables knowledge-oriented task routing. It then sends the scheduling result to the Proxy of the selected resource pool.
-- After receiving the request, the Proxy places it into the task queue of a specific instance according to the resource-pool policy. It also evaluates the knowledge injection efficiency with the task model and selects the task strategy.
-- The KDN server injects the required KVCache into the instance. For tasks that meet the release condition, the Proxy forwards the request to the instance.
-- The instance sends the request to the vLLM instance and waits for the response. The instance interface is mainly designed to support signaling between vLLM and the Proxy.
+- **Scheduler:** performs global resource-pool selection and knowledge-oriented task routing.
+- **Proxy:** manages local task queues and selects the knowledge injection strategy.
+- **Instance:** connects CacheRoute with vLLM + LMCache and handles execution signaling.
+- **KDN Server:** stores reusable knowledge and injects KVCache blocks when needed.
 
 Default ports:<br>
 | Component | Service Plane | Control Plane |
