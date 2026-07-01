@@ -80,7 +80,8 @@ CacheRoute separates global routing, local injection decision, and KV cache mana
 - **Instance:** connects CacheRoute with vLLM + LMCache and handles execution signaling.
 - **KDN Server:** stores reusable knowledge and injects KVCache blocks when needed.
 
-Default ports:<br>
+### Default ports
+
 | Component | Service Plane | Control Plane |
 |---|---:|---:|
 | Scheduler | 7001 | 7002 |
