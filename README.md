@@ -67,6 +67,14 @@ Default ports:<br>
 | vLLM | 8000 | - |
 | KDN Server | 9101 | - |
 
+### System Workflow
+
+1. The Client sends an OpenAI-compatible request to the Scheduler.
+2. The Scheduler analyzes the knowledge requirement and selects a target resource pool.
+3. The Proxy predicts the cost of text-based and KVCache-based injection.
+4. The KDN Server injects reusable KVCache blocks when KVCache reuse is selected.
+5. The Instance forwards the request to vLLM + LMCache and returns the response.
+
 ---
 
 ## Requirements
