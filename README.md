@@ -11,7 +11,7 @@ It targets knowledge-intensive LLM services where many requests repeatedly use t
 - **Coordinate compute and network resources** with dynamic knowledge injection.
 
 <p align="center">
-  <img width="700" alt="CacheRoute" src="https://github.com/user-attachments/assets/6050e71f-0e37-4cf9-b712-26e11242c9cd" />
+  <img width="600" alt="CacheRoute" src="https://github.com/user-attachments/assets/6050e71f-0e37-4cf9-b712-26e11242c9cd" />
 </p>
 
 [![Version](https://img.shields.io/badge/version-0.1.8-blue)](https://github.com/BJTU-ANT/CacheRoute/releases)
