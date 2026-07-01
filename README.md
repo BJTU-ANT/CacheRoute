@@ -35,7 +35,7 @@ More logs and update details: https://github.com/BJTU-ANT/CacheRoute/tree/main/d
 ### Architecture
 
 <p align="center">
-  <img width="400" alt="CacheRoute" src="https://github.com/user-attachments/assets/9150a874-4e04-4499-821b-39a850e56db6" />
+  <img width="600" alt="CacheRoute" src="https://github.com/user-attachments/assets/9150a874-4e04-4499-821b-39a850e56db6" />
 </p>
 
 - The Client sends an inference request to the Scheduler for global resource-pool selection.<br>
