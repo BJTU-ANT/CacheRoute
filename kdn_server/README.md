@@ -99,7 +99,7 @@ python3 kdn_server/kdn_register_cli.py
 
 The CLI provides an interactive interface for text registration, KVCache construction, knowledge query, deletion, database cleanup, and KDN pool status inspection.
 
-<img width="600" height="540" alt="KDN CLI" src="https://github.com/user-attachments/assets/26de41b7-5f89-47dd-8024-8f2bd1cba141" />
+<img width="600" height="340" alt="KDN CLI" src="https://github.com/user-attachments/assets/26de41b7-5f89-47dd-8024-8f2bd1cba141" />
 
 ---
 
