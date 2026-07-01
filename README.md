@@ -47,7 +47,7 @@ CacheRoute addresses this problem by using KDN servers to store KVCache blocks f
 - 🌐 **Compute-network coordination:** dynamically choose between recomputation and KV cache injection based on real-time resource load.
 
 <p align="center">
-  <img width="1400" alt="CacheRoute performance overview" src="../.assets/cacheroute_readme_showcase.svg" />
+  <img width="1400" alt="CacheRoute performance overview" src=".assets/cacheroute_readme_showcase.svg" />
 </p>
 
 <p align="center">
