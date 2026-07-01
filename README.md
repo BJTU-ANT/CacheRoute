@@ -46,6 +46,8 @@ CacheRoute addresses this problem by using KDN servers to store KVCache blocks f
 - 🔁 **Cross-system KV cache reuse:** share reusable knowledge across LLM systems through KDN servers.
 - 🌐 **Compute-network coordination:** dynamically choose between recomputation and KV cache injection based on real-time resource load.
 
+
+
 ## Key Features
 
 | Feature | Description |
