@@ -211,7 +211,7 @@ For full deployment with vLLM, LMCache, Redis, KDN warm-up, and KVCache injectio
     
 12. After the Scheduler, Proxy, and Instance start, they will publish INFO logs and wait for requests. After all components are ready, enter the client. When `<client>` is shown, you can input HTTP requests for a quick demo.
    Note that the URL should be the listening address and port of the Scheduler, so that HTTP requests can be parsed and forwarded to the Scheduler. The following gives three local test request demos.<br>
-<details>
+</details>
   
 ---
 
