@@ -140,9 +140,9 @@ python3 demo_client.py --with-ui
 
 ### Option 2: Full CacheRoute Deployment
 For full deployment with vLLM, LMCache, Redis, KDN warm-up, and KVCache injection, see:
-- `env/README.md` for environment setup.
-- `kdn_server/README.md` for KDN registration and KVCache injection.
-- `core/README.md` for multi-machine configuration.
+- [`env/README.md`](env/README.md) for environment setup.
+- [`kdn_server/README.md`](kdn_server/README.md) for KDN registration and KVCache injection.
+- [`core/README.md`](core/README.md) for multi-machine configuration.
 
 <details>
 <summary>Full single-machine deployment guide</summary>
@@ -250,6 +250,7 @@ For full deployment with vLLM, LMCache, Redis, KDN warm-up, and KVCache injectio
 ## API Usage
 
 CacheRoute exposes OpenAI-compatible API endpoints through the Scheduler.
+
 | Endpoint | Mode |
 |---|---|
 | `/v1/chat/completions` | Chat completion |
@@ -296,6 +297,9 @@ curl http://127.0.0.1:7001/v1/completions \
 
 ## Demo Screenshots
 
+<details>
+<summary>View runtime screenshots</summary>
+  
 ### Scheduler task scheduling
   
 The Scheduler selects KDN and Proxy according to knowledge coverage, topology, and current load.
@@ -320,6 +324,8 @@ The instance reuses injected KVCache blocks through LMCache.
 
 The client receives OpenAI-compatible responses through the Scheduler endpoint.
 <img width="1200" height="374" alt="image" src="https://github.com/user-attachments/assets/5c2c891b-8eeb-4a69-85f9-f7bc588f38bc" />
+
+</details>
 
 ---
 
@@ -352,6 +358,7 @@ curl -s http://127.0.0.1:7001/debug/strategy
 - [ ] Benchmark scripts and reproducible evaluation
 - [ ] More KV cache placement policies
 - [ ] Paper and citation release
+
 ---
 
 ## Documentation
