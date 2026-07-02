@@ -78,19 +78,19 @@ The CLI supports viewing knowledge status, KDN pool status, Proxy pool status, a
 
 ### Knowledge status
 
-<img width="1200" height="476" alt="Knowledge status" src="https://github.com/user-attachments/assets/7f1e1d81-c599-4ae2-9e76-83f66030d4fa" />
+<img  width="800" alt="Knowledge status" src="https://github.com/user-attachments/assets/7f1e1d81-c599-4ae2-9e76-83f66030d4fa" />
 
 ### KDN pool status
 
-<img width="1200" height="87" alt="KDN pool status" src="https://github.com/user-attachments/assets/d02024c0-64ae-4c8b-a639-772003247b3f" />
+<img  width="800" alt="KDN pool status" src="https://github.com/user-attachments/assets/d02024c0-64ae-4c8b-a639-772003247b3f" />
 
 ### Proxy pool status
 
-<img width="1200" height="107" alt="Proxy pool status" src="https://github.com/user-attachments/assets/3ecdcc5f-f238-4443-888a-b8635811254a" />
+<img width="800" alt="Proxy pool status" src="https://github.com/user-attachments/assets/3ecdcc5f-f238-4443-888a-b8635811254a" />
 
 ### Strategy information
 
-<img width="1200" height="127" alt="Scheduler strategy information" src="https://github.com/user-attachments/assets/508b5447-ce8b-49fc-b530-2e176868965b" />
+<img  width="800" alt="Scheduler strategy information" src="https://github.com/user-attachments/assets/508b5447-ce8b-49fc-b530-2e176868965b" />
 
 ---
 
