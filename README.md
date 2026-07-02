@@ -125,9 +125,9 @@ pip install -r requirements.txt
 
 CacheRoute provides two ways to get started.
 
-### Option 1: Lightweight Demo
+### Option 1: Lightweight Demo (without vLLM model)
 
-Use the demo scripts to understand the CacheRoute scheduling workflow.
+Use the demo scripts to understand the CacheRoute scheduling workflow. Set `USE_MOCK = True` in the `core/config.py`.   
 
 ```bash
 cd test
@@ -138,6 +138,8 @@ python3 demo_proxy.py --strategy round_robin --injection-strategy iws --ready-re
 python3 demo_instance.py --port 9001 --host 127.0.0.1
 python3 demo_client.py --with-ui
 ```
+
+Then, you can use the client_cli to send requests (see example in `API Usage`) to the scheduler and see the entire CacheRoute workflow.
 
 ### Option 2: Full CacheRoute Deployment
 For full deployment with vLLM, LMCache, Redis, KDN warm-up, and KVCache injection, see:
