@@ -184,7 +184,7 @@ The following options are useful for validating and tuning CacheRoute routing.
 | `--kdn-active-overload-th <int>` | Marks a KDN as overloaded when active transfers exceed the threshold. |
 | `--kdn-queue-ms-overload-th <float>` | Marks a KDN as overloaded when the estimated queue delay exceeds the threshold. |
 | `--proxy-load-ratio-delta <float>` | Sets the safe load window used for Proxy selection. |
-| `--cacheroute-log-decision {0|1}` | Prints one-line routing logs for each request. |
+| `--cacheroute-log-decision {0/1}` | Prints one-line routing logs for each request. |
 
 These options can be configured in two ways:
 
