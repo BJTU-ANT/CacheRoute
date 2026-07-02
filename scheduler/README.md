@@ -223,7 +223,7 @@ python3 demo_proxy.py \
   --kdn-links-json '{"kdn_a":{"bandwidth_tier":3,"latency_tier":1}}'
 ```
 
-### 3. Start a KDN with network load reporting
+### 3. Start a KDN with network load reporting (for single machine evaluations)
 
 To let the KDN report runtime load such as pending transfers, active transfers, and queue delay, enable the KDN network simulator.
 
