@@ -74,7 +74,7 @@ python3 scheduler_cli.py
 
 The CLI supports viewing knowledge status, KDN pool status, Proxy pool status, and strategy information.
 
-<img width="1200" height="344" alt="Scheduler CLI" src="https://github.com/user-attachments/assets/a63ef61f-b3e6-40e8-b132-6c978dd43f25" />
+<img width="800" height="344" alt="Scheduler CLI" src="https://github.com/user-attachments/assets/a63ef61f-b3e6-40e8-b132-6c978dd43f25" />
 
 ### Knowledge status
 
