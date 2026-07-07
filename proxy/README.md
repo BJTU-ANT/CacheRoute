@@ -191,6 +191,7 @@ Current active strategy:
 | Strategy | Description |
 |---|---|
 | `round_robin` | Selects alive Instances in round-robin order. |
+| `prefix-aware` | To be update. |
 
 The strategy reads alive Instances from the Instance pool. If no alive Instance is available, the Proxy returns:
 
