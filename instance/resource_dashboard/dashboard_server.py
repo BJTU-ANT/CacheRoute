@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import signal
 import subprocess
 import sys
@@ -110,6 +111,7 @@ class AgentManager:
                 text=True,
                 stdout=sys.stdout,
                 stderr=sys.stderr,
+                start_new_session=True,
             )
         deadline = time.time() + 12.0
         last_err = ""
@@ -137,18 +139,25 @@ class AgentManager:
                 proc_missing = False
                 proc_exited = False
                 print(f"[ResourceDashboard] stopping managed agent pid={proc.pid}", flush=True)
-                proc.terminate()
         if proc_missing:
             return {"ok": True, "stopped": False, "reason": "no_managed_agent", "status": self.status()}
         if proc_exited:
             return {"ok": True, "stopped": False, "reason": "managed_agent_already_exited", "status": self.status()}
         try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        try:
             proc.wait(timeout=5.0)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
             proc.wait(timeout=5.0)
         with self._lock:
-            self._proc = None
+            if self._proc is proc:
+                self._proc = None
         return {"ok": True, "stopped": True, "status": self.status()}
 
 
@@ -161,7 +170,13 @@ class DashboardHandler(SimpleHTTPRequestHandler):
             rel = "index.html" if path == "/" else path[len("/static/"):]
         else:
             rel = path.lstrip("/")
-        return str((STATIC_DIR / rel).resolve())
+        static_root = STATIC_DIR.resolve()
+        target = (static_root / rel).resolve()
+        try:
+            target.relative_to(static_root)
+        except ValueError:
+            target = static_root / "index.html"
+        return str(target)
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[ResourceDashboard] {self.address_string()} - {fmt % args}", flush=True)
@@ -209,7 +224,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="CacheRoute Instance resource dashboard")
-    p.add_argument("--dashboard-listen", default="0.0.0.0:9102", help="dashboard listen address")
+    p.add_argument("--dashboard-listen", default="0.0.0.0:9202", help="dashboard listen address")
     p.add_argument("--agent-listen", default="127.0.0.1:9201", help="resource agent listen address")
     p.add_argument("--sample-interval-ms", type=int, default=1000, help="agent sample interval")
     p.add_argument("--instance-id", default="hp_127.0.0.1:9001", help="Instance id to pass to the agent")
