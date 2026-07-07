@@ -1,6 +1,6 @@
 # Environment Setup
 
-This document describes the environment used to run CacheRoute with vLLM, LMCache, Redis, and CUDA GPUs.
+This document describes the environment used to run CacheRoute with vLLM, LMCache, Redis, CUDA GPUs, and the optional Instance Resource Agent/Dashboard.
 
 CacheRoute can run a lightweight mock demo without a full LLM serving stack. This document is for the full deployment path, where vLLM + LMCache are built and used as the backend inference engine.
 
@@ -20,8 +20,12 @@ CacheRoute has been tested with the following environment:
 | vLLM | 0.13.x |
 | LMCache | 0.3.x |
 | Python | 3.12.x |
+| Rust | stable toolchain |
+| Tkinter | `python3.12-tk` for the optional desktop dashboard |
 
 The exact versions can be adjusted, but the vLLM, LMCache, CUDA, PyTorch, and driver versions should be kept compatible.
+
+Rust is required only for the native Instance Resource Agent under `instance/resource_agent`. Tkinter is required only when using the local desktop dashboard under `instance/resource_dashboard/dashboard_app.py`.
 
 ---
 
@@ -33,7 +37,7 @@ A recommended layout is:
 
 ```text
 /llm-stack/
-├── src/                         # vLLM and LMCache source code
+├── src/                         # vLLM, LMCache, and CacheRoute source code
 ├── models/                      # local model files
 ├── cache/
 │   ├── hf/
@@ -99,11 +103,11 @@ CacheRoute/env/docker/Dockerfile
 Build the base CUDA image:
 
 ```bash
-cd /llm-stack/docker
+cd /llm-stack/src/CacheRoute/env/docker
 sudo docker build -t basic-cu128 .
 ```
 
-The image name can be changed according to your local environment. Make sure the CUDA version in the image matches your driver and PyTorch version.
+The Dockerfile installs the Rust stable toolchain for the Instance Resource Agent and `python3.12-tk` for the optional desktop dashboard. The image name can be changed according to your local environment. Make sure the CUDA version in the image matches your driver and PyTorch version.
 
 ---
 
@@ -124,16 +128,19 @@ sudo docker run --gpus all -it \
   -v /llm-stack:/workspace/llm-stack \
   basic-cu128 bash
 ```
+
 Useful options:
 
 | Option | Description |
 |---|---|
 | `--gpus all` | Exposes all host GPUs to the container. |
-| `--network host` | Uses host networking, which simplifies multi-service communication. |
+| `--network host` | Uses host networking, which simplifies multi-service communication and exposes the dashboard at `127.0.0.1:9202`. |
 | `--ipc=host` | Shares IPC namespace with the host. |
 | `--shm-size=64g` | Provides enough shared memory for large-model serving. |
 | `--ulimit memlock=-1` | Allows memory locking. |
 | `-v /llm-stack:/workspace/llm-stack` | Mounts the workspace into the container. |
+
+If the container does not use host networking, map the dashboard port explicitly, for example `-p 9202:9202`.
 
 Restart and enter the container later:
 
@@ -141,6 +148,28 @@ Restart and enter the container later:
 sudo docker start cacheroute-dev
 sudo docker exec -it cacheroute-dev bash
 ```
+
+---
+
+## Verify Rust and Tkinter
+
+Inside the container, verify that Rust is available:
+
+```bash
+rustc --version
+cargo --version
+```
+
+Verify that Tkinter is available for the desktop dashboard:
+
+```bash
+python3 - <<'EOF'
+import tkinter
+print("tkinter: ok")
+EOF
+```
+
+If you use a custom image instead of `env/docker/Dockerfile`, install Rust and Tkinter manually before using `instance/resource_agent` or `instance/resource_dashboard/dashboard_app.py`.
 
 ---
 
@@ -183,6 +212,51 @@ Optional tools for model downloading and API testing:
 ```bash
 python3 -m pip install modelscope openai
 ```
+
+---
+
+## Optional: Instance Resource Dashboard
+
+The Instance Resource Dashboard starts or connects to the Rust resource agent and visualizes local Instance resource snapshots.
+
+Build/check the Rust agent:
+
+```bash
+cd /workspace/llm-stack/src/CacheRoute
+cargo check --manifest-path instance/resource_agent/Cargo.toml
+```
+
+Start the desktop dashboard:
+
+```bash
+python3 instance/resource_dashboard/dashboard_app.py \
+  --agent-listen 127.0.0.1:9201 \
+  --sample-interval-ms 1000 \
+  --instance-id hp_127.0.0.1:9001
+```
+
+A small local window should open and update CPU, memory, GPU, network, admission-state, and raw snapshot information.
+
+If the container has no graphical display, use the browser/server fallback:
+
+```bash
+python3 instance/resource_dashboard/dashboard_server.py \
+  --dashboard-listen 0.0.0.0:9202 \
+  --agent-listen 127.0.0.1:9201 \
+  --sample-interval-ms 1000 \
+  --instance-id hp_127.0.0.1:9001
+```
+
+Validate the fallback APIs:
+
+```bash
+curl -sS http://127.0.0.1:9202/api/health | python3 -m json.tool
+curl -sS http://127.0.0.1:9202/api/snapshot | python3 -m json.tool
+curl -sS http://127.0.0.1:9201/healthz
+curl -sS http://127.0.0.1:9201/v1/resource/snapshot | python3 -m json.tool
+```
+
+The dashboard is optional and does not change Scheduler decisions, Proxy forwarding, Instance request handling, or KDN injection.
 
 ---
 
@@ -247,8 +321,6 @@ print("OK wrote:", cfg)
 print("template chars:", len(tpl))
 EOF
 ```
-
-Important note:
 
 For stable KVCache reuse, the chat template should not contain time-varying fields such as the current date. Otherwise, the generated cache keys may change over time. CacheRoute provides an example modified tokenizer configuration under:
 
@@ -448,4 +520,5 @@ python3 -m pip show <package_name>
 - The default examples assume host networking and a single-machine setup.
 - Multi-machine deployment requires updating the service addresses in `core/config.py`.
 - Redis-based LMCache configuration is required when validating KDN-based KVCache injection.
+- The Instance Resource Dashboard uses port `9202` for the browser fallback and starts the Rust resource agent on `9201` by default.
 - Some model paths and image names in the commands should be adjusted according to your local environment.
