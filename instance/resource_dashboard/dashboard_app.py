@@ -8,12 +8,21 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
-import tkinter as tk
 import urllib.request
 from pathlib import Path
-from tkinter import ttk
 from typing import Any, Dict, List, Optional, Tuple
+
+try:
+    import tkinter as tk
+    from tkinter import ttk
+except ImportError as exc:  # Keep missing tkinter failures actionable in slim containers.
+    tk = None  # type: ignore[assignment]
+    ttk = None  # type: ignore[assignment]
+    TK_IMPORT_ERROR: Optional[ImportError] = exc
+else:
+    TK_IMPORT_ERROR = None
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 AGENT_MANIFEST = REPO_ROOT / "instance" / "resource_agent" / "Cargo.toml"
@@ -53,6 +62,7 @@ class AgentProcess:
         self.instance_id = instance_id
         self.base_url = f"http://{listen}"
         self.proc: Optional[subprocess.Popen[str]] = None
+        self.lock = threading.Lock()
 
     def health(self) -> Dict[str, Any]:
         return request_json(f"{self.base_url}/healthz", timeout_s=0.6)
@@ -67,67 +77,81 @@ class AgentProcess:
             return False
 
     def managed_running(self) -> bool:
-        return self.proc is not None and self.proc.poll() is None
+        with self.lock:
+            return self.proc is not None and self.proc.poll() is None
 
     def start(self) -> str:
         if self.is_reachable():
             return "agent already reachable"
-        if self.managed_running():
-            return f"managed agent already running pid={self.proc.pid}"
-        cmd = [
-            "cargo", "run", "--manifest-path", str(AGENT_MANIFEST), "--",
-            "--listen", self.listen,
-            "--sample-interval-ms", str(self.sample_interval_ms),
-            "--instance-id", self.instance_id,
-        ]
-        self.proc = subprocess.Popen(
-            cmd,
-            cwd=str(REPO_ROOT),
-            text=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        with self.lock:
+            if self.proc is not None and self.proc.poll() is None:
+                return f"managed agent already running pid={self.proc.pid}"
+            cmd = [
+                "cargo", "run", "--manifest-path", str(AGENT_MANIFEST), "--",
+                "--listen", self.listen,
+                "--sample-interval-ms", str(self.sample_interval_ms),
+                "--instance-id", self.instance_id,
+            ]
+            self.proc = subprocess.Popen(
+                cmd,
+                cwd=str(REPO_ROOT),
+                text=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
         deadline = time.time() + 12.0
         while time.time() < deadline:
             if self.is_reachable():
-                return f"started managed agent pid={self.proc.pid}"
-            if self.proc.poll() is not None:
-                return f"agent exited with code {self.proc.returncode}"
+                with self.lock:
+                    pid = self.proc.pid if self.proc is not None else "?"
+                return f"started managed agent pid={pid}"
+            with self.lock:
+                exited = self.proc is not None and self.proc.poll() is not None
+                returncode = None if self.proc is None else self.proc.returncode
+            if exited:
+                return f"agent exited with code {returncode}"
             time.sleep(0.25)
         return "agent start timed out"
 
     def stop(self) -> str:
-        if self.proc is None:
-            return "no dashboard-managed agent"
-        if self.proc.poll() is not None:
-            code = self.proc.returncode
-            self.proc = None
-            return f"managed agent already exited code={code}"
-        pid = self.proc.pid
+        with self.lock:
+            proc = self.proc
+            if proc is None:
+                return "no dashboard-managed agent"
+            if proc.poll() is not None:
+                code = proc.returncode
+                self.proc = None
+                return f"managed agent already exited code={code}"
+            pid = proc.pid
         try:
-            os.killpg(self.proc.pid, signal.SIGTERM)
+            os.killpg(pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
         try:
-            self.proc.wait(timeout=5.0)
+            proc.wait(timeout=5.0)
         except subprocess.TimeoutExpired:
             try:
-                os.killpg(self.proc.pid, signal.SIGKILL)
+                os.killpg(pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            self.proc.wait(timeout=5.0)
-        self.proc = None
+            proc.wait(timeout=5.0)
+        with self.lock:
+            if self.proc is proc:
+                self.proc = None
         return f"stopped managed agent pid={pid}"
 
 
 class ResourceDashboardApp:
-    def __init__(self, root: tk.Tk, agent: AgentProcess, auto_start: bool):
+    def __init__(self, root: "tk.Tk", agent: AgentProcess, auto_start: bool):
         self.root = root
         self.agent = agent
         self.network_history: List[Tuple[float, float]] = []
         self.max_samples = 60
         self._poll_job: Optional[str] = None
+        self._snapshot_inflight = False
+        self._agent_op_inflight = False
+        self._closed = False
 
         self.root.title("CacheRoute Instance Resource Monitor")
         self.root.geometry("980x720")
@@ -140,14 +164,12 @@ class ResourceDashboardApp:
         self.cpu_var = tk.StringVar(value="-")
         self.load_var = tk.StringVar(value="-")
         self.mem_var = tk.StringVar(value="-")
-        self.gpu_var = tk.StringVar(value="-")
         self.net_var = tk.StringVar(value="-")
-        self.raw_var = tk.StringVar(value="{}")
 
         self._build_layout()
         if auto_start:
             self.set_status("auto-starting resource agent...")
-            self.root.after(100, self.start_agent)
+            self.run_agent_op(self.agent.start)
         self.schedule_poll(300)
 
     def _build_layout(self) -> None:
@@ -159,18 +181,14 @@ class ResourceDashboardApp:
 
         summary = ttk.LabelFrame(self.root, text="Instance Summary")
         summary.pack(fill="x", **pad)
-        for label, var in (
-            ("Instance ID", self.instance_var),
-            ("Admission", self.admission_var),
-            ("Last update", self.update_var),
-        ):
+        for label, var in (("Instance ID", self.instance_var), ("Admission", self.admission_var), ("Last update", self.update_var)):
             ttk.Label(summary, text=f"{label}:").pack(side="left", padx=(8, 2), pady=8)
             ttk.Label(summary, textvariable=var, font=("TkDefaultFont", 10, "bold")).pack(side="left", padx=(0, 16), pady=8)
 
         controls = ttk.LabelFrame(self.root, text="Agent Controls")
         controls.pack(fill="x", **pad)
-        ttk.Button(controls, text="Start Agent", command=self.start_agent).pack(side="left", padx=6, pady=8)
-        ttk.Button(controls, text="Stop Agent", command=self.stop_agent).pack(side="left", padx=6, pady=8)
+        ttk.Button(controls, text="Start Agent", command=lambda: self.run_agent_op(self.agent.start)).pack(side="left", padx=6, pady=8)
+        ttk.Button(controls, text="Stop Agent", command=lambda: self.run_agent_op(self.agent.stop)).pack(side="left", padx=6, pady=8)
         ttk.Button(controls, text="Refresh Snapshot", command=self.poll_snapshot).pack(side="left", padx=6, pady=8)
 
         body = ttk.Frame(self.root)
@@ -212,26 +230,53 @@ class ResourceDashboardApp:
     def set_status(self, text: str) -> None:
         self.status_var.set(text)
 
-    def start_agent(self) -> None:
-        self.set_status(self.agent.start())
-        self.poll_snapshot()
+    def run_agent_op(self, op: Any) -> None:
+        if self._agent_op_inflight:
+            self.set_status("agent operation already running")
+            return
+        self._agent_op_inflight = True
+        def worker() -> None:
+            try:
+                result = op()
+            except Exception as exc:
+                result = f"agent operation failed: {exc}"
+            self.root.after(0, lambda: self.finish_agent_op(result))
+        threading.Thread(target=worker, daemon=True).start()
 
-    def stop_agent(self) -> None:
-        self.set_status(self.agent.stop())
+    def finish_agent_op(self, result: str) -> None:
+        self._agent_op_inflight = False
+        self.set_status(result)
         self.poll_snapshot()
 
     def poll_snapshot(self) -> None:
-        try:
-            snapshot = self.agent.snapshot()
+        if self._snapshot_inflight:
+            return
+        self._snapshot_inflight = True
+        def worker() -> None:
+            try:
+                snapshot = self.agent.snapshot()
+                err = None
+            except Exception as exc:
+                snapshot = None
+                err = exc
+            self.root.after(0, lambda: self.finish_snapshot(snapshot, err))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def finish_snapshot(self, snapshot: Optional[Dict[str, Any]], err: Optional[Exception]) -> None:
+        self._snapshot_inflight = False
+        if self._closed:
+            return
+        if snapshot is None:
+            self.set_status(f"agent unavailable: {err}")
+        else:
             self.render(snapshot)
             managed = "managed" if self.agent.managed_running() else "external/unmanaged"
             self.set_status(f"agent reachable ({managed}) at {self.agent.base_url}")
-        except Exception as exc:
-            self.set_status(f"agent unavailable: {exc}")
-        finally:
-            self.schedule_poll(POLL_INTERVAL_MS)
+        self.schedule_poll(POLL_INTERVAL_MS)
 
     def schedule_poll(self, delay_ms: int) -> None:
+        if self._closed:
+            return
         if self._poll_job is not None:
             try:
                 self.root.after_cancel(self._poll_job)
@@ -302,7 +347,7 @@ class ResourceDashboardApp:
         self.net_var.set(f"{first.get('iface', '-')}  rx={rx:.3f} Mbps  tx={tx:.3f} Mbps  speed={first.get('speed_mbps', '-')} Mbps")
         self.draw_network()
 
-    def draw_bar(self, canvas: tk.Canvas, pct_value: float, label: str) -> None:
+    def draw_bar(self, canvas: "tk.Canvas", pct_value: float, label: str) -> None:
         canvas.delete("all")
         width = max(canvas.winfo_width(), 280)
         pct_clamped = max(0.0, min(100.0, pct_value))
@@ -334,12 +379,13 @@ class ResourceDashboardApp:
         canvas.create_text(width - 45, 10, text="tx", fill="#22c55e")
 
     def on_close(self) -> None:
+        self._closed = True
         if self._poll_job is not None:
             try:
                 self.root.after_cancel(self._poll_job)
             except Exception:
                 pass
-        self.agent.stop()
+        threading.Thread(target=self.agent.stop, daemon=True).start()
         self.root.destroy()
 
 
@@ -355,6 +401,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     parse_listen(args.agent_listen)
+    if TK_IMPORT_ERROR is not None:
+        print(f"Tkinter is not available in this Python environment: {TK_IMPORT_ERROR}", file=sys.stderr)
+        print("Install tkinter support or use the existing browser dashboard fallback.", file=sys.stderr)
+        return 2
     agent = AgentProcess(args.agent_listen, args.sample_interval_ms, args.instance_id)
     try:
         root = tk.Tk()

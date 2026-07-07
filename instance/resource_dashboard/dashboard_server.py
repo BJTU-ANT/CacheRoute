@@ -210,7 +210,7 @@ class DashboardHandler(SimpleHTTPRequestHandler):
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="CacheRoute Instance resource dashboard")
     p.add_argument("--dashboard-listen", default="0.0.0.0:9102", help="dashboard listen address")
-    p.add_argument("--agent-listen", default="127.0.0.1:9101", help="resource agent listen address")
+    p.add_argument("--agent-listen", default="127.0.0.1:9201", help="resource agent listen address")
     p.add_argument("--sample-interval-ms", type=int, default=1000, help="agent sample interval")
     p.add_argument("--instance-id", default="hp_127.0.0.1:9001", help="Instance id to pass to the agent")
     p.add_argument("--no-auto-start", action="store_true", help="do not start the resource agent on dashboard startup")
