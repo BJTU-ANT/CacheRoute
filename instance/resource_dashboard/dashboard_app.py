@@ -12,7 +12,8 @@ import threading
 import time
 import urllib.request
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from collections import deque
+from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
 
 try:
     import tkinter as tk
@@ -30,6 +31,8 @@ DEFAULT_AGENT_LISTEN = "127.0.0.1:9201"
 DEFAULT_SAMPLE_INTERVAL_MS = 1000
 DEFAULT_INSTANCE_ID = "hp_127.0.0.1:9001"
 POLL_INTERVAL_MS = 1000
+DEFAULT_AGENT_START_TIMEOUT_S = 60.0
+AGENT_OUTPUT_TAIL_LINES = 20
 
 
 def parse_listen(value: str) -> Tuple[str, int]:
@@ -56,13 +59,16 @@ def request_json(url: str, timeout_s: float = 1.0) -> Dict[str, Any]:
 
 
 class AgentProcess:
-    def __init__(self, listen: str, sample_interval_ms: int, instance_id: str):
+    def __init__(self, listen: str, sample_interval_ms: int, instance_id: str, start_timeout_s: float):
         self.listen = listen
         self.sample_interval_ms = int(sample_interval_ms)
         self.instance_id = instance_id
         self.base_url = f"http://{listen}"
+        self.start_timeout_s = float(start_timeout_s)
         self.proc: Optional[subprocess.Popen[str]] = None
         self.lock = threading.Lock()
+        self.stdout_tail: Deque[str] = deque(maxlen=AGENT_OUTPUT_TAIL_LINES)
+        self.stderr_tail: Deque[str] = deque(maxlen=AGENT_OUTPUT_TAIL_LINES)
 
     def health(self) -> Dict[str, Any]:
         return request_json(f"{self.base_url}/healthz", timeout_s=0.6)
@@ -80,12 +86,41 @@ class AgentProcess:
         with self.lock:
             return self.proc is not None and self.proc.poll() is None
 
-    def start(self) -> str:
+    def _capture_stream(self, stream: Any, tail: Deque[str]) -> None:
+        try:
+            for line in iter(stream.readline, ""):
+                with self.lock:
+                    tail.append(line.rstrip("\n"))
+        finally:
+            try:
+                stream.close()
+            except Exception:
+                pass
+
+    def output_tail(self) -> str:
+        with self.lock:
+            stderr = list(self.stderr_tail)
+            stdout = list(self.stdout_tail)
+        sections = []
+        if stderr:
+            sections.append("stderr (last 20 lines):\n" + "\n".join(stderr))
+        if stdout:
+            sections.append("stdout (last 20 lines):\n" + "\n".join(stdout))
+        return "\n\n".join(sections) if sections else "no stdout/stderr captured yet"
+
+    def start(self, status_cb: Optional[Callable[[str], None]] = None) -> str:
+        def notify(text: str) -> None:
+            if status_cb is not None:
+                status_cb(text)
+
         if self.is_reachable():
             return "agent already reachable"
+        notify("starting resource agent...")
         with self.lock:
             if self.proc is not None and self.proc.poll() is None:
                 return f"managed agent already running pid={self.proc.pid}"
+            self.stdout_tail.clear()
+            self.stderr_tail.clear()
             cmd = [
                 "cargo", "run", "--manifest-path", str(AGENT_MANIFEST), "--",
                 "--listen", self.listen,
@@ -96,11 +131,19 @@ class AgentProcess:
                 cmd,
                 cwd=str(REPO_ROOT),
                 text=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 start_new_session=True,
+                bufsize=1,
             )
-        deadline = time.time() + 12.0
+            proc = self.proc
+        if proc.stdout is not None:
+            threading.Thread(target=self._capture_stream, args=(proc.stdout, self.stdout_tail), daemon=True).start()
+        if proc.stderr is not None:
+            threading.Thread(target=self._capture_stream, args=(proc.stderr, self.stderr_tail), daemon=True).start()
+
+        deadline = time.time() + self.start_timeout_s
+        notified_waiting = False
         while time.time() < deadline:
             if self.is_reachable():
                 with self.lock:
@@ -110,9 +153,12 @@ class AgentProcess:
                 exited = self.proc is not None and self.proc.poll() is not None
                 returncode = None if self.proc is None else self.proc.returncode
             if exited:
-                return f"agent exited with code {returncode}"
+                return f"resource agent build/run failed: exited with code {returncode}\n\n{self.output_tail()}"
+            if not notified_waiting:
+                notify("waiting for resource agent... cargo may still be building")
+                notified_waiting = True
             time.sleep(0.25)
-        return "agent start timed out"
+        return f"resource agent start timed out after {self.start_timeout_s:.1f}s\n\n{self.output_tail()}"
 
     def stop(self) -> str:
         with self.lock:
@@ -151,6 +197,7 @@ class ResourceDashboardApp:
         self._poll_job: Optional[str] = None
         self._snapshot_inflight = False
         self._agent_op_inflight = False
+        self._last_agent_error_status: Optional[str] = None
         self._closed = False
 
         self.root.title("CacheRoute Instance Resource Monitor")
@@ -168,7 +215,7 @@ class ResourceDashboardApp:
 
         self._build_layout()
         if auto_start:
-            self.set_status("auto-starting resource agent...")
+            self.set_status("starting resource agent...")
             self.run_agent_op(self.agent.start)
         self.schedule_poll(300)
 
@@ -230,14 +277,18 @@ class ResourceDashboardApp:
     def set_status(self, text: str) -> None:
         self.status_var.set(text)
 
+    def agent_status_callback(self, text: str) -> None:
+        self.root.after(0, lambda: self.set_status(text))
+
     def run_agent_op(self, op: Any) -> None:
         if self._agent_op_inflight:
             self.set_status("agent operation already running")
             return
         self._agent_op_inflight = True
+        self._last_agent_error_status = None
         def worker() -> None:
             try:
-                result = op()
+                result = op(status_cb=self.agent_status_callback) if op == self.agent.start else op()
             except Exception as exc:
                 result = f"agent operation failed: {exc}"
             self.root.after(0, lambda: self.finish_agent_op(result))
@@ -245,7 +296,13 @@ class ResourceDashboardApp:
 
     def finish_agent_op(self, result: str) -> None:
         self._agent_op_inflight = False
-        self.set_status(result)
+        first_line = result.splitlines()[0] if result else "agent operation finished"
+        self.set_status(first_line)
+        if "resource agent build/run failed" in first_line or "resource agent start timed out" in first_line:
+            self._last_agent_error_status = first_line
+        if "\n" in result:
+            self.raw_text.delete("1.0", "end")
+            self.raw_text.insert("1.0", result)
         self.poll_snapshot()
 
     def poll_snapshot(self) -> None:
@@ -267,8 +324,14 @@ class ResourceDashboardApp:
         if self._closed:
             return
         if snapshot is None:
-            self.set_status(f"agent unavailable: {err}")
+            if self._agent_op_inflight:
+                self.set_status("waiting for resource agent... cargo may still be building")
+            elif self._last_agent_error_status:
+                self.set_status(self._last_agent_error_status)
+            else:
+                self.set_status(f"agent unavailable: {err}")
         else:
+            self._last_agent_error_status = None
             self.render(snapshot)
             managed = "managed" if self.agent.managed_running() else "external/unmanaged"
             self.set_status(f"agent reachable ({managed}) at {self.agent.base_url}")
@@ -395,6 +458,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sample-interval-ms", type=int, default=DEFAULT_SAMPLE_INTERVAL_MS, help="resource agent sample interval")
     parser.add_argument("--instance-id", default=DEFAULT_INSTANCE_ID, help="Instance id passed to the resource agent")
     parser.add_argument("--no-auto-start", action="store_true", help="do not auto-start the Rust resource agent")
+    parser.add_argument("--agent-start-timeout-s", type=float, default=DEFAULT_AGENT_START_TIMEOUT_S, help="seconds to wait for auto-started resource agent, default 60")
     return parser
 
 
@@ -405,7 +469,7 @@ def main() -> int:
         print(f"Tkinter is not available in this Python environment: {TK_IMPORT_ERROR}", file=sys.stderr)
         print("Install tkinter support or use the existing browser dashboard fallback.", file=sys.stderr)
         return 2
-    agent = AgentProcess(args.agent_listen, args.sample_interval_ms, args.instance_id)
+    agent = AgentProcess(args.agent_listen, args.sample_interval_ms, args.instance_id, args.agent_start_timeout_s)
     try:
         root = tk.Tk()
     except tk.TclError as exc:
