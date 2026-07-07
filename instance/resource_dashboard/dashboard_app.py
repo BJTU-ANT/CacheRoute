@@ -199,80 +199,200 @@ class ResourceDashboardApp:
         self._agent_op_inflight = False
         self._last_agent_error_status: Optional[str] = None
         self._closed = False
+        self._gpu_widgets: Dict[Tuple[int, str], Dict[str, Any]] = {}
+        self._gpu_topology: Tuple[Tuple[int, str], ...] = ()
+        self._gpu_columns = 2
+        self._mousewheel_bound = False
 
         self.root.title("CacheRoute Instance Resource Monitor")
-        self.root.geometry("980x720")
+        self.root.geometry("1400x950")
+        self.root.minsize(920, 680)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
         self.status_var = tk.StringVar(value="initializing")
+        self.agent_url_var = tk.StringVar(value=self.agent.base_url)
+        self.agent_mode_var = tk.StringVar(value="agent: unknown")
         self.instance_var = tk.StringVar(value="-")
         self.admission_var = tk.StringVar(value="-")
         self.update_var = tk.StringVar(value="-")
+        self.timestamp_var = tk.StringVar(value="-")
+        self.gpu_count_var = tk.StringVar(value="-")
+        self.cpu_summary_var = tk.StringVar(value="-")
+        self.mem_summary_var = tk.StringVar(value="-")
         self.cpu_var = tk.StringVar(value="-")
         self.load_var = tk.StringVar(value="-")
         self.mem_var = tk.StringVar(value="-")
         self.net_var = tk.StringVar(value="-")
+        self.refresh_var = tk.StringVar(value=f"auto-refresh: {POLL_INTERVAL_MS / 1000:.0f}s")
+        self.cpu_bar_var = tk.DoubleVar(value=0.0)
+        self.mem_bar_var = tk.DoubleVar(value=0.0)
 
+        self._configure_style()
         self._build_layout()
         if auto_start:
             self.set_status("starting resource agent...")
             self.run_agent_op(self.agent.start)
         self.schedule_poll(300)
 
+    def _configure_style(self) -> None:
+        style = ttk.Style(self.root)
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+        style.configure("Header.TFrame", background="#0f172a")
+        style.configure("HeaderTitle.TLabel", background="#0f172a", foreground="#e5e7eb", font=("TkDefaultFont", 18, "bold"))
+        style.configure("Header.TLabel", background="#0f172a", foreground="#cbd5e1")
+        style.configure("Status.TLabel", background="#0f172a", foreground="#7dd3fc", font=("TkDefaultFont", 10, "bold"))
+        style.configure("Card.TLabelframe", padding=10)
+        style.configure("Card.TLabelframe.Label", font=("TkDefaultFont", 11, "bold"))
+        style.configure("MetricTitle.TLabel", font=("TkDefaultFont", 9), foreground="#64748b")
+        style.configure("MetricValue.TLabel", font=("TkDefaultFont", 11, "bold"))
+        style.configure("GpuTitle.TLabel", font=("TkDefaultFont", 11, "bold"))
+
     def _build_layout(self) -> None:
-        pad = {"padx": 8, "pady": 6}
-        top = ttk.Frame(self.root)
-        top.pack(fill="x", **pad)
-        ttk.Label(top, text="CacheRoute Instance Resource Monitor", font=("TkDefaultFont", 16, "bold")).pack(side="left")
-        ttk.Label(top, textvariable=self.status_var).pack(side="right")
+        self._build_header()
+        self._build_summary()
+        self._build_controls()
+        self._build_notebook()
 
-        summary = ttk.LabelFrame(self.root, text="Instance Summary")
-        summary.pack(fill="x", **pad)
-        for label, var in (("Instance ID", self.instance_var), ("Admission", self.admission_var), ("Last update", self.update_var)):
-            ttk.Label(summary, text=f"{label}:").pack(side="left", padx=(8, 2), pady=8)
-            ttk.Label(summary, textvariable=var, font=("TkDefaultFont", 10, "bold")).pack(side="left", padx=(0, 16), pady=8)
+    def _build_header(self) -> None:
+        header = ttk.Frame(self.root, style="Header.TFrame", padding=(14, 10))
+        header.pack(fill="x")
+        ttk.Label(header, text="CacheRoute Instance Resource Monitor", style="HeaderTitle.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(header, textvariable=self.status_var, style="Status.TLabel").grid(row=0, column=1, sticky="e", padx=(12, 0))
+        ttk.Label(header, textvariable=self.agent_url_var, style="Header.TLabel").grid(row=1, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(header, textvariable=self.agent_mode_var, style="Header.TLabel").grid(row=1, column=1, sticky="e", pady=(4, 0))
+        header.columnconfigure(0, weight=1)
 
-        controls = ttk.LabelFrame(self.root, text="Agent Controls")
-        controls.pack(fill="x", **pad)
-        ttk.Button(controls, text="Start Agent", command=lambda: self.run_agent_op(self.agent.start)).pack(side="left", padx=6, pady=8)
-        ttk.Button(controls, text="Stop Agent", command=lambda: self.run_agent_op(self.agent.stop)).pack(side="left", padx=6, pady=8)
-        ttk.Button(controls, text="Refresh Snapshot", command=self.poll_snapshot).pack(side="left", padx=6, pady=8)
+    def _build_summary(self) -> None:
+        summary = ttk.LabelFrame(self.root, text="Instance Summary", style="Card.TLabelframe")
+        summary.pack(fill="x", padx=10, pady=(10, 6))
+        metrics = (
+            ("Instance ID", self.instance_var),
+            ("Admission", self.admission_var),
+            ("Last update", self.update_var),
+            ("Snapshot timestamp", self.timestamp_var),
+            ("GPU count", self.gpu_count_var),
+            ("CPU", self.cpu_summary_var),
+            ("Memory free", self.mem_summary_var),
+        )
+        for idx, (label, var) in enumerate(metrics):
+            cell = ttk.Frame(summary, padding=(8, 4))
+            cell.grid(row=0, column=idx, sticky="ew")
+            ttk.Label(cell, text=label, style="MetricTitle.TLabel").pack(anchor="w")
+            ttk.Label(cell, textvariable=var, style="MetricValue.TLabel").pack(anchor="w")
+            summary.columnconfigure(idx, weight=1)
 
-        body = ttk.Frame(self.root)
-        body.pack(fill="both", expand=True, **pad)
-        left = ttk.Frame(body)
-        left.pack(side="left", fill="both", expand=True)
-        right = ttk.Frame(body)
-        right.pack(side="right", fill="both", expand=True)
+    def _build_controls(self) -> None:
+        controls = ttk.LabelFrame(self.root, text="Agent Controls", style="Card.TLabelframe")
+        controls.pack(fill="x", padx=10, pady=6)
+        ttk.Button(controls, text="Start Agent", command=lambda: self.run_agent_op(self.agent.start)).pack(side="left", padx=(0, 8), pady=4)
+        ttk.Button(controls, text="Stop Agent", command=lambda: self.run_agent_op(self.agent.stop)).pack(side="left", padx=8, pady=4)
+        ttk.Button(controls, text="Refresh Snapshot", command=self.poll_snapshot).pack(side="left", padx=8, pady=4)
+        ttk.Label(controls, textvariable=self.refresh_var).pack(side="right", padx=8)
 
-        cpu = ttk.LabelFrame(left, text="CPU")
-        cpu.pack(fill="x", **pad)
-        self.cpu_canvas = tk.Canvas(cpu, width=280, height=90, bg="#111827", highlightthickness=0)
-        self.cpu_canvas.pack(fill="x", padx=8, pady=4)
-        ttk.Label(cpu, textvariable=self.cpu_var).pack(anchor="w", **pad)
-        ttk.Label(cpu, textvariable=self.load_var).pack(anchor="w", **pad)
+    def _build_notebook(self) -> None:
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill="both", expand=True, padx=10, pady=(6, 10))
 
-        mem = ttk.LabelFrame(left, text="Memory")
-        mem.pack(fill="x", **pad)
-        self.mem_canvas = tk.Canvas(mem, width=280, height=90, bg="#111827", highlightthickness=0)
-        self.mem_canvas.pack(fill="x", padx=8, pady=4)
-        ttk.Label(mem, textvariable=self.mem_var).pack(anchor="w", **pad)
+        overview = ttk.Frame(self.notebook)
+        self.notebook.add(overview, text="Overview")
+        self._build_scrollable_overview(overview)
 
-        net = ttk.LabelFrame(left, text="Network")
-        net.pack(fill="both", expand=True, **pad)
-        ttk.Label(net, textvariable=self.net_var).pack(anchor="w", **pad)
-        self.net_canvas = tk.Canvas(net, width=420, height=170, bg="#111827", highlightthickness=0)
-        self.net_canvas.pack(fill="both", expand=True, padx=8, pady=4)
+        raw_tab = ttk.Frame(self.notebook, padding=8)
+        self.notebook.add(raw_tab, text="Raw JSON / Diagnostics")
+        self.raw_text = tk.Text(raw_tab, height=12, wrap="none")
+        raw_y = ttk.Scrollbar(raw_tab, orient="vertical", command=self.raw_text.yview)
+        raw_x = ttk.Scrollbar(raw_tab, orient="horizontal", command=self.raw_text.xview)
+        self.raw_text.configure(yscrollcommand=raw_y.set, xscrollcommand=raw_x.set)
+        self.raw_text.grid(row=0, column=0, sticky="nsew")
+        raw_y.grid(row=0, column=1, sticky="ns")
+        raw_x.grid(row=1, column=0, sticky="ew")
+        raw_tab.rowconfigure(0, weight=1)
+        raw_tab.columnconfigure(0, weight=1)
 
-        gpu = ttk.LabelFrame(right, text="GPU")
-        gpu.pack(fill="both", expand=True, **pad)
-        self.gpu_frame = ttk.Frame(gpu)
-        self.gpu_frame.pack(fill="both", expand=True, padx=8, pady=8)
+    def _build_scrollable_overview(self, parent: "ttk.Frame") -> None:
+        # Tkinter scrollable-frame pattern: a Canvas owns one inner Frame and the
+        # scrollbar tracks the canvas scrollregion as card sizes change.
+        self.scroll_canvas = tk.Canvas(parent, highlightthickness=0, bg="#f8fafc")
+        scrollbar = ttk.Scrollbar(parent, orient="vertical", command=self.scroll_canvas.yview)
+        self.scroll_frame = ttk.Frame(self.scroll_canvas, padding=8)
+        self.scroll_window = self.scroll_canvas.create_window((0, 0), window=self.scroll_frame, anchor="nw")
+        self.scroll_canvas.configure(yscrollcommand=scrollbar.set)
+        self.scroll_canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        self.scroll_frame.bind("<Configure>", self._on_scroll_frame_configure)
+        self.scroll_canvas.bind("<Configure>", self._on_scroll_canvas_configure)
+        self.scroll_canvas.bind("<Enter>", self._bind_mousewheel)
+        self.scroll_canvas.bind("<Leave>", self._unbind_mousewheel)
+        self.scroll_frame.bind("<Enter>", self._bind_mousewheel)
+        self.scroll_frame.bind("<Leave>", self._unbind_mousewheel)
+        self._build_resource_cards(self.scroll_frame)
 
-        raw = ttk.LabelFrame(right, text="Raw JSON")
-        raw.pack(fill="both", expand=True, **pad)
-        self.raw_text = tk.Text(raw, height=12, wrap="none")
-        self.raw_text.pack(fill="both", expand=True, padx=8, pady=8)
+    def _bind_mousewheel(self, _event: Optional["tk.Event"] = None) -> None:
+        if self._mousewheel_bound:
+            return
+        self._mousewheel_bound = True
+        self.root.bind_all("<MouseWheel>", self._on_mousewheel)
+        self.root.bind_all("<Button-4>", self._on_mousewheel)
+        self.root.bind_all("<Button-5>", self._on_mousewheel)
+
+    def _unbind_mousewheel(self, _event: Optional["tk.Event"] = None) -> None:
+        if not self._mousewheel_bound:
+            return
+        self._mousewheel_bound = False
+        self.root.unbind_all("<MouseWheel>")
+        self.root.unbind_all("<Button-4>")
+        self.root.unbind_all("<Button-5>")
+
+    def _on_mousewheel(self, event: "tk.Event") -> None:
+        if getattr(event, "num", None) == 4:
+            delta = -3
+        elif getattr(event, "num", None) == 5:
+            delta = 3
+        else:
+            delta = -1 * int(event.delta / 120) if event.delta else 0
+        if delta:
+            self.scroll_canvas.yview_scroll(delta, "units")
+
+    def _on_scroll_frame_configure(self, _event: "tk.Event") -> None:
+        self.scroll_canvas.configure(scrollregion=self.scroll_canvas.bbox("all"))
+
+    def _on_scroll_canvas_configure(self, event: "tk.Event") -> None:
+        self.scroll_canvas.itemconfigure(self.scroll_window, width=event.width)
+        columns = 2 if event.width >= 1050 else 1
+        if columns != self._gpu_columns:
+            self._gpu_columns = columns
+            self._layout_gpu_cards()
+
+    def _build_resource_cards(self, parent: "ttk.Frame") -> None:
+        top = ttk.Frame(parent)
+        top.pack(fill="x")
+        cpu = ttk.LabelFrame(top, text="CPU", style="Card.TLabelframe")
+        cpu.grid(row=0, column=0, sticky="nsew", padx=(0, 6), pady=6)
+        mem = ttk.LabelFrame(top, text="Memory", style="Card.TLabelframe")
+        mem.grid(row=0, column=1, sticky="nsew", padx=6, pady=6)
+        net = ttk.LabelFrame(top, text="Network", style="Card.TLabelframe")
+        net.grid(row=0, column=2, sticky="nsew", padx=(6, 0), pady=6)
+        for col in range(3):
+            top.columnconfigure(col, weight=1)
+
+        ttk.Label(cpu, textvariable=self.cpu_var, style="MetricValue.TLabel").pack(anchor="w")
+        ttk.Label(cpu, textvariable=self.load_var).pack(anchor="w", pady=(4, 8))
+        ttk.Progressbar(cpu, maximum=100.0, variable=self.cpu_bar_var).pack(fill="x")
+
+        ttk.Label(mem, textvariable=self.mem_var, style="MetricValue.TLabel").pack(anchor="w", pady=(0, 8))
+        ttk.Progressbar(mem, maximum=100.0, variable=self.mem_bar_var).pack(fill="x")
+
+        ttk.Label(net, textvariable=self.net_var, style="MetricValue.TLabel").pack(anchor="w")
+        self.net_canvas = tk.Canvas(net, width=420, height=150, bg="#111827", highlightthickness=0)
+        self.net_canvas.pack(fill="both", expand=True, pady=(8, 0))
+
+        gpu_section = ttk.LabelFrame(parent, text="GPU Resources", style="Card.TLabelframe")
+        gpu_section.pack(fill="x", pady=8)
+        self.gpu_frame = ttk.Frame(gpu_section)
+        self.gpu_frame.pack(fill="x")
 
     def set_status(self, text: str) -> None:
         self.status_var.set(text)
@@ -301,8 +421,7 @@ class ResourceDashboardApp:
         if "resource agent build/run failed" in first_line or "resource agent start timed out" in first_line:
             self._last_agent_error_status = first_line
         if "\n" in result:
-            self.raw_text.delete("1.0", "end")
-            self.raw_text.insert("1.0", result)
+            self.write_raw_text(result)
         self.poll_snapshot()
 
     def poll_snapshot(self) -> None:
@@ -326,15 +445,19 @@ class ResourceDashboardApp:
         if snapshot is None:
             if self._agent_op_inflight:
                 self.set_status("waiting for resource agent... cargo may still be building")
+                self.agent_mode_var.set("agent: starting")
             elif self._last_agent_error_status:
                 self.set_status(self._last_agent_error_status)
+                self.agent_mode_var.set("agent: startup failed")
             else:
                 self.set_status(f"agent unavailable: {err}")
+                self.agent_mode_var.set("agent: unavailable")
         else:
             self._last_agent_error_status = None
             self.render(snapshot)
             managed = "managed" if self.agent.managed_running() else "external/unmanaged"
-            self.set_status(f"agent reachable ({managed}) at {self.agent.base_url}")
+            self.agent_mode_var.set(f"agent: {managed}")
+            self.set_status(f"agent reachable ({managed})")
         self.schedule_poll(POLL_INTERVAL_MS)
 
     def schedule_poll(self, delay_ms: int) -> None:
@@ -360,45 +483,120 @@ class ResourceDashboardApp:
         self.instance_var.set(str(snapshot.get("instance_id") or self.agent.instance_id))
         self.admission_var.set(str(capacity.get("admission_state") or "unknown"))
         self.update_var.set(update)
+        self.timestamp_var.set(str(ts_ms or "-"))
+        self.gpu_count_var.set(str(len(gpus) if isinstance(gpus, list) else 0))
 
         cpu_util = float(cpu.get("utilization_pct") or 0.0)
+        self.cpu_summary_var.set(f"{cpu_util:.1f}%")
         self.cpu_var.set(f"utilization: {cpu_util:.2f}%")
         self.load_var.set(f"load1/load5/load15: {cpu.get('load1', '-')} / {cpu.get('load5', '-')} / {cpu.get('load15', '-')}")
-        self.draw_bar(self.cpu_canvas, cpu_util, "CPU utilization")
+        self.cpu_bar_var.set(max(0.0, min(100.0, cpu_util)))
 
         used = float(mem.get("used_mb") or 0.0)
         total = float(mem.get("total_mb") or 0.0)
         free = float(mem.get("free_mb") or 0.0)
         ratio = 100.0 * used / total if total > 0 else 0.0
         free_ratio = float(capacity.get("memory_free_ratio") or 0.0) * 100.0
+        self.mem_summary_var.set(f"{free_ratio:.1f}%")
         self.mem_var.set(f"used/free/total: {used:.0f} / {free:.0f} / {total:.0f} MB    free ratio: {free_ratio:.2f}%")
-        self.draw_bar(self.mem_canvas, ratio, "Memory used")
+        self.mem_bar_var.set(max(0.0, min(100.0, ratio)))
 
         self.render_gpu(gpus)
         self.render_network(nets)
-        raw = json.dumps(snapshot, ensure_ascii=False, indent=2)
+        self.write_raw_text(json.dumps(snapshot, ensure_ascii=False, indent=2))
+
+    def write_raw_text(self, text: str) -> None:
+        yview = self.raw_text.yview()
         self.raw_text.delete("1.0", "end")
-        self.raw_text.insert("1.0", raw)
+        self.raw_text.insert("1.0", text)
+        if yview:
+            self.raw_text.yview_moveto(yview[0])
 
     def render_gpu(self, gpus: Any) -> None:
+        if not isinstance(gpus, list):
+            gpus = []
+        topology = tuple((int(gpu.get("index", idx)), str(gpu.get("name", "-"))) for idx, gpu in enumerate(gpus))
+        if topology != self._gpu_topology:
+            self._rebuild_gpu_cards(gpus, topology)
+        for idx, gpu in enumerate(gpus):
+            key = (int(gpu.get("index", idx)), str(gpu.get("name", "-")))
+            widgets = self._gpu_widgets.get(key)
+            if widgets is not None:
+                self._update_gpu_card(widgets, gpu)
+
+    def _rebuild_gpu_cards(self, gpus: List[Dict[str, Any]], topology: Tuple[Tuple[int, str], ...]) -> None:
+        # Anti-flicker strategy: rebuild GPU cards only when topology changes;
+        # regular refreshes update existing labels, bars, and card canvases.
         for child in self.gpu_frame.winfo_children():
             child.destroy()
-        if not isinstance(gpus, list) or not gpus:
-            ttk.Label(self.gpu_frame, text="No GPU detected").pack(anchor="w")
+        self._gpu_widgets.clear()
+        self._gpu_topology = topology
+        if not gpus:
+            ttk.Label(self.gpu_frame, text="No GPU detected").grid(row=0, column=0, sticky="w", padx=8, pady=8)
             return
-        for gpu in gpus:
-            used = float(gpu.get("memory_used_mb") or 0.0)
-            total = float(gpu.get("memory_total_mb") or 0.0)
-            util = max(0.0, min(100.0, float(gpu.get("utilization_pct") or 0.0)))
-            mem_pct = max(0.0, min(100.0, 100.0 * used / total)) if total > 0 else 0.0
-            box = ttk.Frame(self.gpu_frame, padding=(0, 4))
-            box.pack(fill="x", pady=4)
-            title = f"GPU {gpu.get('index', '-')}: {gpu.get('name', '-')}"
-            ttk.Label(box, text=title, font=("TkDefaultFont", 10, "bold")).pack(anchor="w")
-            ttk.Label(box, text=f"util={util:.2f}%  temp={gpu.get('temperature_c', '-')} C  power={gpu.get('power_w', '-')} W").pack(anchor="w")
-            ttk.Progressbar(box, maximum=100.0, value=util).pack(fill="x", pady=(2, 6))
-            ttk.Label(box, text=f"memory={used:.0f}/{total:.0f} MB ({mem_pct:.2f}%), free={gpu.get('memory_free_mb', '-')} MB").pack(anchor="w")
-            ttk.Progressbar(box, maximum=100.0, value=mem_pct).pack(fill="x", pady=(2, 6))
+        for idx, gpu in enumerate(gpus):
+            key = (int(gpu.get("index", idx)), str(gpu.get("name", "-")))
+            self._gpu_widgets[key] = self._create_gpu_card(self.gpu_frame, gpu)
+        self._layout_gpu_cards()
+
+    def _create_gpu_card(self, parent: "ttk.Frame", gpu: Dict[str, Any]) -> Dict[str, Any]:
+        frame = ttk.LabelFrame(parent, text=f"GPU {gpu.get('index', '-')}: {gpu.get('name', '-')}", style="Card.TLabelframe")
+        body = ttk.Frame(frame)
+        body.pack(fill="both", expand=True)
+        gauge = tk.Canvas(body, width=120, height=120, bg="#ffffff", highlightthickness=0)
+        gauge.grid(row=0, column=0, rowspan=4, sticky="nw", padx=(0, 12))
+        util_var = tk.StringVar(value="util: -")
+        temp_var = tk.StringVar(value="temp: -")
+        power_var = tk.StringVar(value="power: -")
+        mem_var = tk.StringVar(value="memory: -")
+        mem_pct_var = tk.DoubleVar(value=0.0)
+        ttk.Label(body, textvariable=util_var, style="MetricValue.TLabel").grid(row=0, column=1, sticky="w")
+        ttk.Label(body, textvariable=temp_var).grid(row=1, column=1, sticky="w", pady=(4, 0))
+        ttk.Label(body, textvariable=power_var).grid(row=2, column=1, sticky="w", pady=(4, 0))
+        ttk.Label(body, textvariable=mem_var).grid(row=3, column=1, sticky="w", pady=(4, 0))
+        ttk.Progressbar(body, maximum=100.0, variable=mem_pct_var).grid(row=4, column=0, columnspan=2, sticky="ew", pady=(10, 0))
+        body.columnconfigure(1, weight=1)
+        return {"frame": frame, "gauge": gauge, "util": util_var, "temp": temp_var, "power": power_var, "mem": mem_var, "mem_pct": mem_pct_var}
+
+    def _layout_gpu_cards(self) -> None:
+        if not self._gpu_widgets:
+            return
+        for child in self.gpu_frame.winfo_children():
+            child.grid_forget()
+        for idx, widgets in enumerate(self._gpu_widgets.values()):
+            row = idx // self._gpu_columns
+            col = idx % self._gpu_columns
+            widgets["frame"].grid(row=row, column=col, sticky="nsew", padx=6, pady=6)
+        for col in range(max(1, self._gpu_columns)):
+            self.gpu_frame.columnconfigure(col, weight=1)
+
+    def _update_gpu_card(self, widgets: Dict[str, Any], gpu: Dict[str, Any]) -> None:
+        used = float(gpu.get("memory_used_mb") or 0.0)
+        total = float(gpu.get("memory_total_mb") or 0.0)
+        free = gpu.get("memory_free_mb", "-")
+        util = max(0.0, min(100.0, float(gpu.get("utilization_pct") or 0.0)))
+        mem_pct = max(0.0, min(100.0, 100.0 * used / total)) if total > 0 else 0.0
+        widgets["util"].set(f"utilization: {util:.2f}%")
+        widgets["temp"].set(f"temperature: {gpu.get('temperature_c', '-')} C")
+        widgets["power"].set(f"power: {gpu.get('power_w', '-')} W")
+        widgets["mem"].set(f"memory: {used:.0f}/{total:.0f} MB ({mem_pct:.2f}%), free={free} MB")
+        widgets["mem_pct"].set(mem_pct)
+        self.draw_gpu_gauge(widgets["gauge"], util)
+
+    def draw_gpu_gauge(self, canvas: "tk.Canvas", pct_value: float) -> None:
+        # GPU donut chart: the arc span maps directly to utilization, so many
+        # GPU cards can be scanned quickly for hot or idle devices.
+        canvas.delete("all")
+        pct = max(0.0, min(100.0, pct_value))
+        size = 104
+        x0 = 8
+        y0 = 8
+        x1 = x0 + size
+        y1 = y0 + size
+        color = "#22c55e" if pct < 70 else "#f59e0b" if pct < 90 else "#ef4444"
+        canvas.create_oval(x0, y0, x1, y1, outline="#dbeafe", width=12)
+        canvas.create_arc(x0, y0, x1, y1, start=90, extent=-pct * 3.6, style="arc", outline=color, width=12)
+        canvas.create_text((x0 + x1) / 2, (y0 + y1) / 2, text=f"{pct:.0f}%", font=("TkDefaultFont", 16, "bold"), fill="#0f172a")
 
     def render_network(self, nets: Any) -> None:
         first = nets[0] if isinstance(nets, list) and nets else {}
@@ -410,36 +608,28 @@ class ResourceDashboardApp:
         self.net_var.set(f"{first.get('iface', '-')}  rx={rx:.3f} Mbps  tx={tx:.3f} Mbps  speed={first.get('speed_mbps', '-')} Mbps")
         self.draw_network()
 
-    def draw_bar(self, canvas: "tk.Canvas", pct_value: float, label: str) -> None:
-        canvas.delete("all")
-        width = max(canvas.winfo_width(), 280)
-        pct_clamped = max(0.0, min(100.0, pct_value))
-        canvas.create_rectangle(12, 38, width - 12, 58, fill="#334155", outline="")
-        canvas.create_rectangle(12, 38, 12 + (width - 24) * pct_clamped / 100.0, 58, fill="#38bdf8", outline="")
-        canvas.create_text(14, 18, text=f"{label}: {pct_clamped:.2f}%", anchor="w", fill="#e5e7eb")
-
     def draw_network(self) -> None:
         canvas = self.net_canvas
         canvas.delete("all")
         width = max(canvas.winfo_width(), 420)
-        height = max(canvas.winfo_height(), 170)
+        height = max(canvas.winfo_height(), 150)
         max_value = max([1.0] + [max(rx, tx) for rx, tx in self.network_history])
         for i in range(5):
-            y = 16 + i * (height - 32) / 4
-            canvas.create_line(36, y, width - 12, y, fill="#263244")
+            y = 16 + i * (height - 36) / 4
+            canvas.create_line(42, y, width - 12, y, fill="#263244")
         def plot(idx: int, color: str) -> None:
             points = []
             for i, pair in enumerate(self.network_history):
-                x = 36 + i * (width - 48) / max(1, self.max_samples - 1)
-                y = height - 16 - (pair[idx] / max_value) * (height - 32)
+                x = 42 + i * (width - 56) / max(1, self.max_samples - 1)
+                y = height - 20 - (pair[idx] / max_value) * (height - 40)
                 points.extend([x, y])
             if len(points) >= 4:
                 canvas.create_line(*points, fill=color, width=2)
         plot(0, "#38bdf8")
         plot(1, "#22c55e")
-        canvas.create_text(40, 10, text=f"max {max_value:.3f} Mbps", anchor="w", fill="#9ca3af")
-        canvas.create_text(width - 80, 10, text="rx", fill="#38bdf8")
-        canvas.create_text(width - 45, 10, text="tx", fill="#22c55e")
+        canvas.create_text(46, 10, text=f"max {max_value:.3f} Mbps", anchor="w", fill="#9ca3af")
+        canvas.create_text(width - 120, 10, text="rx", fill="#38bdf8")
+        canvas.create_text(width - 80, 10, text="tx", fill="#22c55e")
 
     def on_close(self) -> None:
         self._closed = True
@@ -448,9 +638,9 @@ class ResourceDashboardApp:
                 self.root.after_cancel(self._poll_job)
             except Exception:
                 pass
+        self._unbind_mousewheel()
         threading.Thread(target=self.agent.stop, daemon=True).start()
         self.root.destroy()
-
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Local Tkinter monitor for the CacheRoute resource agent")
