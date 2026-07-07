@@ -237,6 +237,8 @@ python3 instance/resource_dashboard/dashboard_app.py \
 
 A small local window should open and update CPU, memory, GPU, network, admission-state, and raw snapshot information.
 
+If the container cannot open the desktop window, you can also try running the Rust agent and desktop dashboard directly on the host machine, as long as the host has a compatible Rust/Cargo toolchain and repository permissions are correct.
+
 If the container has no graphical display, use the browser/server fallback:
 
 ```bash
