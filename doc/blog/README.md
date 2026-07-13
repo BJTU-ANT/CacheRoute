@@ -1,7 +1,11 @@
-**此处为cacheroute初始架构搭建相关更新日志。自260324起，系统调试与blog更新移至pull Requests内。**
+**此处为cacheroute初始架构搭建相关更新日志。更多系统调试与blog更新见pull Requests。**
 
 ### 260713 后续计划
-<img width="872" height="917" alt="image" src="https://github.com/user-attachments/assets/965b2b48-afe2-4c26-8784-ae52f7f4bcbe" />
+
+目前知识注入侧的全局调度器（一级）已有雏形，本地资源池的调度主要实现了动态知识注入决策，实例选择的模块待整理更新。
+
+<img width="400" alt="image" src="https://github.com/user-attachments/assets/965b2b48-afe2-4c26-8784-ae52f7f4bcbe" />
+
 后续的原型系统工程计划主要有两步工作：
 
 （1）资源池级实例调度策略
