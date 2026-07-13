@@ -62,7 +62,18 @@ if __name__ == "__main__":
     if args.ready_release_policy:
         os.environ["PROXY_READY_RELEASE_POLICY"] = args.ready_release_policy
 
+    cfg_host = os.environ.get("PROXY_DP_HOST", config.PROXY_DP_HOST)
+    cfg_port = int(os.environ.get("PROXY_DP_PORT", config.PROXY_DP_PORT))
+    host = args.host if args.host is not None else cfg_host
+    port = args.port if args.port is not None else cfg_port
+
+    # Keep data-plane bind address and scheduler-advertised address aligned for demos.
+    os.environ["PROXY_ADVERTISE_HOST"] = host
+    os.environ["PROXY_ADVERTISE_PORT"] = str(port)
+    os.environ["PROXY_DP_HOST"] = host
+    os.environ["PROXY_DP_PORT"] = str(port)
+
     from proxy import proxy  # 确保在设置环境变量后导入
 
     # 选择一个与 Scheduler 不同的端口，例如 8001
-    uvicorn.run(proxy, host=config.PROXY_DP_HOST, port=config.PROXY_DP_PORT, reload=False)
+    uvicorn.run(proxy, host=host, port=port, reload=False)

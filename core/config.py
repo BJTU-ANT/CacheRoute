@@ -113,6 +113,20 @@ INSTANCE_REDIS_PASSWORD = None                                 # Redis密码（N
 INSTANCE_TOPOLOGY_KDN_TARGETS = ""                             # Instance自动拓扑发现目标（逗号分隔 host:port 或 URL）
 INSTANCE_DEFAULT_LINK_BW_MBPS = 1000.0                         # 兜底链路带宽（无法读取网卡速率时）
 
+# Instance资源监控（demo默认启用；可通过 --no-resource-monitor 或 INSTANCE_RESOURCE_MONITOR_ENABLE=0 关闭）
+INSTANCE_RESOURCE_MONITOR_ENABLE = True
+INSTANCE_RESOURCE_AUTO_START_AGENT = True
+INSTANCE_RESOURCE_AGENT_HOST = "127.0.0.1"
+INSTANCE_RESOURCE_AGENT_PORT = 9201
+INSTANCE_RESOURCE_AGENT_LISTEN = "127.0.0.1:9201"
+INSTANCE_RESOURCE_AGENT_URL = "http://127.0.0.1:9201"
+INSTANCE_RESOURCE_AGENT_SAMPLE_INTERVAL_MS = 1000
+INSTANCE_RESOURCE_AGENT_START_TIMEOUT_S = 60.0
+INSTANCE_RESOURCE_REPORT_ENABLE = False
+INSTANCE_RESOURCE_REPORT_HZ = 1.0
+INSTANCE_RESOURCE_REPORT_INTERVAL_MS = 1000
+INSTANCE_RESOURCE_REPORT_TIMEOUT_S = 2.0
+
 # ====================================================================#
 #                               Other                                 #
 # ====================================================================#

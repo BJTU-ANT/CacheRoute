@@ -20,8 +20,6 @@ import os
 import asyncio
 import json
 import subprocess
-# import time
-
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 from contextlib import asynccontextmanager
 from urllib.parse import urlparse
@@ -223,6 +221,15 @@ async def lifespan(app: FastAPI):
 
     task = asyncio.create_task(_hb())
     app.state._hb_task = task # type: ignore
+
+    resource_monitor = getattr(app.state, "_demo_resource_monitor", None)  # type: ignore
+    registration_ok = runtime_instance_id == getattr(reg, "instance_id", None) if "reg" in locals() else False
+    if resource_monitor is not None:
+        if registration_ok:
+            await resource_monitor.start_after_registration(runtime_instance_id=runtime_instance_id, stop_event=stop, logger=logger)
+        else:
+            resource_monitor.skip_after_registration_failure(logger=logger)
+
     app.state._topology_task = asyncio.create_task(  # type: ignore
         _run_topology_discovery(client=client, instance_id=runtime_instance_id, logger=logger)
     )
@@ -239,6 +246,12 @@ async def lifespan(app: FastAPI):
             topo_task = getattr(app.state, "_topology_task", None)  # type: ignore
             if topo_task is not None:
                 topo_task.cancel()
+        except Exception:
+            pass
+        try:
+            resource_monitor = getattr(app.state, "_demo_resource_monitor", None)  # type: ignore
+            if resource_monitor is not None:
+                await resource_monitor.stop(logger=logger)
         except Exception:
             pass
         try:
