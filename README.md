@@ -415,10 +415,8 @@ curl -s http://127.0.0.1:7001/debug/strategy
 | Document | Description |
 |---|---|
 | [`env/README.md`](env/README.md) | Environment setup and vLLM + LMCache installation. |
-| [`instance/resource_agent/README.md`](instance/resource_agent/README.md) | Native Rust Instance resource agent. |
-| [`instance/resource_dashboard/README.md`](instance/resource_dashboard/README.md) | Desktop and browser dashboard for Instance resource snapshots. |
+| [`instance/README.md`](instance/resource_agent/README.md) | Instance API, metric, time predictor, etc. |
 | [`kdn_server/README.md`](kdn_server/README.md) | KDN server, knowledge registration, and KVCache injection. |
 | [`core/README.md`](core/README.md) | Core configuration and multi-machine setup. |
 | [`scheduler/README.md`](scheduler/README.md) | Scheduler parameters and routing strategies. |
 | [`doc/blog`](doc/blog) | Development logs and update notes. |
-| [`doc/integrations/lmcache.md`](doc/integrations/lmcache.md) | CacheRoute integration with LMCache. |
