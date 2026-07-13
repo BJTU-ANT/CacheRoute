@@ -4,9 +4,7 @@ The `core/` module contains shared configuration, request data structures, and f
 
 It provides the common runtime interface that connects CacheRoute components together.
 
----
-
-## Module Overview
+## Module overview
 
 ```text
 core/
@@ -25,8 +23,6 @@ Main responsibilities:
 - normalize OpenAI-compatible requests into CacheRoute request metadata;
 - provide common forwarding utilities for component communication.
 
----
-
 ## Configuration
 
 Most default runtime parameters are centralized in:
@@ -42,7 +38,7 @@ The configuration is grouped by component:
 | Client | Required and optional OpenAI-compatible request fields. |
 | Scheduler | Scheduler service plane, control plane, strategy, retrieval, and heartbeat settings. |
 | Proxy | Proxy service plane, control plane, Instance pool, queue, and topology settings. |
-| Instance | Instance service plane, control plane, vLLM URL, Redis, and KDN topology settings. |
+| Instance | Instance service plane, control plane, vLLM URL, Redis, KDN topology, and resource monitoring settings. |
 | KDN Server | KDN service address, network simulation, Redis rewrite, and KVCache build defaults. |
 | Other | Legacy or reserved configuration fields. |
 
@@ -51,25 +47,56 @@ The default configuration uses loopback addresses for single-machine demos.
 ```text
 Scheduler service plane:  http://127.0.0.1:7001
 Scheduler control plane:  http://127.0.0.1:7002
-
 Proxy service plane:      http://127.0.0.1:8001
 Proxy control plane:      http://127.0.0.1:8002
-
 Instance service plane:   http://127.0.0.1:9001
 Instance control plane:   http://127.0.0.1:9002
-
+Resource Agent:           http://127.0.0.1:9201
 KDN Server:               http://127.0.0.1:9101
 vLLM backend:             http://127.0.0.1:8000
 Redis:                    127.0.0.1:6379
 ```
 
----
+## Instance resource monitoring configuration
 
-## Request Model
+The demo resource monitor defaults live in the Instance section of `core/config.py`.
+
+| Variable | Default | Description |
+|---|---:|---|
+| `INSTANCE_RESOURCE_MONITOR_ENABLE` | `True` | Enable demo resource monitoring by default in `test/demo_instance.py`. |
+| `INSTANCE_RESOURCE_AUTO_START_AGENT` | `True` | Auto-start the Rust Resource Agent when it is not reachable. |
+| `INSTANCE_RESOURCE_AGENT_HOST` | `127.0.0.1` | Agent host for local demos. |
+| `INSTANCE_RESOURCE_AGENT_PORT` | `9201` | Agent port. |
+| `INSTANCE_RESOURCE_AGENT_LISTEN` | `127.0.0.1:9201` | Agent listen address passed to the Rust binary. |
+| `INSTANCE_RESOURCE_AGENT_URL` | `http://127.0.0.1:9201` | Agent base URL used by the reporter. |
+| `INSTANCE_RESOURCE_AGENT_SAMPLE_INTERVAL_MS` | `1000` | Agent sampling interval. |
+| `INSTANCE_RESOURCE_AGENT_START_TIMEOUT_S` | `60.0` | Max wait time for agent readiness. |
+| `INSTANCE_RESOURCE_REPORT_ENABLE` | `False` | Base default. `demo_instance.py` enables reporting when monitoring is enabled unless `--no-resource-report` is passed. |
+| `INSTANCE_RESOURCE_REPORT_HZ` | `1.0` | Default report frequency. |
+| `INSTANCE_RESOURCE_REPORT_INTERVAL_MS` | `1000` | Default report interval. Explicit CLI interval overrides Hz. |
+| `INSTANCE_RESOURCE_REPORT_TIMEOUT_S` | `2.0` | HTTP timeout for snapshot/report calls. |
+
+Common overrides:
+
+```bash
+export INSTANCE_RESOURCE_MONITOR_ENABLE=0
+export INSTANCE_RESOURCE_AGENT_LISTEN=127.0.0.1:19201
+export INSTANCE_RESOURCE_AGENT_URL=http://127.0.0.1:19201
+export INSTANCE_RESOURCE_REPORT_INTERVAL_MS=500
+```
+
+`test/demo_instance.py` also exposes CLI flags for the same settings:
+
+```bash
+python3 test/demo_instance.py \
+  --resource-agent-listen 127.0.0.1:19201 \
+  --resource-agent-url http://127.0.0.1:19201 \
+  --resource-report-interval-ms 500
+```
+
+## Request model
 
 CacheRoute converts user requests into an internal `Request` object before scheduling.
-
-The internal request contains three main parts:
 
 ```text
 Request
@@ -104,14 +131,13 @@ Request
 | `Injection_type` | Knowledge injection mode, such as `text` or `kvcache`. |
 | `Enable_compress` | Whether KVCache compression is enabled. Reserved for future extension. |
 | `Compress_factor` | KVCache compression factor. |
-| `Enable_security` | Whether security mode is enabled. Reserved for future extension. |
 | `Knowledge_block_num` | Number of knowledge blocks to retrieve. |
 | `Knowledge_List` | Selected knowledge IDs. |
 | `Knowledge_length` | Total token length of selected knowledge. |
 | `SLO_TTFT` | Time-to-first-token SLO in milliseconds. |
 | `SLO_E2E` | End-to-end latency SLO in milliseconds. |
 | `SLO_TPOT` | Time-per-output-token SLO in milliseconds. |
-| `Endpoint_type` | OpenAI-compatible endpoint type, such as `chat/completions` or `completions`. |
+| `Endpoint_type` | OpenAI-compatible endpoint type. |
 
 ### Task
 
@@ -119,90 +145,33 @@ Request
 
 | Field | Description |
 |---|---|
-| `User_addr` | User address. |
-| `KDN_server_addr` | Selected KDN server address. |
-| `default_know_addr` | Default knowledge source address. |
 | `P_proxy_id` | Selected Proxy ID. |
 | `P_proxy_addr` | Selected Proxy address. |
 | `P_proxy_port` | Selected Proxy service-plane port. |
-| `D_proxy_addr` | Decode Proxy address. Reserved for PD extension. |
-| `D_proxy_port` | Decode Proxy port. Reserved for PD extension. |
+| `KDN_server_addr` | Selected KDN server address. |
 | `prefill_instance` | Selected prefill Instance. Reserved or filled by later stages. |
-| `decode_instance` | Selected decode Instance. Reserved for PD extension. |
-| `batch_order` | Reserved batch order field. |
 | `User_url_path` | Original user request endpoint path. |
 
----
-
-## Request Building Workflow
-
-`Request.build_request()` is used by the Scheduler to convert a user request into a CacheRoute internal request.
+## Request building workflow
 
 ```text
 OpenAI-compatible request
   └──> Request.build_request()
-          ├── parse endpoint type
-          ├── extract user prompt
-          ├── estimate prompt token length
-          ├── parse generation options
-          ├── parse RAG and Injection_type options
-          ├── retrieve knowledge if RAG is enabled
-          ├── call scheduling strategy
-          └── generate Request payload for Proxy
+        ├── parse endpoint type
+        ├── extract user prompt
+        ├── estimate prompt token length
+        ├── parse generation options
+        ├── parse RAG and Injection_type options
+        ├── retrieve knowledge if RAG is enabled
+        ├── call scheduling strategy
+        └── generate Request payload for Proxy
 ```
 
-Supported request formats:
+Supported request formats include OpenAI-compatible `chat/completions`, `completions`, and the older `user_prompt` style.
 
-### Chat completion
-
-```json
-{
-  "model": "llama3-70b",
-  "messages": [
-    {"role": "user", "content": "Tell me about CacheRoute."}
-  ],
-  "RAG": true,
-  "Injection_type": "kvcache",
-  "max_tokens": 128,
-  "temperature": 0,
-  "stream": true
-}
-```
-
-### Completion
-
-```json
-{
-  "model": "llama3-70b",
-  "prompt": "Tell me about CacheRoute.",
-  "RAG": true,
-  "Injection_type": "text",
-  "max_tokens": 128,
-  "temperature": 0
-}
-```
-
-### Legacy format
-
-```json
-{
-  "model": "llama3-70b",
-  "user_prompt": "Tell me about CacheRoute."
-}
-```
-
----
-
-## Knowledge Retrieval
+## Knowledge retrieval
 
 When `RAG` is enabled and the Scheduler has an initialized knowledge table, `Request.build_request()` calls the knowledge retriever to select related knowledge blocks.
-
-The retriever:
-
-1. encodes the user prompt into an embedding;
-2. searches the knowledge table;
-3. filters results by score and ratio thresholds;
-4. returns selected knowledge IDs and total knowledge length.
 
 Relevant configuration:
 
@@ -221,11 +190,7 @@ Request.Service.Knowledge_List
 Request.Service.Knowledge_length
 ```
 
-These fields are later used by the Scheduler, Proxy, and KDN Server.
-
----
-
-## Injection Type
+## Injection type
 
 CacheRoute supports two main knowledge injection modes:
 
@@ -234,173 +199,45 @@ CacheRoute supports two main knowledge injection modes:
 | `text` | Fetch knowledge text and prepend or insert it into the prompt. |
 | `kvcache` | Reuse prepared KVCache blocks through KDN and LMCache. |
 
-The request parser normalizes common aliases:
+Common aliases are normalized:
 
 ```text
 kvcache, kv, kv_cache, kv-cache  -> kvcache
 text, prompt                     -> text
 ```
 
-If `Injection_type` is missing, CacheRoute currently defaults to:
+If `Injection_type` is missing, CacheRoute currently defaults to `kvcache`. The Proxy may override this mode when the IWS injection strategy is enabled.
 
-```text
-kvcache
-```
+## Component address configuration
 
-The Proxy may later override this mode when the IWS injection strategy is enabled.
-
----
-
-## Component Address Configuration
-
-CacheRoute components use both service-plane and control-plane addresses.
-
-| Component | Service Plane | Control Plane |
+| Component | Service plane | Control plane |
 |---|---|---|
 | Scheduler | Receives user requests. | Receives Proxy and KDN registration / heartbeat. |
-| Proxy | Receives Scheduler-forwarded requests. | Receives Instance registration / heartbeat and topology reports. |
-| Instance | Receives Proxy-forwarded inference requests. | Receives KVCache injection commands. |
+| Proxy | Receives Scheduler-forwarded requests. | Receives Instance registration, heartbeat, topology, and resource snapshots. |
+| Instance | Receives Proxy-forwarded requests. | Receives KVCache injection commands. |
 | KDN Server | Serves knowledge query and KVCache metadata. | Reports metadata to Scheduler. |
 
-Default single-machine configuration:
+For multi-machine experiments, replace loopback addresses with reachable network addresses. Use `0.0.0.0` only for service binding and use the actual machine IP when advertising a component to other machines.
 
-```python
-SCHEDULER_BASE_URL = "http://127.0.0.1:7001"
-SCHEDULER_CP_URL   = "http://127.0.0.1:7002"
-SCHEDULER_DP_HOST  = "127.0.0.1"
-SCHEDULER_CP_HOST  = "127.0.0.1"
-
-PROXY_BASE_URL = "http://127.0.0.1:8001"
-PROXY_CP_URL   = "http://127.0.0.1:8002"
-PROXY_DP_HOST  = "127.0.0.1"
-PROXY_CP_HOST  = "127.0.0.1"
-
-INSTANCE_BASE_URL = "http://127.0.0.1:9001"
-INSTANCE_HOST     = "127.0.0.1"
-INSTANCE_CP_HOST  = "127.0.0.1"
-
-KDN_BASE_URL = "http://127.0.0.1:9101"
-KDN_HOST     = "127.0.0.1"
-```
-
----
-
-## Multi-machine Deployment Example
-
-For multi-machine experiments, replace loopback addresses with reachable network addresses.
-
-Example setup:
-
-```text
-Inference server: 172.18.0.169
-KDN server:       172.18.0.171
-```
-
-In this example, Scheduler, Proxy, Instance, vLLM, and Redis run on `172.18.0.169`, while KDN runs on `172.18.0.171`.
-
-### On the inference server: 172.18.0.169
-
-Configure Scheduler:
-
-```python
-SCHEDULER_BASE_URL = "http://172.18.0.169:7001"
-SCHEDULER_CP_URL   = "http://172.18.0.169:7002"
-
-SCHEDULER_DP_HOST = "0.0.0.0"
-SCHEDULER_CP_HOST = "0.0.0.0"
-```
-
-Configure Proxy:
-
-```python
-PROXY_BASE_URL = "http://172.18.0.169:8001"
-PROXY_CP_URL   = "http://172.18.0.169:8002"
-
-PROXY_DP_HOST = "0.0.0.0"
-PROXY_CP_HOST = "0.0.0.0"
-```
-
-Configure Instance:
-
-```python
-INSTANCE_BASE_URL = "http://172.18.0.169:9001"
-
-INSTANCE_HOST    = "0.0.0.0"
-INSTANCE_CP_HOST = "0.0.0.0"
-
-INSTANCE_REDIS_HOST = "127.0.0.1"
-INSTANCE_REDIS_PORT = 6379
-
-INSTANCE_TOPOLOGY_KDN_TARGETS = "http://172.18.0.171:9101"
-```
-
-If KDN needs to inject KVCache into the Redis backend on the inference server, make sure Redis is reachable from the KDN server. In that case, `127.0.0.1` should not be used from the KDN side.
-
-### On the KDN server: 172.18.0.171
-
-Configure KDN:
-
-```python
-KDN_BASE_URL = "http://172.18.0.171:9101"
-KDN_HOST     = "0.0.0.0"
-KDN_PORT     = 9101
-
-SCHEDULER_CP_URL = "http://172.18.0.169:7002"
-```
-
-If the upstream request passes Redis as `127.0.0.1`, enable Redis host rewriting so that KDN connects to the Redis service on the inference server:
-
-```python
-KDN_REDIS_REWRITE_ENABLE = True
-KDN_FORCE_REDIS_HOST = "172.18.0.169"
-```
-
-or use environment variables:
-
-```bash
-export KDN_REDIS_REWRITE_ENABLE=1
-export KDN_FORCE_REDIS_HOST=172.18.0.169
-```
-
----
-
-## Environment Variable Overrides
-
-Many runtime settings can be overridden by environment variables before starting each component.
-
-Example:
-
-```bash
-export SCHEDULER_CP_URL=http://172.18.0.169:7002
-export PROXY_ADVERTISE_HOST=172.18.0.169
-export PROXY_ADVERTISE_PORT=8001
-export KDN_FORCE_REDIS_HOST=172.18.0.169
-```
-
-This is useful when running the same codebase across multiple machines or containers.
-
----
-
-## Connectivity Checklist
-
-Before running a multi-machine experiment, check the following connections.
+## Connectivity checklist
 
 From Proxy / Instance machine:
 
 ```bash
-curl http://172.18.0.171:9101/healthz
+curl http://127.0.0.1:8002/healthz
+curl http://127.0.0.1:9201/healthz
 ```
 
 From KDN machine:
 
 ```bash
-curl http://172.18.0.169:7002/healthz
+curl http://<scheduler-host>:7002/healthz
 ```
 
 Check Redis reachability from the KDN machine:
 
 ```bash
-redis-cli -h 172.18.0.169 -p 6379 ping
+redis-cli -h <instance-host> -p 6379 ping
 ```
 
 Check vLLM reachability from the Instance machine:
@@ -409,21 +246,9 @@ Check vLLM reachability from the Instance machine:
 curl http://127.0.0.1:8000/v1/models
 ```
 
-If these checks fail, verify firewall rules, Docker network mode, host binding addresses, and Redis binding configuration.
-
----
-
 ## Notes
 
 - The default configuration is designed for single-machine demos.
-- For multi-machine experiments, replace all externally accessed `127.0.0.1` addresses with reachable host IPs.
-- Use `0.0.0.0` only for service binding. Use the actual machine IP when advertising a component to other machines.
-- KDN-to-Redis access is a common source of deployment errors. If Redis is local to the Instance machine, KDN must use the Instance machine IP rather than `127.0.0.1`.
+- Resource monitoring is enabled by default in `demo_instance.py`, but can be disabled with `--no-resource-monitor` or `INSTANCE_RESOURCE_MONITOR_ENABLE=0`.
+- KDN-to-Redis access is a common deployment error. If Redis is local to the Instance machine, KDN must use the Instance machine IP rather than `127.0.0.1`.
 - Some fields in `core/config.py` are reserved for future features such as PD disaggregation, Mooncake integration, and synchronization modes.
-
-### Core
-涉及关键方法、结构体定义
-
-- config.py:关键配置信息接口
-- fwd.py: vLLM自带的http请求收发接口
-- model_calculation.py:
