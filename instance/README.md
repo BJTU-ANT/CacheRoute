@@ -1,225 +1,561 @@
-# TTFT Predictor
+# CacheRoute Instance
 
-`TTFT_predictor` 用于估计和在线校准 LLM 请求的 `TTFT`（Time To First Token，首 token 延迟）。
+The `instance/` directory contains the local serving adapter that sits between the Proxy and a real or mocked LLM backend. An Instance receives OpenAI-compatible requests from the Proxy, exposes a small control plane for KVCache injection, registers itself with the Proxy control plane, and can report local resource snapshots through the Rust Resource Agent demo path.
 
-这个目录里的代码主要面向两类场景：
+The Instance is intentionally lightweight: it adapts request/response formats, maintains control-plane connectivity, and delegates model execution to vLLM or a mock backend. It does not choose global routes and it does not own Scheduler-level policy.
 
-1. 在调度器里快速预测在给定 `batch_size` 和 `prompt_length` 下的 TTFT。
-2. 通过真实请求对预测模型做 warmup 和在线数据回流更新。
+---
 
-当前实现：
+## Role in CacheRoute
 
-- `prefill_regressor.py` + `prefill_predictor.py` + `prefill_prediction_server.py`
-
-
-## 目录结构
-
-- `[prefill_regressor.py]`：线性回归器，负责收集训练数据、拟合模型、发起 warmup 请求和执行预测。
-- `[prefill_predictor.py]`：对外提供异步接口，管理单例回归器，支持预测、数据回流和详细 warmup。
-- `[prefill_prediction_server.py]`：FastAPI 服务，对外暴露 HTTP 接口。
-- `[request_generator.py]`：根据目标 token 数生成 prompt，并向 vLLM 发送测试请求。
-- `[local_test.py]`：本地测量 TTFT 的辅助函数。
-
-## 核心思路
-
-模型使用一个简单的线性特征组合来拟合 TTFT：
-
-`TTFT ~= a * (batch_size * prompt_length) + b * prompt_length + c * batch_size + d`
-
-其中：
-
-- `batch_size * prompt_length` 反映 prefill 计算量
-- `prompt_length` 反映单请求上下文长度
-- `batch_size` 反映批大小本身带来的调度/排队影响
-
-这一近似模型的优点是：
-
-- 推理非常快，适合调度器实时调用
-- 易于通过在线采样持续校准
-- 很适合做 warmup 后的近似预测
-
-## 工作流程文档
-
-函数调用关系、服务启动链路、后台预热线路、`/predict` 与 `/report_prefill` 的触发路径，已经单独整理在：
-
-`[WORKFLOW.md]`
-
-## 依赖
-
-建议的 Python 依赖至少包括：
-
-```bash
-pip install numpy aiohttp scikit-learn transformers fastapi uvicorn pydantic
+```text
+Client
+  -> Scheduler
+      -> Proxy
+          -> Instance
+              -> vLLM / LMCache / Redis
 ```
 
-如果你在 Linux 服务器上运行，还需要保证：
+The Instance is the last CacheRoute component before the actual inference backend.
 
-- 可以访问目标 vLLM 服务
-- `tokenizer_path` 对应模型的 tokenizer 可加载
+It is responsible for:
 
-## 使用方式
+- exposing OpenAI-compatible service endpoints for the Proxy;
+- forwarding requests to vLLM when real serving is enabled;
+- providing mock responses for local control-plane validation;
+- registering, heartbeating, and unregistering with the local Proxy;
+- exposing an Instance control plane for KVCache injection acknowledgement;
+- optionally probing Instance-to-KDN topology;
+- running demo-managed resource monitoring through the Rust Resource Agent path.
 
-### 方式 1：作为 Python 模块直接调用
+It is not responsible for:
 
-最常用的接口在 `[prefill_predictor.py]`。
+- choosing the target Proxy;
+- selecting KDN servers;
+- deciding text vs KVCache injection policy;
+- resource-aware Instance selection inside the Proxy.
 
-可用接口：
+Those decisions live in Scheduler and Proxy layers.
 
-- `predict_ttft(batch_size, prompt_length)`：预测 TTFT，返回秒
-- `update_prefill_data(batch_size, prompt_length, prefill_time)`：上报真实 prefill 时间
-- `perform_detailed_warmup(...)`：执行真实 warmup 和模型拟合
+---
 
-示例：
+## Directory Structure
+
+```text
+instance/
+├── README.md
+├── instance_api.py                  # Instance service plane and startup lifecycle
+├── control_plane.py                 # Instance control-plane API for KVCache injection
+├── kv_service.py                    # KVCache injection / reuse helper logic
+├── mock_resp.py                     # Mock OpenAI-compatible responses for local testing
+├── pclient/
+│   └── proxy_client.py              # Instance -> Proxy control-plane client
+├── resource_agent/
+│   ├── README.md
+│   ├── Cargo.toml
+│   ├── proxy_reporter.py            # Standalone snapshot reporter and shared report helper
+│   └── src/main.rs                  # Native Rust Resource Agent
+├── resource_dashboard/
+│   ├── README.md
+│   ├── dashboard_app.py             # Tkinter local dashboard
+│   ├── dashboard_server.py          # Browser dashboard fallback
+│   └── static/
+└── TTFT_predictor/
+    ├── WORKFLOW.md
+    ├── prefill_prediction_server.py
+    ├── prefill_predictor.py
+    ├── prefill_regressor.py
+    └── request_generator.py
+```
+
+---
+
+## Runtime Planes
+
+The Instance has two HTTP planes.
+
+| Plane | Default Port | Main File | Purpose |
+|---|---:|---|---|
+| Service plane | `9001` | `instance_api.py` | Receives Proxy-forwarded OpenAI-compatible inference requests. |
+| Control plane | `9002` | `control_plane.py` | Receives KVCache injection notifications and local control requests. |
+
+The Rust Resource Agent is a separate demo-owned sidecar, not part of the normal request path.
+
+| Component | Default Port | Purpose |
+|---|---:|---|
+| Rust Resource Agent | `9201` | Exposes CPU, memory, network, GPU, and admission-state snapshots. |
+| Resource Dashboard server | `9202` | Browser dashboard for local inspection. |
+
+---
+
+## Service Plane
+
+`instance_api.py` exposes OpenAI-compatible endpoints:
+
+```text
+POST /v1/chat/completions
+POST /v1/completions
+```
+
+The Proxy forwards requests to these endpoints after knowledge preparation and Instance selection.
+
+### Chat completion
+
+For `POST /v1/chat/completions`, the Instance supports both streaming and non-streaming behavior.
+
+When `USE_MOCK=True`, it returns mock responses from `mock_resp.py`. When real vLLM mode is enabled, it forwards the body to:
+
+```text
+<VLLM_BASE_URL>/v1/chat/completions
+```
+
+and streams or returns the upstream response.
+
+### Completion
+
+For `POST /v1/completions`, the Instance follows the same adapter pattern and forwards to the vLLM-compatible completion endpoint when mock mode is disabled.
+
+---
+
+## Startup Lifecycle
+
+A normal demo startup uses `test/demo_instance.py`, which sets environment variables and then imports `instance.instance_api`.
+
+```text
+demo_instance.py
+  -> resolve CLI/env/config
+  -> set INSTANCE_ADVERTISE_HOST / INSTANCE_ADVERTISE_PORT
+  -> create DemoResourceMonitor if enabled
+  -> import instance_api
+  -> uvicorn.run(instance)
+```
+
+During the FastAPI lifespan in `instance_api.py`, the Instance performs:
+
+```text
+Instance lifespan
+  -> start local Instance control plane
+  -> register with Proxy control plane
+  -> start heartbeat loop
+  -> start demo resource monitoring after successful registration
+  -> optionally run Instance-to-KDN topology discovery
+  -> serve requests
+  -> on shutdown: stop heartbeat, unregister, close client, stop control plane, clean demo-owned agent
+```
+
+The registration target is configured by:
+
+```text
+PROXY_CP_URL = http://127.0.0.1:8002
+```
+
+The advertised Instance address is controlled by:
+
+```text
+INSTANCE_ADVERTISE_HOST
+INSTANCE_ADVERTISE_PORT
+```
+
+`test/demo_instance.py` keeps the advertised address aligned with the actual bind address by default.
+
+---
+
+## Proxy Registration and Heartbeat
+
+The Instance uses `instance/pclient/proxy_client.py` to call the Proxy control plane.
+
+Registration:
+
+```text
+POST /v1/instance/register
+```
+
+Heartbeat:
+
+```text
+POST /v1/instance/heartbeat
+```
+
+Unregister:
+
+```text
+POST /v1/instance/unregister
+```
+
+The default runtime Instance ID is:
+
+```text
+hp_<host>:<port>
+```
+
+For example:
+
+```text
+hp_127.0.0.1:9001
+```
+
+If Proxy registration fails, the Instance service can keep running for local debugging, but resource reporting to Proxy is skipped because the Proxy would reject reports from an unknown Instance.
+
+---
+
+## KVCache Injection Control Plane
+
+The Instance control plane is started automatically during `instance_api.py` lifespan.
+
+The Proxy uses this path when it decides to use KVCache injection. The high-level flow is:
+
+```text
+Proxy prepare queue
+  -> classify knowledge as kv_ready / text_only / miss
+  -> reserve KDN-to-Instance KV transfer
+  -> call Instance control plane
+      POST /v1/kv/inject_ready
+  -> wait for acknowledgement
+  -> move task to ready queue
+  -> forward request to Instance service plane
+```
+
+The Instance control plane receives metadata such as:
+
+```text
+request_id
+kdn_addr
+model
+knowledge_ids
+```
+
+`kv_service.py` contains the local helper logic for KVCache injection / reuse behavior. The exact Redis and LMCache behavior depends on the runtime environment and the downstream vLLM + LMCache setup.
+
+---
+
+## Resource Monitoring Path
+
+The current resource-monitoring path was added for demo observability and later scheduling integration.
+
+The demo path is:
+
+```text
+test/demo_instance.py
+  -> start or reuse Rust Resource Agent
+  -> wait for /healthz
+  -> after Proxy registration succeeds, periodically fetch /v1/resource/snapshot
+  -> report snapshot to Proxy control plane
+  -> Proxy stores normalized fields in InstancePool.resource
+```
+
+Proxy-side APIs for inspection:
+
+```bash
+curl -sS "http://127.0.0.1:8002/debug/instance_resources" | python3 -m json.tool
+curl -sS "http://127.0.0.1:8002/v1/instance/list?include_dead=true" | python3 -m json.tool
+```
+
+The resource snapshot currently includes:
+
+- CPU utilization and load averages;
+- memory used/free/total;
+- network RX/TX throughput;
+- optional GPU utilization, memory, temperature, and power;
+- admission-state hints;
+- collection and reporting timestamps.
+
+The Proxy stores resource data for observation only. It does not yet use these fields for Instance selection.
+
+### Resource report metadata
+
+`proxy_reporter.py` includes report metadata so the Proxy can distinguish fresh data from stale data:
+
+```text
+reported_instance_id
+report_monotonic_ms
+report_wall_time_ms
+agent_snapshot_timestamp_ms
+```
+
+The Proxy normalizes these into `InstancePool.resource` fields such as:
+
+```text
+resource_ts_ms
+resource_reported_at
+resource_report_monotonic_ms
+resource_report_wall_time_ms
+reported_instance_id
+```
+
+---
+
+## Quick Start
+
+Start the Proxy first:
+
+```bash
+cd test
+python3 demo_proxy.py \
+  --host 127.0.0.1 \
+  --port 8001 \
+  --strategy round_robin \
+  --injection-strategy iws
+```
+
+Start one Instance:
+
+```bash
+cd test
+python3 demo_instance.py \
+  --host 127.0.0.1 \
+  --port 9001 \
+  --proxy-cp-url http://127.0.0.1:8002
+```
+
+By default, `demo_instance.py` enables resource monitoring for the demo path. It starts or reuses the Rust Resource Agent at `127.0.0.1:9201`, waits for readiness, and starts reporting only after Proxy registration succeeds.
+
+Disable resource monitoring when needed:
+
+```bash
+python3 demo_instance.py \
+  --host 127.0.0.1 \
+  --port 9001 \
+  --proxy-cp-url http://127.0.0.1:8002 \
+  --no-resource-monitor
+```
+
+Use a non-default Resource Agent port:
+
+```bash
+python3 demo_instance.py \
+  --host 127.0.0.1 \
+  --port 9001 \
+  --proxy-cp-url http://127.0.0.1:8002 \
+  --resource-agent-listen 127.0.0.1:19201 \
+  --resource-agent-url http://127.0.0.1:19201
+```
+
+---
+
+## Configuration
+
+Most defaults are defined in `core/config.py`.
+
+Common Instance settings:
 
 ```python
-import asyncio
-from prefill_predictor import predict_ttft, update_prefill_data
-
-async def main():
-    pred = await predict_ttft(batch_size=4, prompt_length=1024)
-    print(f"predicted ttft = {pred:.4f}s")
-
-    await update_prefill_data(
-        batch_size=4,
-        prompt_length=1024,
-        prefill_time=0.185
-    )
-
-asyncio.run(main())
+INSTANCE_BASE_URL = "http://127.0.0.1:9001"
+INSTANCE_HOST = "127.0.0.1"
+INSTANCE_PORT = 9001
+INSTANCE_CP_HOST = "127.0.0.1"
+INSTANCE_CP_PORT = 9002
+VLLM_BASE_URL = "http://127.0.0.1:8000"
+USE_MOCK = False
 ```
 
-说明：
+Resource-monitoring settings:
 
-- 第一次调用 `predict_ttft` 时会初始化回归器
-- 如果还没有真实 warmup 数据，会先用少量 dummy data 启动
-- 后续可以持续调用 `update_prefill_data` 做在线校准
+```python
+INSTANCE_RESOURCE_MONITOR_ENABLE = True
+INSTANCE_RESOURCE_AUTO_START_AGENT = True
+INSTANCE_RESOURCE_AGENT_LISTEN = "127.0.0.1:9201"
+INSTANCE_RESOURCE_AGENT_URL = "http://127.0.0.1:9201"
+INSTANCE_RESOURCE_AGENT_SAMPLE_INTERVAL_MS = 1000
+INSTANCE_RESOURCE_AGENT_START_TIMEOUT_S = 60.0
+INSTANCE_RESOURCE_REPORT_ENABLE = False
+INSTANCE_RESOURCE_REPORT_HZ = 1.0
+INSTANCE_RESOURCE_REPORT_INTERVAL_MS = 1000
+INSTANCE_RESOURCE_REPORT_TIMEOUT_S = 2.0
+```
 
-### 方式 2：启动 HTTP 预测服务
+`demo_instance.py` enables reporting when resource monitoring is enabled, even though the base config keeps `INSTANCE_RESOURCE_REPORT_ENABLE=False` to avoid surprising non-demo imports.
 
-如果你希望调度器通过 HTTP 调用预测服务，直接运行：
+---
+
+## CLI Options in `demo_instance.py`
+
+Common options:
+
+| Option | Description |
+|---|---|
+| `--host` | Instance service-plane bind host. |
+| `--port` | Instance service-plane bind port. |
+| `--proxy-cp-url` | Proxy control-plane URL for registration and resource reporting. |
+| `--kdn-targets` | Optional KDN targets for topology discovery. |
+
+Resource-monitoring options:
+
+| Option | Description |
+|---|---|
+| `--resource-monitor` / `--no-resource-monitor` | Enable or disable the full demo resource monitor path. |
+| `--resource-agent` / `--no-resource-agent` | Auto-start or do not auto-start the Rust Resource Agent. |
+| `--resource-report` / `--no-resource-report` | Enable or disable resource reporting to Proxy. |
+| `--resource-agent-listen` | Rust agent listen address, such as `127.0.0.1:9201`. |
+| `--resource-agent-url` | Base URL used by the reporter. |
+| `--resource-agent-sample-interval-ms` | Rust agent sampling interval. |
+| `--resource-agent-start-timeout-s` | Time to wait for `/healthz`. |
+| `--resource-report-hz` | Report frequency when interval is not explicitly set. |
+| `--resource-report-interval-ms` | Explicit report interval. Overrides Hz. |
+| `--resource-report-timeout-s` | HTTP timeout for snapshot fetch and Proxy report. |
+
+---
+
+## Resource Agent Standalone Mode
+
+The Rust agent can still be run manually:
 
 ```bash
-cd instance/TTFT_predictor
-python prefill_prediction_server.py
+cargo run --manifest-path instance/resource_agent/Cargo.toml -- \
+  --listen 127.0.0.1:9201 \
+  --sample-interval-ms 1000 \
+  --instance-id hp_127.0.0.1:9001
 ```
 
-默认行为：
-
-- 服务启动时先做一次轻量初始化
-- 然后在后台异步执行真实 warmup
-- 预测接口在 warmup 未完成前也可以先返回一个可用结果
-
-默认服务地址写在代码里：
-
-- host: `172.18.0.250`
-- port: `9000`
-
-如果要改部署地址，直接修改 `[prefill_prediction_server.py]` 末尾的 `uvicorn.run(...)` 即可。
-
-## Warmup 使用说明
-
-### 轻量 warmup
-
-`prefill_predictor.py` 在首次初始化时会先注入少量 dummy data，优点是启动快，缺点是精度一般。
-
-适合场景：
-
-- 服务刚启动
-- 只想尽快得到一个大致可用的 TTFT 估计
-
-### 详细 warmup
-
-更推荐的方式是执行 `perform_detailed_warmup(...)`，它会：
-
-1. 遍历一组 `(batch_size, prompt_length)` 配置
-2. 通过 `request_generator.py` 发送真实请求
-3. 等待外部将真实 prefill 时间回流到回归器
-4. 用采集到的数据重新拟合模型
-
-默认测试范围定义在 `[prefill_predictor.py]`：
-
-- `BATCH_SIZES_TO_TEST = range(1, 9)`
-- `TOKEN_LENGTHS_TO_TEST = range(64, 2048, 64)`
-- 并过滤 `bs * pl <= 10000`
-
-你可以直接修改：
-
-- `VLLM_CONFIG_DEFAULT`
-- `WARM_UP_CONFIGS_DEFAULT`
-
-来适配你的模型、服务地址和测试范围。
-
-## 配置项说明
-
-### `VLLM_CONFIG_DEFAULT`
-
-位于 `[prefill_predictor.py]`。
-
-主要字段：
-
-- `host`：目标 vLLM 服务地址
-- `port`：目标 vLLM 服务端口
-- `model_id`：请求时使用的模型标识
-- `tokenizer_path`：本地 tokenizer 路径
-
-### `WARM_UP_CONFIGS_DEFAULT`
-
-表示 warmup 时要测试的 `(batch_size, prompt_length)` 组合。
-
-如果你模型更大或者机器更弱，建议适当缩小范围，例如减少：
-
-- 最大 `batch_size`
-- 最大 `prompt_length`
-- `repeats`
-
-否则 warmup 时间会明显变长。
-
-## 与调度器集成建议
-
-如果要把它接到调度器里，推荐使用下面的模式：
-
-1. 调度前调用 `/predict` 或 `predict_ttft(...)`
-2. 根据预测结果做请求分配或排队决策
-3. 请求完成后，把真实 prefill 时间通过 `/report_prefill` 回流
-4. 周期性或启动后执行一次 `perform_detailed_warmup(...)`
-
-这样预测器既能快速返回，又能随着真实流量持续修正。
-
-## 常见问题
-
-### 1. 为什么第一次预测不准
-
-因为模型刚启动时通常只用了 dummy data，还没有完成真实 warmup。
-
-建议：
-
-- 启动后先执行一次详细 warmup
-- 或者让系统运行一段时间，持续回流真实 prefill 数据
-
-### 2. 为什么预测值会是 0 或非常小
-
-常见原因：
-
-- 模型还没拟合成功
-- 输入数据非法
-- 上报的 `prefill_time_seconds` 被过滤掉了
-
-当前过滤逻辑会丢弃：
-
-- 小于 `0.001s`
-- 大于 `60s`
-
-### 3. 为什么 prompt 长度和真实 token 数不完全一致
-
-`request_generator.py` 是根据 tokenizer 近似生成目标 token 数的 prompt，实际生成文本可能会有轻微偏差。这对 warmup 一般是可接受的。
-
-## 快速开始
-
-### 直接启动服务
+Validate it directly:
 
 ```bash
-cd instance/TTFT_predictor
-python prefill_prediction_server.py
+curl -sS http://127.0.0.1:9201/healthz
+curl -sS http://127.0.0.1:9201/v1/resource/snapshot | python3 -m json.tool
 ```
-### 完成曲线拟合
-移步至`proxy/metrics/`
+
+The standalone Python reporter remains available:
+
+```bash
+python3 instance/resource_agent/proxy_reporter.py \
+  --agent-url http://127.0.0.1:9201 \
+  --proxy-cp-url http://127.0.0.1:8002 \
+  --instance-id hp_127.0.0.1:9001 \
+  --once
+```
+
+---
+
+## Resource Dashboard
+
+For local resource visualization, use:
+
+```text
+instance/resource_dashboard/
+```
+
+Two dashboard modes are available:
+
+| Mode | File | Use case |
+|---|---|---|
+| Desktop | `dashboard_app.py` | Local machine with a GUI display. |
+| Browser | `dashboard_server.py` | Containers, remote machines, and headless servers. |
+
+The dashboard is a local observability tool. It can start or connect to the Rust Resource Agent, but it is separate from Proxy resource reporting.
+
+---
+
+## TTFT Predictor
+
+`instance/TTFT_predictor/` contains an experimental TTFT / prefill prediction subsystem.
+
+Main files:
+
+| File | Purpose |
+|---|---|
+| `prefill_regressor.py` | Collects warmup samples and fits the regression model. |
+| `prefill_predictor.py` | Provides async prediction and online update helpers. |
+| `prefill_prediction_server.py` | Exposes the predictor as a FastAPI service. |
+| `request_generator.py` | Generates prompts of target token lengths for warmup. |
+| `WORKFLOW.md` | Describes predictor call paths and warmup workflow. |
+
+The simplified model is based on features such as:
+
+```text
+batch_size * prompt_length
+prompt_length
+batch_size
+```
+
+This predictor is separate from the Resource Agent path. The Resource Agent observes host/device state; the TTFT predictor estimates model prefill latency.
+
+---
+
+## End-to-End Resource Monitor Smoke Test
+
+Run:
+
+```bash
+python3 test/demo_resource_monitor_e2e.py \
+  --agent-listen 127.0.0.1:19201 \
+  --agent-url http://127.0.0.1:19201
+```
+
+The script starts `demo_proxy.py` and `demo_instance.py`, waits until the Proxy observes resource reports, terminates the Instance, and checks that the demo-owned Resource Agent is no longer reachable.
+
+Use a non-default agent port to avoid accidentally reusing an already running agent on `9201`.
+
+---
+
+## Troubleshooting
+
+### Proxy shows `unknown_instance`
+
+Start the Proxy before the Instance:
+
+```bash
+python3 test/demo_proxy.py --host 127.0.0.1 --port 8001
+python3 test/demo_instance.py --host 127.0.0.1 --port 9001 --proxy-cp-url http://127.0.0.1:8002
+```
+
+Also check for stale demo processes or containers that still send heartbeat messages with old `INSTANCE_ID` values.
+
+### `cargo: command not found`
+
+Install Rust/Cargo or use the CacheRoute development image that includes Rust.
+
+### Resource Agent fails with Cargo lockfile errors
+
+Use a recent stable Rust toolchain:
+
+```bash
+rustup update stable
+rustup default stable
+```
+
+Avoid mixing root-owned build artifacts and non-root cargo commands. If needed, remove the Rust build directory:
+
+```bash
+rm -rf instance/resource_agent/target
+```
+
+### Port `9201` is already in use
+
+Use another agent port:
+
+```bash
+python3 test/demo_instance.py \
+  --resource-agent-listen 127.0.0.1:19201 \
+  --resource-agent-url http://127.0.0.1:19201
+```
+
+### GPU list is empty
+
+Check whether the process can run:
+
+```bash
+nvidia-smi
+```
+
+Inside Docker, make sure the container was started with GPU access, for example `--gpus all`.
+
+---
+
+## Current Status
+
+Completed:
+
+- Instance service-plane adapter for Proxy-forwarded OpenAI-compatible requests.
+- Instance control-plane registration and heartbeat with Proxy.
+- KVCache injection control-plane path.
+- Demo-managed Rust Resource Agent startup and cleanup.
+- Resource snapshot reporting to Proxy after registration.
+- Proxy-side resource inspection APIs.
+- Local dashboard tools for resource snapshots.
+- Experimental TTFT prediction subsystem.
+
+Not yet implemented:
+
+- resource-aware Instance selection strategy in Proxy;
+- detailed vLLM runtime queue metrics;
+- detailed KVCache block residency metrics;
+- lower-overhead GPU collection through NVML or a similar API.
