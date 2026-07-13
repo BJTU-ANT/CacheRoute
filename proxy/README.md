@@ -1,43 +1,30 @@
 # Proxy
 
-The Proxy is the local scheduling and knowledge injection component in CacheRoute. It receives requests forwarded by the Scheduler, selects a local Instance, prepares knowledge injection, and forwards the request to the selected Instance.
+The Proxy is the local scheduling and knowledge-injection component in CacheRoute. It receives requests forwarded by the Scheduler, selects a local Instance, prepares text or KVCache injection, and forwards the request to the selected Instance.
 
-In CacheRoute, the Proxy is the second stage of the two-level scheduling pipeline:
+In the two-level CacheRoute scheduling pipeline, the Scheduler decides **which LLM system / Proxy** should receive a request, while the Proxy decides **which local Instance** should execute it and **how knowledge injection** should be performed.
 
 ```text
 Client
   └──> Scheduler
-          └──> Proxy
-                  ├── selects a local Instance
-                  ├── chooses the knowledge injection mode
-                  ├── prepares text or KVCache injection
-                  └── forwards the request to Instance / vLLM + LMCache
+        └──> Proxy
+              ├── maintains a local Instance pool
+              ├── receives Instance resource snapshots
+              ├── selects a local Instance
+              ├── prepares text or KVCache injection
+              └── forwards the request to Instance / vLLM + LMCache
 ```
 
-The Scheduler decides **where a request should go** across LLM systems. The Proxy decides **how the request should be executed** inside the selected LLM system.
+## Runtime planes
 
----
-
-## Overview
-
-The Proxy provides two planes:
-
-| Plane | Default Port | Description |
+| Plane | Default port | Description |
 |---|---:|---|
-| Service plane | `8001` | Receives requests forwarded by the Scheduler and returns Instance responses. |
-| Control plane | `8002` | Receives Instance registration, heartbeat, topology reports, and debugging queries. |
+| Service plane | `8001` | Receives Scheduler-forwarded OpenAI-compatible requests. |
+| Control plane | `8002` | Receives Instance registration, heartbeat, topology reports, resource snapshots, and debug queries. |
 
-The Proxy maintains the following runtime state:
+The Proxy can run without a Scheduler during local demos. In that case, Scheduler registration may fail non-fatally, but Instance registration and resource reporting can still be validated through the Proxy control plane.
 
-- **Instance pool:** alive Instances under this Proxy.
-- **Topology metadata:** KDN-to-Instance or KDN-to-Proxy link information.
-- **Per-instance queues:** prepare queues and ready queues for each Instance.
-- **Injection state:** text injection, KVCache injection, and related timing traces.
-- **Scheduler registration state:** Proxy registration and heartbeat with the Scheduler control plane.
-
----
-
-## Directory Structure
+## Directory structure
 
 ```text
 proxy/
@@ -46,7 +33,7 @@ proxy/
 ├── sclient/
 │   └── scheduler_client.py      # Proxy -> Scheduler control-plane client
 ├── resource/
-│   ├── instance_pool.py         # Instance pool maintained by the Proxy
+│   ├── instance_pool.py         # Instance pool and normalized resource state
 │   ├── p_control_plane.py       # Proxy control plane
 │   └── hb_log.py                # Heartbeat reporting
 ├── strategy/
@@ -62,171 +49,174 @@ proxy/
 └── README.md
 ```
 
----
+## Quick start
 
-## Quick Start
-
-Start the Proxy from the `test` directory:
+Start Proxy from the `test` directory:
 
 ```bash
 cd test
-
 python3 demo_proxy.py \
+  --host 127.0.0.1 \
+  --port 8001 \
   --strategy round_robin \
-  --injection-strategy iws \
-  --ready-release-policy text_bypass \
-  --kdn-links-json '{"kdn_local_1":{"bandwidth_tier":3,"latency_tier":1},"kdn_local_2":{"bandwidth_tier":1,"latency_tier":3}}'
+  --injection-strategy iws
 ```
 
-Main options:
+Common options:
 
 | Option | Description |
 |---|---|
-| `--strategy` | Local Instance selection strategy. Currently `round_robin` is supported. |
+| `--host` | Proxy service-plane bind host. The demo also uses it as the advertised host. |
+| `--port` | Proxy service-plane bind port. The demo also uses it as the advertised port. |
+| `--strategy` | Local Instance selection strategy. Currently `round_robin` is the active demo path. |
 | `--injection-strategy` | Knowledge injection strategy. Use `default` or `iws`. |
-| `--ready-release-policy` | Ready-queue release policy. Use `ordered` or `text_bypass`. |
-| `--kdn-links-json` | Static KDN topology metadata reported to the Scheduler. |
+| `--ready-release-policy` | Ready queue release policy: `ordered` or `text_bypass`. |
+| `--kdn-links-json` | Optional static KDN topology metadata. |
 
-Example for a minimal Proxy startup:
-
-```bash
-cd test
-python3 demo_proxy.py --strategy round_robin
-```
-
----
-
-## Startup Lifecycle
-
-When the Proxy starts, it performs the following steps:
+## Startup lifecycle
 
 ```text
 Proxy startup
-  ├── initialize Instance pool
-  ├── start Proxy control plane
-  ├── load local Instance selection strategy
-  ├── register itself to the Scheduler control plane
-  ├── report topology metadata to the Scheduler
+  ├── initialize InstancePool
+  ├── start Proxy control plane on :8002
+  ├── load Instance selection strategy
+  ├── register to Scheduler control plane, non-fatal for local demos
+  ├── report topology metadata to Scheduler, if configured
   └── start heartbeat loop
 ```
 
-The Proxy can still run locally if Scheduler registration fails, but the Scheduler will not be able to route requests to it until registration succeeds.
+During shutdown, the Proxy tries to unregister from the Scheduler. If the process is killed directly, Scheduler removes it after heartbeat expiry.
 
-During shutdown, the Proxy tries to unregister itself from the Scheduler. If the process is killed directly, the Scheduler removes it after its heartbeat expires.
+## Control-plane APIs
 
----
+### Health
 
-## Control Plane
-
-The Proxy control plane maintains local Instance state and topology information.
+```text
+GET /healthz
+```
 
 ### Instance management
 
 ```text
-POST /v1/instance/register       Register an Instance under this Proxy.
-POST /v1/instance/heartbeat      Update Instance runtime load.
-POST /v1/instance/unregister     Remove an Instance from the pool.
-GET  /v1/instance/list           List alive or all Instances.
+POST /v1/instance/register
+POST /v1/instance/heartbeat
+POST /v1/instance/unregister
+GET  /v1/instance/list?include_dead=true
 ```
 
-Instance heartbeats can report:
+Instances register static information such as `instance_id`, `host`, `port`, `endpoints`, `tags`, `weight`, and `meta`. Heartbeats refresh `last_seen_at` and can optionally report lightweight load fields such as `inflight`, `qps_1m`, and `gpu_util`.
+
+### Instance resource snapshots
+
+After PR #87, demo Instances can report host resource snapshots to the Proxy control plane:
 
 ```text
-inflight
-qps_1m
-gpu_util
+POST /v1/instance/resource_snapshot
+GET  /debug/instance_resources
 ```
 
-The Proxy uses this information to maintain the local Instance pool.
+The reporting path is:
+
+```text
+test/demo_instance.py
+  ├── starts or reuses Rust Resource Agent
+  ├── waits for Resource Agent /healthz
+  ├── starts reporting only after Instance registration succeeds
+  └── POSTs snapshots to Proxy /v1/instance/resource_snapshot
+```
+
+Successful snapshot updates are no longer logged on every report at `INFO`. The Proxy logs the first successful snapshot per Instance and uses debug-level logging for repeated successful updates.
+
+The resource state appears in both APIs:
+
+```bash
+curl -sS "http://127.0.0.1:8002/debug/instance_resources" | python3 -m json.tool
+curl -sS "http://127.0.0.1:8002/v1/instance/list?include_dead=true" | python3 -m json.tool
+```
+
+Normalized resource fields include:
+
+| Field | Meaning |
+|---|---|
+| `cpu_util` | CPU utilization percentage from the agent snapshot. |
+| `memory_used_mb` / `memory_total_mb` / `memory_free_mb` | Host memory snapshot. |
+| `memory_free_ratio` | Admission-oriented memory free ratio. |
+| `gpu_util_avg` | Average GPU utilization if GPUs are visible. |
+| `gpu_mem_used_mb` / `gpu_mem_total_mb` | Aggregated GPU memory. |
+| `network_rx_mbps` / `network_tx_mbps` | First observed network interface throughput. |
+| `admission_state` | Agent capacity hint, such as `accepting`, `degraded`, or `rejecting`. |
+| `resource_ts_ms` | Agent collection timestamp. |
+| `resource_reported_at` | Proxy receive time in seconds. |
+| `resource_report_monotonic_ms` | Reporter monotonic timestamp. |
+| `resource_report_wall_time_ms` | Reporter wall-clock timestamp. |
+| `reported_instance_id` | Instance ID carried by the report metadata. |
+| `raw_resource` | Raw agent snapshot retained for debugging. |
+
+Resource snapshots are currently **observability data**. They are not yet used by the active Instance selection strategy.
 
 ### Topology reporting
 
 ```text
-POST /v1/topology/report         Report KDN link metrics from an Instance.
-GET  /v1/topology/kdn_links      Show the merged KDN link snapshot.
+POST /v1/topology/report
+GET  /v1/topology/kdn_links
 ```
 
-When multiple Instances report metrics for the same KDN, the Proxy keeps the best link according to higher bandwidth and lower latency.
+Instances can report measured KDN link metrics. When multiple Instances report the same KDN, the Proxy keeps the best link using higher bandwidth and lower latency as the preference rule. The merged topology can later be reported to the Scheduler.
 
-The resulting topology metadata is reported to the Scheduler through Proxy heartbeat. The Scheduler can then use it for topology-aware Proxy selection.
+## Request workflow
 
----
-
-## Request Workflow
-
-A request forwarded by the Scheduler is processed as follows:
+A Scheduler-forwarded request is processed as follows:
 
 ```text
 Scheduler
   └──> Proxy service plane :8001
-          ├── recover Request from Scheduler payload
-          ├── build OpenAI-compatible Instance request body
-          ├── select a local Instance
-          ├── optionally run IWS injection decision
-          ├── create ProxyTask
-          ├── enqueue task into prepare queue
-          ├── prepare text or KVCache injection
-          ├── move task into ready queue
-          ├── forward request to Instance
-          └── return Instance response to Scheduler
+        ├── recover CacheRoute Request
+        ├── build OpenAI-compatible Instance request body
+        ├── select a local Instance
+        ├── optionally run IWS injection decision
+        ├── create ProxyTask
+        ├── enqueue task into prepare queue
+        ├── prepare text or KVCache injection
+        ├── move task into ready queue
+        ├── forward request to Instance
+        └── return Instance response to Scheduler
 ```
 
-The Proxy supports both OpenAI-compatible endpoints:
+Supported service-plane endpoints:
 
 ```text
 POST /v1/chat/completions
 POST /v1/completions
 ```
 
-For chat completion, the Proxy streams the downstream response back to the Scheduler. It also appends a `cacheroute_meta` SSE event before `[DONE]`, which contains CacheRoute traces such as KVCache injection status and knowledge classification results.
+For streaming chat completion, the Proxy forwards the downstream SSE stream and appends a `cacheroute_meta` SSE event before `[DONE]`. This metadata contains CacheRoute timing and injection traces.
 
----
+## Instance selection
 
-## Instance Selection
-
-The Proxy selects a local Instance before preparing the request.
-
-Current active strategy:
+The active demo strategy is:
 
 | Strategy | Description |
 |---|---|
 | `round_robin` | Selects alive Instances in round-robin order. |
-| `prefix-aware` | To be update. |
 
-The strategy reads alive Instances from the Instance pool. If no alive Instance is available, the Proxy returns:
+If no alive Instance is available, the Proxy returns:
 
 ```text
 503 no_instance
 ```
 
-The strategy interface is extensible. Additional policies, such as least-inflight or latency-aware selection, can be implemented under `proxy/strategy/`.
+The strategy interface is extensible. Future policies can use queue state, resource snapshots, prefix locality, KVCache inventory, or KDN topology.
 
----
-
-## Injection Strategy
-
-The Proxy supports two injection strategy modes.
+## Injection strategies
 
 | Mode | Description |
 |---|---|
 | `default` | Uses the injection mode carried by the Scheduler request. |
 | `iws` | Dynamically selects text injection or KVCache injection based on predicted cost. |
 
-### IWS: Injection Willingness Strategy
+The IWS mode estimates text-injection and KVCache-injection costs, then chooses KVCache only when the expected benefit is large enough.
 
-The IWS mode estimates the cost of text-based injection and KVCache-based injection, then applies the lower-cost mode when the margin is large enough.
-
-The decision considers:
-
-- current ready-queue wait time;
-- text preparation cost;
-- text prefill cost;
-- KVCache transfer cost;
-- KDN link queueing delay;
-- Redis KV loading cost;
-- residual prefill cost after KVCache reuse.
-
-The simplified decision logic is:
+Simplified cost shape:
 
 ```text
 text_total
@@ -238,47 +228,27 @@ kvcache_total
     + redis_load
     + residual_prefill
 
-kvcache_score
-  = kvcache_total
-    + kdn_queue_penalty
-
 choose KVCache if:
-  kvcache_score + decision_margin < text_total
-otherwise:
-  choose text injection
+  kvcache_total + kdn_queue_penalty + decision_margin < text_total
 ```
 
-This allows the Proxy to avoid KVCache injection when the KDN path is congested, and to use KVCache injection when the transfer cost can be hidden by queue waiting or when compute savings are large enough.
+This lets the Proxy avoid KVCache when the KDN path is congested and use KVCache when transfer latency can be hidden or prefill savings are large.
 
----
+## Prepare and ready queues
 
-## Prepare and Ready Queues
-
-The Proxy uses a two-stage queue design for each Instance.
-
-```text
-ProxyTask
-  └──> prepare queue
-          ├── fetch knowledge metadata from KDN
-          ├── classify kv-ready / text-only / missing knowledge
-          ├── build text context or trigger KVCache injection
-          └── move task to ready queue
-                  ├── reserve predicted prefill slot
-                  ├── forward request to Instance
-                  └── stream response back to Scheduler
-```
+The Proxy uses two stages for each Instance.
 
 ### Prepare queue
 
-The prepare queue handles knowledge preparation. It may:
+The prepare queue handles knowledge preparation:
 
-- fetch knowledge from the selected KDN;
-- classify requested knowledge IDs into `kv_ready`, `text_only`, and `miss`;
+- fetch knowledge from KDN;
+- classify knowledge into `kv_ready`, `text_only`, and `miss`;
 - inject retrieved text into the prompt;
-- trigger KVCache injection through the Instance control plane;
-- collect timing traces for later analysis.
+- trigger KVCache injection through Instance control plane;
+- collect timing traces.
 
-Prepare tasks can run concurrently, controlled by:
+Concurrency is controlled by:
 
 ```text
 PREPARE_CONCURRENCY
@@ -286,260 +256,119 @@ PREPARE_CONCURRENCY
 
 ### Ready queue
 
-The ready queue controls when prepared tasks are forwarded to the selected Instance.
+The ready queue controls when prepared tasks are forwarded to the selected Instance. It maintains a predicted execution timeline with slot readiness, prefill start, first token, decode tail estimate, predicted queue wait, and predicted TTFT.
 
-It maintains a predicted execution timeline for each Instance, including:
-
-- slot readiness;
-- prefill start time;
-- first-token time;
-- decode tail estimate;
-- predicted queue wait;
-- predicted TTFT.
-
-Ready workers forward requests to the Instance and record actual timing when the first token arrives.
-
-Ready concurrency is controlled by:
+Concurrency is controlled by:
 
 ```text
 READY_CONCURRENCY
 ```
 
----
-
-## Ready Release Policy
-
-After preparation, tasks are released into the ready queue according to the ready release policy.
+## Ready release policy
 
 | Policy | Description |
 |---|---|
 | `ordered` | Release tasks in prepare sequence order. |
-| `text_bypass` | Allow text-injection tasks to bypass blocked KVCache tasks, up to a configured limit. |
+| `text_bypass` | Allow text tasks to bypass blocked KVCache tasks within a configured limit. |
 
-The `text_bypass` policy is useful when KVCache injection is delayed by KDN transfer or KV queueing, while later text-injection tasks are already prepared.
-
-Related options:
+Relevant variables:
 
 ```text
 PROXY_READY_RELEASE_POLICY
 PROXY_TEXT_BYPASS_MAX_PER_FLUSH
 ```
 
----
-
-## KVCache Injection Path
-
-When KVCache injection is selected, the Proxy follows this path:
+## KVCache injection path
 
 ```text
 Proxy
   ├── fetch knowledge metadata from KDN
   ├── identify kv-ready knowledge IDs
   ├── estimate KDN-to-Instance KV transfer time
-  ├── reserve the KDN KV link
-  ├── call Instance control plane
-  │     └── POST /v1/kv/inject_ready
+  ├── reserve KDN KV link
+  ├── call Instance control plane POST /v1/kv/inject_ready
   ├── wait for KV injection acknowledgement
-  └── forward the request to Instance
+  └── forward request to Instance
 ```
-
-The Instance control plane receives:
-
-```text
-request_id
-kdn_addr
-model
-knowledge_ids
-```
-
-After KVCache injection succeeds, the Instance can reuse the injected KVCache through LMCache during inference.
 
 If KVCache injection fails or no KV-ready knowledge exists, the Proxy falls back to text-only behavior and records the fallback path in the task trace.
 
----
-
-## Topology Metadata
-
-The Proxy can report KDN link information to the Scheduler. This helps the Scheduler choose a Proxy that has better network relation to the selected KDN.
-
-Static topology can be provided at startup:
-
-```bash
-python3 demo_proxy.py \
-  --strategy round_robin \
-  --kdn-links-json '{"kdn_a":{"bandwidth_tier":3,"latency_tier":1}}'
-```
-
-The Proxy can also collect topology reports from Instances through:
-
-```text
-POST /v1/topology/report
-```
-
-A link item may contain fields such as:
-
-```text
-bandwidth_tier
-latency_tier
-bandwidth_mbps
-latency_ms
-rtt_ms
-```
-
-The Proxy merges these reports and sends the best KDN link snapshot to the Scheduler through heartbeat metadata.
-
----
-
 ## Proxy CLI
-
-The Proxy provides a CLI for inspecting the control plane and the Scheduler registration state.
-
-Start the CLI:
 
 ```bash
 python3 proxy/proxy_cli.py
 ```
 
-Optional arguments:
-
-| Argument | Description |
-|---|---|
-| `--cp-url` | Proxy control plane URL. Default: `http://127.0.0.1:8002`. |
-| `--scheduler-cp-url` | Scheduler control plane URL. Default: `http://127.0.0.1:7002`. |
-| `--proxy-id` | Current Proxy ID. Default: read from `PROXY_ID`. |
-| `--scheduler-proxy-list-path` | Scheduler Proxy list API path. Default: `/v1/proxy/list`. |
-| `--timeout` | HTTP timeout in seconds. Default: `5`. |
-
-REPL commands:
+Useful commands:
 
 | Command | Description |
 |---|---|
-| `:help` | Show command help. |
-| `:status` | Show Proxy control plane health and Instance counts. |
-| `:instances [N]` | List alive Instances. Default: `N=20`. |
+| `:status` | Show Proxy control-plane health and Instance counts. |
+| `:instances [N]` | List alive Instances. |
 | `:instances --all [N]` | List all Instances, including expired ones. |
 | `:watch [--all] [--interval S] [--limit N]` | Continuously refresh Proxy status. |
-| `:scheduler` | Query Scheduler control plane and show whether this Proxy is registered. |
-| `:exit` / `:quit` | Exit the CLI. |
+| `:scheduler` | Query Scheduler control plane. |
+| `:exit` / `:quit` | Exit. |
 
----
+## Validation
 
-## Runtime Options
+### 1. Start Proxy
+
+```bash
+cd test
+python3 demo_proxy.py \
+  --host 127.0.0.1 \
+  --port 8001 \
+  --strategy round_robin \
+  --injection-strategy iws
+```
+
+### 2. Start Instance with default demo resource monitoring
+
+```bash
+cd test
+python3 demo_instance.py \
+  --host 127.0.0.1 \
+  --port 9001 \
+  --proxy-cp-url http://127.0.0.1:8002
+```
+
+### 3. Inspect resource state
+
+```bash
+curl -sS "http://127.0.0.1:8002/debug/instance_resources" | python3 -m json.tool
+```
+
+### 4. Run the e2e smoke validation
+
+```bash
+python3 test/demo_resource_monitor_e2e.py \
+  --agent-listen 127.0.0.1:19201 \
+  --agent-url http://127.0.0.1:19201
+```
+
+Use a non-default agent port if another Resource Agent is already running.
+
+## Runtime options
 
 Common environment variables:
 
 | Variable | Description |
 |---|---|
-| `PROXY_ID` | Proxy ID reported to the Scheduler. |
-| `PROXY_ADVERTISE_HOST` | Host reported to the Scheduler. |
-| `PROXY_ADVERTISE_PORT` | Service-plane port reported to the Scheduler. |
-| `PROXY_CP_HOST` | Proxy control-plane host. |
-| `PROXY_CP_PORT` | Proxy control-plane port. |
+| `PROXY_ID` | Proxy ID reported to Scheduler. |
+| `PROXY_ADVERTISE_HOST` | Host reported to Scheduler. |
+| `PROXY_ADVERTISE_PORT` | Service-plane port reported to Scheduler. |
+| `PROXY_CP_HOST` / `PROXY_CP_PORT` | Proxy control-plane bind address. |
 | `PROXY_INSTANCE_STRATEGY` | Local Instance selection strategy. |
 | `PROXY_INJECTION_STRATEGY` | Injection strategy, `default` or `iws`. |
-| `PROXY_READY_RELEASE_POLICY` | Ready release policy, `ordered` or `text_bypass`. |
+| `PROXY_READY_RELEASE_POLICY` | Ready release policy. |
 | `PROXY_KDN_LINKS_JSON` | Static KDN topology metadata. |
 | `PROXY_INSTANCE_TTL_S` | Instance alive TTL. |
-| `PREPARE_CONCURRENCY` | Per-Instance prepare concurrency. |
-| `READY_CONCURRENCY` | Per-Instance ready worker concurrency. |
-| `IWS_KDN_QUEUE_PENALTY_ALPHA` | Penalty weight for KDN queueing in IWS. |
-| `IWS_DECISION_MARGIN_MS` | Decision margin used by IWS. |
-| `KDN_DEFAULT_BANDWIDTH_MBPS` | Default bandwidth used when no topology bandwidth is available. |
-
----
-
-## Validation
-
-### 1. Start Scheduler
-
-```bash
-cd test
-python3 demo_scheduler.py --cacheroute
-```
-
-### 2. Start Proxy
-
-```bash
-cd test
-
-python3 demo_proxy.py \
-  --strategy round_robin \
-  --injection-strategy iws \
-  --ready-release-policy text_bypass
-```
-
-### 3. Start Instance
-
-```bash
-cd test
-python3 demo_instance.py --port 9001 --host 127.0.0.1
-```
-
-### 4. Check Proxy control plane
-
-```bash
-curl -s http://127.0.0.1:8002/healthz | python3 -m json.tool
-```
-
-List alive Instances:
-
-```bash
-curl -s http://127.0.0.1:8002/v1/instance/list | python3 -m json.tool
-```
-
-### 5. Check whether Proxy is registered in Scheduler
-
-```bash
-python3 proxy/proxy_cli.py
-```
-
-Then run:
-
-```text
-:scheduler
-```
-
-### 6. Send a request through Scheduler
-
-```bash
-python3 test/demo_client.py --with-ui
-```
-
-or send an OpenAI-compatible request to the Scheduler service plane.
-
----
-
-## Runtime Screenshots
-
-### Proxy startup
-
-<img width="1200" height="125" alt="Proxy startup" src="https://github.com/user-attachments/assets/07b78380-bd7d-47ae-8f7d-f45cdd7882cb" />
-
-### CLI commands
-
-<img width="1200" height="418" alt="Proxy CLI commands" src="https://github.com/user-attachments/assets/0e161d8a-1321-436c-a78d-81feae125987" />
-
-### Proxy registration on Scheduler
-
-<img width="1200" height="184" alt="Proxy Scheduler status" src="https://github.com/user-attachments/assets/192ae569-d0ac-419c-b84f-db1c2a7a0f31" />
-
-### Instance pool
-
-<img width="1200" height="144" alt="Proxy Instance pool" src="https://github.com/user-attachments/assets/183ccc5b-65dc-426d-843a-c8c1509fb7ab" />
-
-### Queue and injection timing
-
-<img width="1200" height="1319" alt="Proxy queue timing" src="https://github.com/user-attachments/assets/afc7a7e5-bf38-4520-9b4a-8b354d1ee089" />
-
-<img width="1200" height="1340" alt="Proxy injection timing" src="https://github.com/user-attachments/assets/35429add-d4d7-431d-bca4-344c67c6f966" />
-
----
+| `PREPARE_CONCURRENCY` | Prepare queue concurrency. |
+| `READY_CONCURRENCY` | Ready worker concurrency. |
 
 ## Notes
 
-- The Proxy is designed for local scheduling inside one LLM system.
-- The Scheduler performs global routing, while the Proxy performs local Instance selection and injection strategy selection.
-- The current active Instance strategy is `round_robin`. Other strategies can be added under `proxy/strategy/`.
-- The `iws` injection strategy is experimental and is used to validate compute-network-aware knowledge injection.
-- KVCache injection requires a running KDN Server, Instance control plane, and LMCache-compatible KV backend.
-- The default examples use a single-machine setup. For multi-machine deployment, update service addresses in `core/config.py`.
+- Resource snapshots are visible in Proxy state but do not yet drive routing.
+- Repeated successful resource reports are intentionally quiet to avoid log flooding.
+- `unknown_instance` warnings usually mean a stale or external Instance process is still heartbeating to the Proxy control plane.
