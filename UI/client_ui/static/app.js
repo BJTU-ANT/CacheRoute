@@ -72,23 +72,23 @@ $("mode").addEventListener("change", () => {
   loadExample();
 });
 
-// 初始加载示例
+// Load the initial example.
 loadExample();
 
 $("btn-parse-curl").addEventListener("click", async () => {
   const line = $("curlLine").value.trim();
-  if (!line) { $("curlParseMsg").textContent = "请输入一行命令"; return; }
+  if (!line) { $("curlParseMsg").textContent = "Please enter one command line"; return; }
 
   const res = await apiPost("/ui/api/parse_curl", { line });
   if (!res.ok) {
-    $("curlParseMsg").textContent = "解析失败：" + (res.data.error || "unknown");
+    $("curlParseMsg").textContent = "Parse failed: " + (res.data.error || "unknown");
     return;
   }
   const p = res.data.parsed;
   $("url").value = p.url || "";
   $("headers").value = pretty(p.headers || {});
   $("body").value = pretty(p.body || {});
-  $("curlParseMsg").textContent = "解析成功：已填充到表单";
+  $("curlParseMsg").textContent = "Parsed successfully: populated the form";
 });
 
 $("btn-validate").addEventListener("click", async () => {
@@ -97,17 +97,17 @@ $("btn-validate").addEventListener("click", async () => {
   const bodyText = $("body").value.trim();
 
   const hdr = safeJsonParse(hdrText);
-  if (!hdr.ok) { showValidation(false, "Headers JSON 解析失败：" + hdr.err); return; }
+  if (!hdr.ok) { showValidation(false, "Headers JSON parse failed: " + hdr.err); return; }
   const body = safeJsonParse(bodyText);
-  if (!body.ok) { showValidation(false, "Body JSON 解析失败：" + body.err); return; }
+  if (!body.ok) { showValidation(false, "Body JSON parse failed: " + body.err); return; }
 
   const res = await apiPost("/ui/api/validate", { url, headers: hdr.val, body: body.val });
   if (!res.ok) {
-    showValidation(false, "校验接口异常：" + pretty(res.data));
+    showValidation(false, "Validation API error: " + pretty(res.data));
     return;
   }
-  if (res.data.ok) showValidation(true, "校验通过 ✅");
-  else showValidation(false, "校验失败：\n" + (res.data.errors || []).join("\n"));
+  if (res.data.ok) showValidation(true, "Validation passed ✅");
+  else showValidation(false, "Validation failed:\n" + (res.data.errors || []).join("\n"));
 });
 
 $("btn-send").addEventListener("click", async () => {
@@ -118,11 +118,11 @@ $("btn-send").addEventListener("click", async () => {
   const bodyText = $("body").value.trim();
 
   const hdr = safeJsonParse(hdrText);
-  if (!hdr.ok) { showValidation(false, "Headers JSON 解析失败：" + hdr.err); return; }
+  if (!hdr.ok) { showValidation(false, "Headers JSON parse failed: " + hdr.err); return; }
   const body = safeJsonParse(bodyText);
-  if (!body.ok) { showValidation(false, "Body JSON 解析失败：" + body.err); return; }
+  if (!body.ok) { showValidation(false, "Body JSON parse failed: " + body.err); return; }
 
-  showValidation(true, "发送中...");
+  showValidation(true, "Sending...");
 
   const res = await apiPost("/ui/api/send", {
     url,
@@ -133,9 +133,9 @@ $("btn-send").addEventListener("click", async () => {
 
   if (!res.ok) {
     if (res.data && res.data.error === "validation_failed") {
-      showValidation(false, "发送前校验失败：\n" + (res.data.errors || []).join("\n"));
+      showValidation(false, "Pre-send validation failed:\n" + (res.data.errors || []).join("\n"));
     } else {
-      showValidation(false, "发送失败：" + pretty(res.data));
+      showValidation(false, "Send failed: " + pretty(res.data));
     }
     return;
   }
@@ -146,5 +146,5 @@ $("btn-send").addEventListener("click", async () => {
   const bodyTextResp = bodyJson ? pretty(bodyJson) : (res.data.body_text || "");
 
   setResponse(`HTTP ${status}`, headersObj, bodyTextResp);
-  showValidation(true, "请求完成 ✅");
+  showValidation(true, "Request completed ✅");
 });
