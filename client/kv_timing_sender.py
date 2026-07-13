@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+"""Collect KVCache injection timing under an RPS-controlled workload.
+
+This benchmarking client sends workload-defined requests to the Scheduler, extracts
+CacheRoute trace metadata, estimates cache-hit and recomputation costs, optionally
+queries Scheduler knowledge lengths, and writes JSONL or CSV results.
+"""
 from __future__ import annotations
 
 import argparse
@@ -15,7 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 
-# 允许在 "python client/kv_timing_sender.py" 时导入仓库模块
+# Allow repository modules to be imported when running `python client/kv_timing_sender.py`.
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
@@ -132,7 +138,7 @@ def normalize_request_template(req_tpl: Dict[str, Any], args: argparse.Namespace
     for key in [
         "model", "stream", "RAG", "Injection_type", "max_tokens", "temperature", "top_p",
         "knowledge_id", "knowledge_ids",
-        # 允许 workload 透传长度元数据给统计器
+        # Allow workload templates to pass length metadata to the statistics collector.
         "knowledge_length_tokens", "task_length_tokens", "header_overhead_tokens", "total_length_tokens",
     ]:
         if key in req_tpl:
@@ -171,7 +177,7 @@ def _extract_knowledge_ids(body: Dict[str, Any]) -> List[str]:
     single = body.get("knowledge_id")
     if isinstance(single, str) and single.strip():
         ids.append(single.strip().lower())
-    # 去重但保持顺序
+    # Deduplicate while preserving order.
     out: List[str] = []
     seen = set()
     for k in ids:
@@ -202,7 +208,7 @@ def _resolve_knowledge_length_tokens(
         if hit > 0 and s > 0:
             return int(s), "scheduler_peek"
 
-    # 兜底：无知识长度可用时，退化到 total（会包含问题+首部）
+    # Fall back to the total length when no knowledge length is available; this includes the query and header.
     return max(0, int(total_length_tokens)), "fallback_total_length"
 
 
@@ -231,10 +237,10 @@ def build_kv_timing_record(
         if isinstance(v, list):
             meta_kids.extend([str(x).strip().lower() for x in v if str(x).strip()])
 
-    # 优先使用实际参与注入/拼接的 kid（kv_ready + text_only）。
-    # 若 meta 不可用，再退回请求体中的 knowledge_id(s)。
+    # Prefer the knowledge IDs actually used for injection or prompt construction (`kv_ready` + `text_only`).
+    # Fall back to `knowledge_id(s)` from the request body when metadata is unavailable.
     candidate_kids: List[str] = meta_kids if meta_kids else _extract_knowledge_ids(body)
-    # 去重保持顺序
+    # Deduplicate while preserving order.
     seen_kids = set()
     dedup_candidate_kids: List[str] = []
     for k in candidate_kids:
@@ -248,12 +254,12 @@ def build_kv_timing_record(
         knowledge_length_map=knowledge_length_map,
         candidate_kids=dedup_candidate_kids,
     )
-    # 防止知识长度异常大于 total_length（例如 ID 集不一致导致的累加偏大）。
+    # Prevent an inconsistent ID set from producing a knowledge length larger than `total_length`.
     knowledge_length_tokens = max(0, min(int(knowledge_length_tokens_raw), int(total_length_tokens)))
 
-    # 命中长度必须满足：
-    # 1) 256 对齐
-    # 2) 以知识长度为上限（不能超过 knowledge_length_tokens）
+    # The cache-hit length must satisfy both constraints:
+    # 1) Align to 256 tokens.
+    # 2) Do not exceed `knowledge_length_tokens`.
     aligned_hit = (knowledge_length_tokens // 256) * 256
     actual_hit_length_tokens = min(aligned_hit, knowledge_length_tokens)
     remaining_compute_tokens = max(0, total_length_tokens - actual_hit_length_tokens)
@@ -284,7 +290,7 @@ def build_kv_timing_record(
         "name": req_name,
         "http_status": status,
         "injection_type": body.get("Injection_type"),
-        # 用户要求字段
+        # Requested output fields.
         "total_length_tokens": total_length_tokens,
         "knowledge_length_tokens": knowledge_length_tokens,
         "knowledge_length_tokens_raw": knowledge_length_tokens_raw,
@@ -298,7 +304,7 @@ def build_kv_timing_record(
         "text_compute_estimate_ms": round(text_compute_estimate_ms, 3) if text_compute_estimate_ms is not None else None,
         "lmcache_redis_pull_ms": round(lmcache_redis_pull_ms, 3) if lmcache_redis_pull_ms is not None else None,
         "total_ms": total_ms,
-        # 补充关键建模字段
+        # Additional modeling fields.
         "predict_total_ms": trace.get("predict_total_ms"),
         "predict_queue_wait_ms": trace.get("predict_queue_wait_ms"),
         "predict_compute_ms": trace.get("predict_compute_ms"),
@@ -343,7 +349,7 @@ async def run_one(
     else:
         status, meta = await read_completions_meta(client, url, headers, body)
 
-    # 若开启 scheduler peek，则优先尝试用本次请求实际涉及的 kid 更新长度缓存，避免退化到 total_length
+    # When Scheduler peek is enabled, refresh the length cache with IDs used by this request to avoid falling back to `total_length`.
     if enable_scheduler_knowledge_peek and knowledge_length_map is not None:
         kids = _extract_knowledge_ids(body)
         if isinstance(meta, dict):
@@ -429,7 +435,7 @@ def write_jsonl(path: Path, rows: List[Dict[str, Any]]) -> None:
 def write_csv(path: Path, rows: List[Dict[str, Any]]) -> None:
     if not rows:
         return
-    # 扁平化 list 字段，方便 csv 消费
+    # Flatten list fields for easier CSV processing.
     normalized: List[Dict[str, Any]] = []
     for r in rows:
         item = dict(r)
@@ -465,7 +471,7 @@ async def build_knowledge_length_map(
         if isinstance(body, dict):
             kids_all.extend(_extract_knowledge_ids(body))
 
-    # 去重
+    # Deduplicate IDs.
     dedup_kids: List[str] = []
     seen = set()
     for k in kids_all:
@@ -497,8 +503,8 @@ async def build_knowledge_length_map(
             kid = str(it.get("kid", "")).strip().lower()
             if not kid:
                 continue
-            # scheduler.peek 的 length 多为“字符长度”，这里转成 token 口径
-            # 优先使用 text_abstract（kdn_sync 当前写入完整 content）分词。
+            # Scheduler peek usually reports character length, so convert it to token length here.
+            # Prefer tokenizing `text_abstract`, which currently contains the full content from `kdn_sync`.
             text_abstract = str(it.get("text_abstract") or "")
             if text_abstract:
                 try:
@@ -530,7 +536,7 @@ async def main_async(args: argparse.Namespace) -> None:
     timeout = httpx.Timeout(args.timeout_s)
     interval = 1.0 / float(args.rps)
 
-    # 与 demo_scheduler 对齐：允许在 client 进程内显式设置 tokenizer 映射，避免 HF 在线拉取。
+    # Match `demo_scheduler` by allowing an explicit tokenizer mapping in the client process and avoiding online Hugging Face downloads.
     if args.scheduler_tokenizer_map:
         os.environ["SCHEDULER_TOKENIZER_MAP"] = args.scheduler_tokenizer_map
     try:
