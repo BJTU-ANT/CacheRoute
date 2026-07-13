@@ -19,6 +19,8 @@ _pool: Optional[InstancePool] = None
 _kdn_links: Dict[str, Dict[str, Any]] = {}
 _instance_kdn_links: Dict[str, Dict[str, Dict[str, Any]]] = {}
 _kdn_links_lock = asyncio.Lock()
+_resource_snapshot_seen: set[str] = set()
+_unknown_resource_warn_at: Dict[str, float] = {}
 
 
 def set_pool(pool: InstancePool) -> None:
@@ -56,6 +58,7 @@ class InstanceUnregisterReq(BaseModel):
 class InstanceResourceSnapshotReq(BaseModel):
     instance_id: str
     snapshot: Dict[str, Any]
+    metadata: Dict[str, Any] = {}
 
 
 class TopologyReportReq(BaseModel):
@@ -152,11 +155,20 @@ async def report_resource_snapshot(req: InstanceResourceSnapshotReq) -> Dict[str
     ok = pool.report_resource_snapshot(
         instance_id=req.instance_id,
         snapshot=req.snapshot,
+        metadata=req.metadata,
     )
     if not ok:
-        logger.warning("[ProxyCP] resource snapshot for unknown instance_id=%s", req.instance_id)
+        now = asyncio.get_running_loop().time()
+        last = _unknown_resource_warn_at.get(req.instance_id, 0.0)
+        if now - last >= 30.0:
+            _unknown_resource_warn_at[req.instance_id] = now
+            logger.warning("[ProxyCP] resource snapshot for unknown instance_id=%s", req.instance_id)
         return {"ok": False, "error": "unknown_instance"}
-    logger.info("[ProxyCP] resource snapshot updated: instance_id=%s", req.instance_id)
+    if req.instance_id not in _resource_snapshot_seen:
+        _resource_snapshot_seen.add(req.instance_id)
+        logger.info("[ProxyCP] first resource snapshot updated: instance_id=%s", req.instance_id)
+    else:
+        logger.debug("[ProxyCP] resource snapshot updated: instance_id=%s", req.instance_id)
     return {"ok": True}
 
 
@@ -206,6 +218,9 @@ async def list_instances(include_dead: bool = False) -> List[Dict[str, Any]]:
                 "admission_state": it.resource.admission_state,
                 "resource_ts_ms": it.resource.resource_ts_ms,
                 "resource_reported_at": it.resource.resource_reported_at,
+                "resource_report_monotonic_ms": it.resource.resource_report_monotonic_ms,
+                "resource_report_wall_time_ms": it.resource.resource_report_wall_time_ms,
+                "reported_instance_id": it.resource.reported_instance_id,
                 "raw_resource": it.resource.raw_resource,
             },
             # 由 include_dead 决定返回集合，alive 在这里标记方便调试
@@ -241,6 +256,9 @@ async def debug_instance_resources(include_dead: bool = True) -> Dict[str, Any]:
                 "admission_state": it.resource.admission_state,
                 "resource_ts_ms": it.resource.resource_ts_ms,
                 "resource_reported_at": it.resource.resource_reported_at,
+                "resource_report_monotonic_ms": it.resource.resource_report_monotonic_ms,
+                "resource_report_wall_time_ms": it.resource.resource_report_wall_time_ms,
+                "reported_instance_id": it.resource.reported_instance_id,
             },
         })
     return {"instances": resources}

@@ -41,9 +41,17 @@ def report_once(
     snapshot_url = f"{agent_url.rstrip('/')}/v1/resource/snapshot"
     report_url = f"{proxy_cp_url.rstrip('/')}/v1/instance/resource_snapshot"
     snapshot = get_json(snapshot_url, timeout_s=timeout_s)
+    wall_time_ms = int(time.time() * 1000)
+    monotonic_ms = int(time.monotonic() * 1000)
+    metadata = {
+        "reported_instance_id": instance_id,
+        "report_monotonic_ms": monotonic_ms,
+        "report_wall_time_ms": wall_time_ms,
+        "agent_snapshot_timestamp_ms": snapshot.get("timestamp_ms") if isinstance(snapshot, dict) else None,
+    }
     status, result = post_json(
         report_url,
-        payload={"instance_id": instance_id, "snapshot": snapshot},
+        payload={"instance_id": instance_id, "snapshot": snapshot, "metadata": metadata},
         timeout_s=timeout_s,
     )
     ok = bool(result.get("ok"))
