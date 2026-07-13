@@ -1,5 +1,21 @@
 **此处为cacheroute初始架构搭建相关更新日志。自260324起，系统调试与blog更新移至pull Requests内。**
 
+### 260713 后续计划
+<img width="872" height="917" alt="image" src="https://github.com/user-attachments/assets/965b2b48-afe2-4c26-8784-ae52f7f4bcbe" />
+后续的原型系统工程计划主要有两步工作：
+
+（1）资源池级实例调度策略
+（1-1） 基于 Rust Agent实现实例资源感知与管理
+
+（1-2） 基于API/gRPC上报至Proxy
+
+（1-3） Proxy实现基于前缀缓存的管理，维护实例KVCache资源情况，同时上报KDN服务器和Scheduler。
+
+（2）KDN服务器的改进（为后续KVCache放置策略服务）
+目前KDN服务器仅支持简单的知识注册、查询和反馈，后续需要实现KDN服务器控制平面，对知识资源进行更细致化的维护，最后为上层KVCache放置策略服务。
+
+---
+
 ### 260312 提升Perf_Client能力，修复KEYS失配问题，完善KDN能力
 
 (1)修改LMCache的keys生成规则，观察是否可以跨容器周期复用（有待观察）依旧失败，chunk hash值还在变化导致KEY不一致，依次排查过`NONE_HASH`,`model_name`等变量，最后发现确认是chunk_hash在变化，其根本原因在于chat-template中包含Today-Data信息，导致日期变化KVCache前缀失效。<br>
