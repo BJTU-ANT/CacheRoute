@@ -414,9 +414,12 @@ curl -s http://127.0.0.1:7001/debug/strategy
 
 | Document | Description |
 |---|---|
-| [`env/README.md`](env/README.md) | Environment setup and vLLM + LMCache installation. |
-| [`instance/README.md`](instance/README.md) | Instance API, metric, time predictor, etc. |
-| [`kdn_server/README.md`](kdn_server/README.md) | KDN server, knowledge registration, and KVCache injection. |
-| [`core/README.md`](core/README.md) | Core configuration and multi-machine setup. |
-| [`scheduler/README.md`](scheduler/README.md) | Scheduler parameters and routing strategies. |
-| [`doc/blog`](doc/blog) | Development logs and update notes. |
+| [`core/README.md`](core/README.md) | Shared configuration, request model, and multi-machine deployment settings. |
+| [`scheduler/README.md`](scheduler/README.md) | Global routing, KDN / Proxy pool management, and Scheduler control plane. |
+| [`proxy/README.md`](proxy/README.md) | Local Instance pool, prepare / ready queues, injection strategy, and Proxy resource APIs. |
+| [`instance/README.md`](instance/README.md) | Instance service and control planes, KVCache signaling, resource monitoring, and TTFT predictor. |
+| [`kdn_server/README.md`](kdn_server/README.md) | KDN service, knowledge registration, KVCache build, and injection utilities. |
+| [`client/README.md`](client/README.md) | Client CLI, OpenAI-compatible request examples, and workload tools. |
+| [`env/README.md`](env/README.md) | Docker environment setup and vLLM + LMCache installation. |
+| [`test/README.md`](test/README.md) | Demo scripts, smoke-validation entry points, and local test helpers. |
+| [`doc/blog/README.md`](doc/blog/README.md) | Engineering changelog and milestone notes. |
