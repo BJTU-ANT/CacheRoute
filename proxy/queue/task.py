@@ -10,38 +10,41 @@ from typing import Any, Dict, Optional, List
 @dataclass
 class ProxyTask:
     """
-    Proxy 内部任务封装。
+    Internal proxy task wrapper.
 
-    说明：
-    - 把handler中已经解析好的信息打包起来，
-      交给队列管理器去“按选择的 instance”转发。
-    - 后续会在这里扩展：prepare/ready 状态、注入耗时、错误码等。
+    Notes:
+    - Packages the information already parsed by the handler and passes it to
+      the queue manager for forwarding to the selected instance.
+    - This class can later be extended with prepare/ready states, injection
+      latency, error codes, and related metadata.
 
-    - chat：ready worker 把 SSE bytes 放进 response_queue，handler 用 StreamingResponse 读取
-    - completions：ready worker 同样放 bytes，handler 拼接后解析 JSON
+    - chat: the ready worker places SSE bytes into response_queue, and the
+      handler reads them through StreamingResponse.
+    - completions: the ready worker also places bytes into the queue, and the
+      handler concatenates them before parsing the JSON response.
 
     """
     request_id: Optional[int]
-    req_obj: Any                            # scheduler -> proxy 的结构化 Request（dataclass）
-    instance_body: Dict[str, Any]           # 下游 vLLM / instance 的请求体（OpenAI 风格）
+    req_obj: Any                            # Structured Request from scheduler to proxy (dataclass)
+    instance_body: Dict[str, Any]           # Request body for downstream vLLM/instance (OpenAI style)
 
-    instance_id: str                        # 已选中的 instance 信息（InstancePool.InstanceInfo / Protocol InstanceLike）
+    instance_id: str                        # Selected instance information (InstancePool.InstanceInfo / Protocol InstanceLike)
     instance_host: str
     instance_port: int
 
-    url_path: str                           # 本次请求对应的 URL path："/v1/chat/completions" or "/v1/completions"
+    url_path: str                           # URL path for this request: "/v1/chat/completions" or "/v1/completions"
 
     kdn_addr: str | None = None
 
-    # per-task 响应通道：ready_worker push chunk，handler pull chunk
+    # Per-task response channel: ready_worker pushes chunks and the handler pulls them.
     response_queue: "asyncio.Queue[Optional[bytes]]" = field(
         default_factory=lambda: asyncio.Queue(maxsize=128)
     )
 
-    # 记录创建时间
+    # Record the creation time.
     created_at: float = field(default_factory=lambda: time.time())
 
-    # 任务错误（ready_worker/prepare_worker 发生异常时写入）
+    # Task error, written when ready_worker or prepare_worker raises an exception.
     error: Optional[str] = None
 
     kv_ready_kids: List[str] = field(default_factory=list)
@@ -52,8 +55,8 @@ class ProxyTask:
     kv_ack: Dict[str, Any] = field(default_factory=dict)
     trace: Dict[str, int] = field(default_factory=dict)
 
-    # reservation state for ready/prefill timeline
-    # prediction stage: "prefill" (default) or "decode" (reserved for future modeling)
+    # Reservation state for the ready/prefill timeline.
+    # Prediction stage: "prefill" (default) or "decode" (reserved for future modeling).
     predict_stage: str = "prefill"
     pred_slot_idx: int = -1
     pred_slot_ready_ts_ms: int = 0
