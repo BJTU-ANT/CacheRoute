@@ -2,10 +2,6 @@ import uvicorn
 import argparse
 import os
 import sys
-import subprocess
-import atexit
-import signal
-import shutil
 
 from pathlib import Path
 
@@ -23,49 +19,12 @@ def _env_flag(name: str, default: bool) -> bool:
     return raw.strip().lower() not in {"0", "false", "no", "off"}
 
 
-def _start_sidecar(cmd, name: str, env=None):
-    try:
-        proc = subprocess.Popen(cmd, cwd=str(ROOT_DIR), env=env or os.environ.copy())
-    except FileNotFoundError:
-        print(f"[demo_instance][WARN] {name} executable not found; skip sidecar: {cmd[0]}", flush=True)
-        return None
-    except Exception as exc:
-        print(f"[demo_instance][WARN] failed to start {name}: {exc}", flush=True)
-        return None
-    print(f"[demo_instance] started {name} pid={proc.pid}: {' '.join(map(str, cmd))}", flush=True)
-    return proc
+def _set_bool_env(name: str, enabled: bool) -> None:
+    os.environ[name] = "1" if enabled else "0"
 
 
-def _terminate_sidecars(procs):
-    for name, proc in procs:
-        if proc is None or proc.poll() is not None:
-            continue
-        try:
-            print(f"[demo_instance] stopping {name} pid={proc.pid}", flush=True)
-            proc.terminate()
-            proc.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-        except Exception:
-            pass
-
-
-def _install_sidecar_cleanup(procs):
-    atexit.register(_terminate_sidecars, procs)
-
-    prev_int = signal.getsignal(signal.SIGINT)
-    prev_term = signal.getsignal(signal.SIGTERM)
-
-    def _handler(signum, frame):
-        _terminate_sidecars(procs)
-        previous = prev_int if signum == signal.SIGINT else prev_term
-        if callable(previous):
-            previous(signum, frame)
-        else:
-            raise SystemExit(128 + int(signum))
-
-    signal.signal(signal.SIGINT, _handler)
-    signal.signal(signal.SIGTERM, _handler)
+def _interval_from_hz(hz: float) -> int:
+    return max(1, int(round(1000.0 / max(float(hz), 0.001))))
 
 
 def main():
@@ -80,48 +39,78 @@ def main():
         help="optional topology discovery targets, comma separated (e.g. 127.0.0.1:9101,127.0.0.1:9102)",
     )
     parser.add_argument(
+        "--resource-monitor",
+        action="store_true",
+        default=_env_flag("INSTANCE_RESOURCE_MONITOR_ENABLE", config.INSTANCE_RESOURCE_MONITOR_ENABLE),
+        help="enable Resource Agent startup and Proxy resource reporting (default: disabled)",
+    )
+    parser.add_argument(
         "--resource-agent",
         dest="resource_agent",
         action="store_true",
-        default=_env_flag("INSTANCE_RESOURCE_AGENT_ENABLE", True),
-        help="start the local Rust resource agent sidecar (default: enabled; env INSTANCE_RESOURCE_AGENT_ENABLE=0 disables)",
+        default=None,
+        help="auto-start or reuse the local Rust resource agent when resource monitoring is enabled",
     )
     parser.add_argument(
         "--no-resource-agent",
         dest="resource_agent",
         action="store_false",
-        help="do not start the local Rust resource agent sidecar",
-    )
-    parser.add_argument(
-        "--resource-agent-host",
-        type=str,
-        default=os.environ.get("INSTANCE_RESOURCE_AGENT_HOST", "127.0.0.1"),
-        help="resource agent listen host",
-    )
-    parser.add_argument(
-        "--resource-agent-port",
-        type=int,
-        default=int(os.environ.get("INSTANCE_RESOURCE_AGENT_PORT", getattr(config, "INSTANCE_RESOURCE_AGENT_PORT", 9201))),
-        help="resource agent listen port",
-    )
-    parser.add_argument(
-        "--resource-agent-interval-ms",
-        type=int,
-        default=int(os.environ.get("INSTANCE_RESOURCE_AGENT_INTERVAL_MS", getattr(config, "INSTANCE_RESOURCE_AGENT_INTERVAL_MS", 1000))),
-        help="resource agent sampling interval in milliseconds",
+        help="do not auto-start the Rust resource agent; only report if an external agent is reachable",
     )
     parser.add_argument(
         "--resource-report",
         dest="resource_report",
         action="store_true",
-        default=_env_flag("INSTANCE_RESOURCE_REPORT_ENABLE", True),
-        help="start Python reporter that sends resource snapshots to Proxy CP (default: enabled)",
+        default=None,
+        help="send resource snapshots to Proxy after Instance registration when monitoring is enabled",
     )
     parser.add_argument(
         "--no-resource-report",
         dest="resource_report",
         action="store_false",
-        help="do not start the resource snapshot reporter",
+        help="do not send resource snapshots to Proxy",
+    )
+    parser.add_argument(
+        "--resource-agent-listen",
+        type=str,
+        default=os.environ.get("INSTANCE_RESOURCE_AGENT_LISTEN", config.INSTANCE_RESOURCE_AGENT_LISTEN),
+        help="resource agent listen address (host:port)",
+    )
+    parser.add_argument(
+        "--resource-agent-url",
+        type=str,
+        default=os.environ.get("INSTANCE_RESOURCE_AGENT_URL", config.INSTANCE_RESOURCE_AGENT_URL),
+        help="resource agent base URL used by the reporter",
+    )
+    parser.add_argument(
+        "--resource-agent-sample-interval-ms",
+        type=int,
+        default=int(os.environ.get("INSTANCE_RESOURCE_AGENT_SAMPLE_INTERVAL_MS", config.INSTANCE_RESOURCE_AGENT_SAMPLE_INTERVAL_MS)),
+        help="resource agent sampling interval in milliseconds",
+    )
+    parser.add_argument(
+        "--resource-agent-start-timeout-s",
+        type=float,
+        default=float(os.environ.get("INSTANCE_RESOURCE_AGENT_START_TIMEOUT_S", config.INSTANCE_RESOURCE_AGENT_START_TIMEOUT_S)),
+        help="seconds to wait for Resource Agent health before reporting",
+    )
+    parser.add_argument(
+        "--resource-report-hz",
+        type=float,
+        default=float(os.environ.get("INSTANCE_RESOURCE_REPORT_HZ", config.INSTANCE_RESOURCE_REPORT_HZ)),
+        help="resource reporting frequency in Hz; ignored when --resource-report-interval-ms is set",
+    )
+    parser.add_argument(
+        "--resource-report-interval-ms",
+        type=int,
+        default=None,
+        help="resource report interval in milliseconds; overrides --resource-report-hz",
+    )
+    parser.add_argument(
+        "--resource-report-timeout-s",
+        type=float,
+        default=float(os.environ.get("INSTANCE_RESOURCE_REPORT_TIMEOUT_S", config.INSTANCE_RESOURCE_REPORT_TIMEOUT_S)),
+        help="HTTP timeout for resource reporting",
     )
     parser.add_argument("--proxy-cp-url", type=str, default=os.environ.get("PROXY_CP_URL", config.PROXY_CP_URL), help="Proxy control-plane URL for registration/reporting")
     args = parser.parse_args()
@@ -144,55 +133,38 @@ def main():
 
     # （可选但强烈建议）确保每个实例 id 唯一，避免 pool upsert 覆盖
     os.environ.setdefault("INSTANCE_ID", f"hp_{host}:{port}")
-    instance_id = os.environ["INSTANCE_ID"]
 
-    sidecars = []
-    agent_url = f"http://{args.resource_agent_host}:{args.resource_agent_port}"
-    if args.resource_agent:
-        cargo = shutil.which("cargo")
-        if cargo is None:
-            print("[demo_instance][WARN] cargo not found; resource agent sidecar is disabled", flush=True)
-        else:
-            sidecars.append((
-                "resource_agent",
-                _start_sidecar(
-                    [
-                        cargo,
-                        "run",
-                        "--quiet",
-                        "--manifest-path",
-                        str(ROOT_DIR / "instance" / "resource_agent" / "Cargo.toml"),
-                        "--",
-                        "--listen",
-                        f"{args.resource_agent_host}:{args.resource_agent_port}",
-                        "--sample-interval-ms",
-                        str(args.resource_agent_interval_ms),
-                        "--instance-id",
-                        instance_id,
-                    ],
-                    "resource_agent",
-                ),
-            ))
-    if args.resource_report:
-        sidecars.append((
-            "resource_reporter",
-            _start_sidecar(
-                [
-                    sys.executable,
-                    str(ROOT_DIR / "instance" / "resource_agent" / "proxy_reporter.py"),
-                    "--agent-url",
-                    agent_url,
-                    "--proxy-cp-url",
-                    args.proxy_cp_url.rstrip("/"),
-                    "--instance-id",
-                    instance_id,
-                    "--interval-ms",
-                    str(args.resource_agent_interval_ms),
-                ],
-                "resource_reporter",
-            ),
-        ))
-    _install_sidecar_cleanup(sidecars)
+    monitor_enabled = bool(args.resource_monitor)
+    auto_start_agent = config.INSTANCE_RESOURCE_AUTO_START_AGENT if args.resource_agent is None else bool(args.resource_agent)
+    report_enabled = config.INSTANCE_RESOURCE_REPORT_ENABLE if args.resource_report is None else bool(args.resource_report)
+    if monitor_enabled and args.resource_report is None:
+        report_enabled = True
+
+    report_interval_ms = args.resource_report_interval_ms
+    if report_interval_ms is None:
+        report_interval_ms = _interval_from_hz(args.resource_report_hz)
+
+    _set_bool_env("INSTANCE_RESOURCE_MONITOR_ENABLE", monitor_enabled)
+    _set_bool_env("INSTANCE_RESOURCE_AUTO_START_AGENT", auto_start_agent)
+    _set_bool_env("INSTANCE_RESOURCE_REPORT_ENABLE", report_enabled)
+    os.environ["INSTANCE_RESOURCE_AGENT_LISTEN"] = args.resource_agent_listen
+    os.environ["INSTANCE_RESOURCE_AGENT_URL"] = args.resource_agent_url.rstrip("/")
+    os.environ["INSTANCE_RESOURCE_AGENT_SAMPLE_INTERVAL_MS"] = str(args.resource_agent_sample_interval_ms)
+    os.environ["INSTANCE_RESOURCE_AGENT_START_TIMEOUT_S"] = str(args.resource_agent_start_timeout_s)
+    os.environ["INSTANCE_RESOURCE_REPORT_HZ"] = str(args.resource_report_hz)
+    os.environ["INSTANCE_RESOURCE_REPORT_INTERVAL_MS"] = str(report_interval_ms)
+    os.environ["INSTANCE_RESOURCE_REPORT_TIMEOUT_S"] = str(args.resource_report_timeout_s)
+
+    if monitor_enabled:
+        print(
+            "[demo_instance] resource monitor enabled: "
+            f"agent_listen={args.resource_agent_listen} agent_url={args.resource_agent_url.rstrip('/')} "
+            f"auto_start_agent={auto_start_agent} report_enabled={report_enabled} "
+            f"report_interval_ms={report_interval_ms}",
+            flush=True,
+        )
+    else:
+        print("[demo_instance] resource monitor disabled (default)", flush=True)
 
     from instance import instance
     uvicorn.run(instance, host=host, port=port, reload=False)

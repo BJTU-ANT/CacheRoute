@@ -20,6 +20,11 @@ import os
 import asyncio
 import json
 import subprocess
+import signal
+import time
+import shutil
+import urllib.request
+from collections import deque
 # import time
 
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
@@ -36,6 +41,7 @@ from .mock_resp import (mock_text_completion,
 from util import parse_stream_flag
 from instance import control_plane
 from instance.pclient.proxy_client import ProxyControlClient
+from instance.resource_agent.proxy_reporter import report_once
 
 
 PROXY_CP_URL = os.environ.get("PROXY_CP_URL", config.PROXY_CP_URL).rstrip("/")
@@ -45,6 +51,189 @@ INSTANCE_ID = os.environ.get("INSTANCE_ID", f"hp_{INSTANCE_ADVERTISE_HOST}:{INST
 
 vllm_base_url = config.VLLM_BASE_URL.rstrip("/")
 use_mock = True if config.USE_MOCK else False
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _resource_report_interval_ms() -> int:
+    raw_interval = os.environ.get("INSTANCE_RESOURCE_REPORT_INTERVAL_MS")
+    if raw_interval:
+        try:
+            return max(1, int(raw_interval))
+        except ValueError:
+            pass
+    hz = float(os.environ.get("INSTANCE_RESOURCE_REPORT_HZ", config.INSTANCE_RESOURCE_REPORT_HZ) or 30.0)
+    return max(1, int(round(1000.0 / max(hz, 0.001))))
+
+
+def _agent_listen() -> str:
+    return os.environ.get("INSTANCE_RESOURCE_AGENT_LISTEN", config.INSTANCE_RESOURCE_AGENT_LISTEN).strip()
+
+
+def _agent_url() -> str:
+    return os.environ.get("INSTANCE_RESOURCE_AGENT_URL", config.INSTANCE_RESOURCE_AGENT_URL).rstrip("/")
+
+
+def _read_tail(lines: deque[str]) -> str:
+    return "".join(lines).strip()
+
+
+def _spawn_log_reader(stream, tail: deque[str]) -> None:
+    if stream is None:
+        return
+    try:
+        for raw in iter(stream.readline, b""):
+            if not raw:
+                break
+            tail.append(raw.decode("utf-8", errors="replace"))
+    except Exception:
+        return
+
+
+def _agent_health_ok(agent_url: str, timeout_s: float = 1.0) -> bool:
+    try:
+        req = urllib.request.Request(f"{agent_url.rstrip('/')}/healthz", headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            return 200 <= int(resp.status) < 300
+    except Exception:
+        return False
+
+
+async def _wait_agent_ready(agent_url: str, timeout_s: float, logger: logging.Logger) -> bool:
+    deadline = time.monotonic() + max(0.1, timeout_s)
+    while time.monotonic() < deadline:
+        if await asyncio.to_thread(_agent_health_ok, agent_url, 1.0):
+            logger.info("[InstanceResource] agent ready: %s", agent_url)
+            return True
+        await asyncio.sleep(0.2)
+    return False
+
+
+async def _start_resource_agent(runtime_instance_id: str, logger: logging.Logger):
+    agent_url = _agent_url()
+    if await asyncio.to_thread(_agent_health_ok, agent_url, 1.0):
+        logger.info("[InstanceResource] reuse reachable resource agent: %s", agent_url)
+        return None, True
+
+    if not _env_bool("INSTANCE_RESOURCE_AUTO_START_AGENT", config.INSTANCE_RESOURCE_AUTO_START_AGENT):
+        logger.warning("[InstanceResource] agent not reachable and auto-start disabled: %s", agent_url)
+        return None, False
+
+    cargo = shutil.which("cargo")
+    if cargo is None:
+        logger.warning("[InstanceResource] cargo not found; resource agent cannot auto-start")
+        return None, False
+
+    listen = _agent_listen()
+    sample_ms = int(os.environ.get("INSTANCE_RESOURCE_AGENT_SAMPLE_INTERVAL_MS", config.INSTANCE_RESOURCE_AGENT_SAMPLE_INTERVAL_MS))
+    cmd = [
+        cargo,
+        "run",
+        "--quiet",
+        "--manifest-path",
+        str(ROOT_DIR / "instance" / "resource_agent" / "Cargo.toml"),
+        "--",
+        "--listen",
+        listen,
+        "--sample-interval-ms",
+        str(sample_ms),
+        "--instance-id",
+        runtime_instance_id,
+    ]
+    stdout_tail: deque[str] = deque(maxlen=20)
+    stderr_tail: deque[str] = deque(maxlen=20)
+    logger.info("[InstanceResource] starting resource agent: %s", " ".join(cmd))
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(ROOT_DIR),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+    except Exception as exc:
+        logger.warning("[InstanceResource] failed to start resource agent cmd=%s err=%s", " ".join(cmd), exc)
+        return None, False
+
+    asyncio.create_task(asyncio.to_thread(_spawn_log_reader, proc.stdout, stdout_tail))
+    asyncio.create_task(asyncio.to_thread(_spawn_log_reader, proc.stderr, stderr_tail))
+
+    timeout_s = float(os.environ.get("INSTANCE_RESOURCE_AGENT_START_TIMEOUT_S", config.INSTANCE_RESOURCE_AGENT_START_TIMEOUT_S))
+    ready = await _wait_agent_ready(agent_url, timeout_s=timeout_s, logger=logger)
+    if ready:
+        return proc, True
+
+    rc = proc.poll()
+    logger.warning(
+        "[InstanceResource] resource agent startup failed or timed out: cmd=%s returncode=%s stdout_tail=%r stderr_tail=%r",
+        " ".join(cmd),
+        rc,
+        _read_tail(stdout_tail),
+        _read_tail(stderr_tail),
+    )
+    _stop_resource_agent(proc, logger)
+    return None, False
+
+
+def _stop_resource_agent(proc, logger: logging.Logger) -> None:
+    if proc is None or proc.poll() is not None:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+        proc.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except Exception:
+            pass
+    except Exception as exc:
+        logger.debug("[InstanceResource] resource agent cleanup ignored: %s", exc)
+
+
+async def _resource_report_loop(stop: asyncio.Event, runtime_instance_id: str, logger: logging.Logger) -> None:
+    agent_url = _agent_url()
+    interval_ms = _resource_report_interval_ms()
+    timeout_s = float(os.environ.get("INSTANCE_RESOURCE_REPORT_TIMEOUT_S", config.INSTANCE_RESOURCE_REPORT_TIMEOUT_S))
+    interval_s = max(0.001, interval_ms / 1000.0)
+    logger.info(
+        "[InstanceResource] reporting enabled: agent_url=%s proxy_cp=%s interval_ms=%s timeout_s=%s",
+        agent_url,
+        PROXY_CP_URL,
+        interval_ms,
+        timeout_s,
+    )
+    failures = 0
+    first_ok = False
+    while not stop.is_set():
+        try:
+            ok = await asyncio.to_thread(
+                report_once,
+                agent_url,
+                PROXY_CP_URL,
+                runtime_instance_id,
+                timeout_s,
+                False,
+                False,
+            )
+            if ok:
+                failures = 0
+                if not first_ok:
+                    first_ok = True
+                    logger.info("[InstanceResource] first resource report ok: instance_id=%s", runtime_instance_id)
+            else:
+                failures += 1
+                if failures == 1 or failures % 30 == 0:
+                    logger.warning("[InstanceResource] resource report rejected x%s instance_id=%s", failures, runtime_instance_id)
+        except Exception as exc:
+            failures += 1
+            if failures == 1 or failures % 30 == 0:
+                logger.warning("[InstanceResource] resource report failed x%s err=%s", failures, exc)
+        await asyncio.sleep(interval_s)
 
 
 def _norm_http_base(raw: str) -> str:
@@ -223,6 +412,26 @@ async def lifespan(app: FastAPI):
 
     task = asyncio.create_task(_hb())
     app.state._hb_task = task # type: ignore
+
+    app.state._resource_agent_proc = None  # type: ignore
+    app.state._resource_report_task = None  # type: ignore
+    monitor_enabled = _env_bool("INSTANCE_RESOURCE_MONITOR_ENABLE", config.INSTANCE_RESOURCE_MONITOR_ENABLE)
+    report_enabled = _env_bool("INSTANCE_RESOURCE_REPORT_ENABLE", config.INSTANCE_RESOURCE_REPORT_ENABLE)
+    if monitor_enabled:
+        logger.info("[InstanceResource] monitor enabled: agent_url=%s", _agent_url())
+        agent_proc, agent_ready = await _start_resource_agent(runtime_instance_id, logger)
+        app.state._resource_agent_proc = agent_proc  # type: ignore
+        if agent_ready and report_enabled:
+            app.state._resource_report_task = asyncio.create_task(  # type: ignore
+                _resource_report_loop(stop=stop, runtime_instance_id=runtime_instance_id, logger=logger)
+            )
+        elif not agent_ready:
+            logger.warning("[InstanceResource] reporting disabled because resource agent is not ready")
+        else:
+            logger.info("[InstanceResource] resource reporting disabled")
+    else:
+        logger.info("[InstanceResource] monitor disabled")
+
     app.state._topology_task = asyncio.create_task(  # type: ignore
         _run_topology_discovery(client=client, instance_id=runtime_instance_id, logger=logger)
     )
@@ -239,6 +448,16 @@ async def lifespan(app: FastAPI):
             topo_task = getattr(app.state, "_topology_task", None)  # type: ignore
             if topo_task is not None:
                 topo_task.cancel()
+        except Exception:
+            pass
+        try:
+            rpt_task = getattr(app.state, "_resource_report_task", None)  # type: ignore
+            if rpt_task is not None:
+                rpt_task.cancel()
+        except Exception:
+            pass
+        try:
+            _stop_resource_agent(getattr(app.state, "_resource_agent_proc", None), logger)  # type: ignore
         except Exception:
             pass
         try:

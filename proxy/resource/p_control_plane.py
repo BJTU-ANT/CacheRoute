@@ -214,6 +214,37 @@ async def list_instances(include_dead: bool = False) -> List[Dict[str, Any]]:
     return out
 
 
+
+
+@_control_plane.get("/debug/instance_resources")
+async def debug_instance_resources(include_dead: bool = True) -> Dict[str, Any]:
+    pool = get_pool()
+    items = pool.list(include_dead=include_dead)
+    resources: List[Dict[str, Any]] = []
+    for it in items:
+        resources.append({
+            "instance_id": it.instance_id,
+            "host": it.host,
+            "port": it.port,
+            "last_seen_at": it.last_seen_at,
+            "resource": {
+                "cpu_util": it.resource.cpu_util,
+                "memory_used_mb": it.resource.memory_used_mb,
+                "memory_total_mb": it.resource.memory_total_mb,
+                "memory_free_mb": it.resource.memory_free_mb,
+                "memory_free_ratio": it.resource.memory_free_ratio,
+                "gpu_util_avg": it.resource.gpu_util_avg,
+                "gpu_mem_used_mb": it.resource.gpu_mem_used_mb,
+                "gpu_mem_total_mb": it.resource.gpu_mem_total_mb,
+                "network_rx_mbps": it.resource.network_rx_mbps,
+                "network_tx_mbps": it.resource.network_tx_mbps,
+                "admission_state": it.resource.admission_state,
+                "resource_ts_ms": it.resource.resource_ts_ms,
+                "resource_reported_at": it.resource.resource_reported_at,
+            },
+        })
+    return {"instances": resources}
+
 @_control_plane.post("/v1/topology/report")
 async def report_topology(req: TopologyReportReq) -> Dict[str, Any]:
     merged = 0
