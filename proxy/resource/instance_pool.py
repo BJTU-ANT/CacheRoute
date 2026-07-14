@@ -1,4 +1,5 @@
 # proxy/resource/instance_pool.py
+"""Maintains proxy-side registered instance state and load information."""
 from __future__ import annotations
 
 import time
@@ -9,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 @dataclass
 class InstanceLoad:
-    # 先预留，当前阶段不强依赖
+    # Reserved first; not strongly required at this stage
     inflight: Optional[int] = None
     qps_1m: Optional[float] = None
     gpu_util: Optional[float] = None
@@ -119,7 +120,7 @@ class InstancePool:
             if not it:
                 return False
             it.last_seen_at = now
-            # 只在传入时更新，避免覆盖为 0/None
+            # Only update when provided to avoid overwriting with 0/None
             if inflight is not None:
                 it.load.inflight = int(inflight)
             if qps_1m is not None:

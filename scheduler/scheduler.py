@@ -1,27 +1,27 @@
 """
-基于 FastAPI 的简单 Scheduler HTTP 入口。
-相较于v0 scheduler.py，采用http集成库进行发包，不再采用protocol/interface
+Simple FastAPI-based Scheduler HTTP entry point.
+Compared with v0 scheduler.py, this uses the HTTP integration library for sending requests instead of protocol/interface.
 
-调度器核心：
-  - 基于 FastAPI 提供 HTTP 接口
-  - 启动时挂起控制平面，构建proxy池和kdn池
-  - 控制平面接收来自proxy和kdn服务器的注册，并维护资源池
-  - 接收 /v1/chat/completions 和 /v1/completions 的 POST 请求
-  - 解析 URL / payload / 客户端 IP
-  - 分配 1~65535 循环的 request_id
-  - 调用 Request.build_request(...) 构建内部 Request 对象，构建Request时调用策略选择最优kdn和proxy
+Scheduler core:
+  - Provide HTTP APIs based on FastAPI
+  - Start the control plane at startup and build proxy/KDN pools
+  - The control plane receives registrations from proxy and KDN servers and maintains resource pools
+  - Receive POST requests for /v1/chat/completions and /v1/completions
+  - Parse URL / payload / client IP
+  - Assign request_id in a 1-65535 cycle
+  - Call Request.build_request(...) to build the internal Request object; during construction the strategy selects the best KDN and proxy
 
-调度器Workflow：
-  调度层：
-  - Scheduler 收到 HTTP 请求（OpenAI 风格）；
-  - 构建request（包含分配ID，决定各项服务以及下一级调度）
-  - 决定具体要打哪个下游 URL。
-  转发层：
-  - 拿着“下游 URL + 要发的数据 + headers”，
-  - 用 forward_request 把请求送到 Proxy，
-  - 一边从下游拉流，一边原样推回给用户（StreamingResponse）。
+Scheduler workflow:
+  Scheduling layer:
+  - Scheduler receives an OpenAI-style HTTP request;
+  - Build the request, including assigning an ID and deciding services plus next-level routing
+  - Decide the concrete downstream URL to call.
+  Forwarding layer:
+  - Take the downstream URL plus outgoing data and headers,
+  - use forward_request to send the request to the Proxy,
+  - pull the stream from downstream while pushing it back unchanged to the user (StreamingResponse).
 
-后续可以在这里接 Proxy / 流式传输等逻辑。
+Proxy / streaming-transfer logic can be connected here later.
 """
 
 from __future__ import annotations
@@ -69,17 +69,17 @@ from .strategy import create_strategy
 
 from util import timing
 
-# 如果外部没给，就用一个保底默认值（方便本地直接跑）
+# Use a fallback default when no external value is provided, making local runs easier
 from core.config import DEFAULT_MODEL, DEFAULT_EMBED_MODEL, SCHEDULER_CP_PORT
 
 
-# ======================= 请求ID分配器等基本函数=======================
+# ======================= Request ID allocator and other basic functions=======================
 
 class RequestIdAllocator:
     """
-    简单的 16bit 请求 ID 分配器：
-      - 有效范围：1 ~ max_id（默认 65535）
-      - 超过后从 1 重新开始
+    Simple 16-bit request ID allocator:
+      - valid range: 1 to max_id, default 65535
+      - restart from 1 after exceeding the range
     """
     def __init__(self, max_id: int = 65535) -> None:
         self._max_id = max_id
@@ -104,33 +104,33 @@ class PeekPayload(BaseModel):
 
 def init_logging() -> str:
     """
-    目标：
-    1) SCHEDULER_LOG_FILE 允许配置为“目录路径”或“文件路径”
-       - 目录：/logs/scheduler  -> /logs/scheduler/scheduler-YYYYMMDD-HHMMSS.log
-       - 文件：/logs/scheduler/scheduler.log -> /logs/scheduler/scheduler-YYYYMMDD-HHMMSS.log
-    2) 修复 handler 重复创建（先复用已有 RotatingFileHandler，找不到才创建）
-    3) 隔离 uvicorn 对 root logger 的影响：业务日志写在独立 logger 上 propagate=False
-    4) 控制台只输出 ERROR（错误立刻可见）
+    Goals:
+    1) SCHEDULER_LOG_FILE may be configured as either a directory path or a file path
+       - directory: /logs/scheduler -> /logs/scheduler/scheduler-YYYYMMDD-HHMMSS.log
+       - file: /logs/scheduler/scheduler.log -> /logs/scheduler/scheduler-YYYYMMDD-HHMMSS.log
+    2) Fix repeated handler creation by reusing an existing RotatingFileHandler first and creating one only if none exists
+    3) Isolate uvicorn impact on the root logger: write business logs to an independent logger with propagate=False
+    4) Only output ERROR to the console so errors are immediately visible
     """
-    # ---------- 1) 解析用户配置：目录 or 文件 ----------
+    # ---------- 1) Parse user configuration: directory or file ----------
     cfg_path = os.environ.get("SCHEDULER_LOG_FILE", getattr(config, "SCHEDULER_LOG_FILE", "scheduler.log"))
     p = Path(str(cfg_path)).expanduser()
 
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
 
     if p.suffix.lower() == ".log":
-        # 用户给的是文件路径
+        # The user provided a file path
         base_dir = p.parent
         stem = p.stem or "scheduler"
     else:
-        # 用户给的是目录路径
+        # The user provided a directory path
         base_dir = p
         stem = "scheduler"
 
     base_dir.mkdir(parents=True, exist_ok=True)
     log_path = str(base_dir / f"{stem}-{ts}.log")
 
-    # ---------- 2) 业务 logger（不走 root） ----------
+    # ---------- 2) Business logger, not through root ----------
     biz = logging.getLogger("scheduler")
     cp = logging.getLogger("scheduler.control_plane")
     hb = logging.getLogger("scheduler.hbreport")
@@ -139,7 +139,7 @@ def init_logging() -> str:
         lg.setLevel(logging.INFO)
         lg.propagate = False
 
-    # ---------- 3) 先复用已有 file handler（修复必修问题1） ----------
+    # ---------- 3) Reuse an existing file handler first (required fix 1) ----------
     def _find_same_file_handler(lg: logging.Logger, target: str) -> RotatingFileHandler | None:
         for h in lg.handlers:
             if isinstance(h, RotatingFileHandler) and getattr(h, "baseFilename", None) == target:
@@ -166,12 +166,12 @@ def init_logging() -> str:
         fh.setLevel(logging.INFO)
         fh.setFormatter(file_fmt)
 
-    # 挂载到三个 logger（避免重复 add）
+    # Attach to three loggers, avoiding duplicate adds
     for lg in (biz, cp, hb):
         if fh not in lg.handlers:
             lg.addHandler(fh)
 
-    # ---------- 4) root 控制台：ERROR only ----------
+    # ---------- 4) root console: ERROR only ----------
     root = logging.getLogger()
     root.setLevel(logging.INFO)
 
@@ -185,14 +185,14 @@ def init_logging() -> str:
         for h in stream_handlers:
             h.setLevel(logging.ERROR)
 
-    # ---------- 5) 降噪（可选） ----------
+    # ---------- 5) Noise reduction, optional ----------
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("uvicorn").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
-    # ---------- 6) 自检：写一条，立刻 flush ----------
+    # ---------- 6) Self-check: write one record and flush immediately ----------
     biz.info("[Scheduler] logging initialized, log_path=%s", log_path)
     for h in biz.handlers:
         try:
@@ -203,29 +203,29 @@ def init_logging() -> str:
     return log_path
 
 
-# ======================= Scheduler初始化 =======================
+# ======================= Scheduler initialization =======================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
-    FastAPI 生命周期管理：
-      - startup: 预热分词器
-      - shutdown: 目前没资源要清理，预留接口
+    FastAPI lifecycle management:
+      - startup: warm up the tokenizer
+      - shutdown: no resources to clean up currently; interface reserved
     """
     log_path = init_logging()
     print(f"[Scheduler] started. log_file={log_path}")
     # ------------------------------------------
-    # 尝试预热 tokenizer 分词器
+    # Try to warm up the tokenizer
     # ------------------------------------------
     model_path = os.getenv("SCHEDULER_MODEL_PATH", DEFAULT_MODEL)
     try:
-        # print("[Scheduler] startup: 开始预热分词器")
+        # print("[Scheduler] startup: start warming up tokenizer")
         TokenizerRegistry.warmup_tokenizers(model_path)
         logger.info(f"[Scheduler] Warmup tokenizers, model_path={model_path!r}")
     except Exception as e:
-        logger.info(f"[Scheduler] 分词器预热失败:{e}")
+        logger.info(f"[Scheduler] tokenizer warmup failed:{e}")
 
     # ------------------------------------------
-    # 尝试预热Embedding模型
+    # Try to warm up the embedding model
     # ------------------------------------------
     embedding_model_name = os.getenv("SCHEDULER_EMBEDDING_MODEL", DEFAULT_EMBED_MODEL)
     if os.path.isabs(embedding_model_name) and not os.path.isdir(embedding_model_name):
@@ -248,16 +248,16 @@ async def lifespan(app: FastAPI):
             logger.warning(f"[Scheduler] Warmup embedding model failed: {e}")
 
     except Exception as e:
-        logger.exception(f"[Scheduler] 预热 Embedding 模型失败: {e}")
+        logger.exception(f"[Scheduler] embedding model warmup failed: {e}")
         app.state.embedding_engine = None  # type: ignore
 
     # -------------------------------------------------------------
-    # 尝试启动控制平面，启用proxy池和KDN池，并从KDN池拉取知识清单来初始化知识库
+    # Try to start the control plane, enable proxy/KDN pools, and pull the knowledge list from the KDN pool to initialize the knowledge base
     # -------------------------------------------------------------
-    #先构建Proxy池实例
+    #Build the ProxyPool instance first
     ttl = int(os.environ.get("SCHEDULER_PROXY_TTL_S", config.CONTROL_PLANE_TTL_S))
     app.state.proxy_pool = ProxyPool(ttl_s=ttl)  # type: ignore
-    set_pool(app.state.proxy_pool)  # type: ignore 让 7002 复用这份池
+    set_pool(app.state.proxy_pool)  # type: ignore let 7002 reuse this pool
 
     kdn_ttl = int(os.environ.get("SCHEDULER_KDN_TTL_S", config.CONTROL_PLANE_TTL_S))
     app.state.kdn_pool = KDNPool(ttl_s=kdn_ttl)  # type: ignore
@@ -276,7 +276,7 @@ async def lifespan(app: FastAPI):
     logger.info("[Scheduler] KDN refresh loop started (pool-based).")
 
     async def _trigger_refresh_once() -> None:
-        # 如果 refresh 正在跑，就直接跳过（复用你的锁）
+        # If refresh is already running, skip directly and reuse the existing lock
         lock = getattr(app.state, "_kdn_refresh_lock", None) # type: ignore
         if lock is None:
             return
@@ -310,15 +310,15 @@ async def lifespan(app: FastAPI):
     app.state._cp_task = asyncio.create_task(_run_control_plane(app)) # type: ignore
 
     # ------------------------------------------
-    # 调用具体scheduler策略
+    # Call the concrete scheduler strategy
     # ------------------------------------------
     strategy_name = os.environ.get("SCHEDULER_STRATEGY", config.SCHEDULER_DEFAULT_STRATEGY)
     app.state.proxy_strategy = create_strategy(strategy_name)  # type: ignore
     loaded_name = getattr(app.state.proxy_strategy, "name", strategy_name)
     logger.info("[Scheduler] strategy loaded: %s", loaded_name)
 
-    # 这里 yield 之后是正常服务期
-    logger.info("[Scheduler] startup: 初始化完成，监听服务中")
+    # After this yield, the service is in normal serving period
+    logger.info("[Scheduler] startup: initialization complete; service is listening")
     try:
         yield
 
@@ -342,8 +342,8 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass
 
-    # shutdown 阶段，如果后面有资源要清理，可以写在这里
-    logger.info("[Scheduler] shutdown: 结束服务")
+    # During shutdown, add resource cleanup here if needed later
+    logger.info("[Scheduler] shutdown: service stopped")
 
 
 scheduler = FastAPI(
@@ -355,7 +355,7 @@ scheduler = FastAPI(
 
 
 
-# ======================= 公共内部处理函数 =======================
+# ======================= Common internal helper functions =======================
 @timing
 def _handle_client(
     app: FastAPI,
@@ -368,24 +368,24 @@ def _handle_client(
     kdn_knowledge_index: Dict[str, Dict[str, Dict[str, Any]]] | None = None,
 ) -> SchedulerRequest:
     """
-    根据 HTTP 请求信息
-    构造内部 Request 对象，分配request_id
-      - url_path: 例如 "/v1/chat/completions"
-      - payload: 解析后的 JSON 字典
-      - client_ip: 客户端 IP 字符串
+    Based on HTTP request information
+    build the internal Request object and assign request_id
+      - url_path: for example "/v1/chat/completions"
+      - payload: parsed JSON dict
+      - client_ip: client IP string
     """
-    # 分配 request_id（1~65535 循环）
+    # Assign request_id in a 1-65535 cycle
     request_id = id_alloc.next_id()
 
-    # 打印调试信息
+    # Print debug information
     if os.environ.get("SCHEDULER_VERBOSE_REQUEST_LOG", config.SCHEDULER_VERBOSE_REQUEST_LOG) == 1:
         print("+" * 80)
-        print(f"[Scheduler] 收到 HTTP 请求: path={url_path}, client_ip={client_ip},\n"
-              f"分配 request_id={request_id},\n"
+        print(f"[Scheduler] received HTTP request: path={url_path}, client_ip={client_ip},\n"
+              f"assigned request_id={request_id},\n"
               f"payload={payload}")
         print("+" * 80)
 
-    # 直接复用你改好的 build_request
+    # Directly reuse the updated build_request
     req_obj = SchedulerRequest.build_request(
         url_path=url_path,
         payload=payload,
@@ -399,7 +399,7 @@ def _handle_client(
         kdn_knowledge_index=kdn_knowledge_index,
     )
     if os.environ.get("SCHEDULER_VERBOSE_REQUEST_LOG", config.SCHEDULER_VERBOSE_REQUEST_LOG) == 1:
-        print(f"[Scheduler] 构建内部 Request 成功: Request_ID={req_obj.Request_ID},\n"
+        print(f"[Scheduler] built internal Request successfully: Request_ID={req_obj.Request_ID},\n"
               f"[Scheduler] Endpoint_type={getattr(req_obj.Service, 'Endpoint_type', None)},\n"
               f"[Scheduler] Knowledge_List={req_obj.Service.Knowledge_List},\n"
               f"[Scheduler] Selected KDN={req_obj.Task.KDN_server_addr}, ProxyID={req_obj.Task.P_proxy_id}[{req_obj.Task.P_proxy_addr}:{req_obj.Task.P_proxy_port}]"
@@ -408,13 +408,13 @@ def _handle_client(
     return req_obj
 
 
-# ======================= 调度器方法路由 =======================
+# ======================= Scheduler route handlers =======================
 @scheduler.post("/v1/chat/completions")
 async def create_chat_completions(request: FastAPIRequest):
     """
-    对应：
+    Corresponds to:
         curl http://HOST:PORT/v1/chat/completions -H "Content-Type: application/json" -d '{...}'
-        payload 结构参考 OpenAI chat 接口：
+        payload structure follows the OpenAI chat API:
           {
             "model": "...",
             "messages": [ ... ],
@@ -425,7 +425,7 @@ async def create_chat_completions(request: FastAPIRequest):
             ...
           }
     """
-    # 解析用户原始请求体
+    # Parse the user raw request body
     try:
         payload = await request.json()
     except Exception as e:
@@ -434,14 +434,14 @@ async def create_chat_completions(request: FastAPIRequest):
             content={"error": "invalid_json", "detail": str(e)},
         )
 
-    # 取客户端 IP 和路径（用于构建内部 Request）
+    # Get client IP and path for building the internal Request
     client_ip = request.client.host if request.client else "unknown"
     url_path = request.url.path
 
-    # 把用户请求头转成 dict[str, str]
+    # Convert user request headers to dict[str, str]
     raw_headers = {k.lower(): v for k, v in request.headers.items()}
 
-    # 构建内部 Request（包含 Prompt/Service/Task 等）
+    # Build the internal Request, including Prompt/Service/Task, etc.
     pool = get_pool()
     proxy_infos = await pool.list(include_dead=False)
     proxies = [
@@ -490,7 +490,7 @@ async def create_chat_completions(request: FastAPIRequest):
     if not req_obj.Task.KDN_server_addr or not req_obj.Task.P_proxy_addr or req_obj.Task.P_proxy_port <= 0:
         raise RuntimeError("Routing failed: missing KDN or Proxy selection")
 
-    # 根据调度结果选择下游 URL，更新对应proxy_id的inflight
+    # Select downstream URL from the scheduling result and update inflight for the corresponding proxy_id
     host = req_obj.Task.P_proxy_addr
     port = req_obj.Task.P_proxy_port
     endpoint = getattr(req_obj.Service, "Endpoint_type", "chat/completions")
@@ -502,47 +502,47 @@ async def create_chat_completions(request: FastAPIRequest):
     if not ok:
         raise RuntimeError(f"Proxy not found in pool: {proxy_id}")
 
-    # 转化payload
+    # Transform payload
     data_for_downstream = req_obj.to_payload()
 
-    # 处理需要透传给下游的 headers（可选择性过滤）
+    # Handle headers that need to be passed through downstream, optionally filtering them
     extra_headers = {}
 
-    # 把用户的 Authorization 原样传给下游（如果希望由 Proxy 做鉴权）
+    # Pass the user Authorization downstream unchanged if Proxy should perform authentication
     if "authorization" in raw_headers:
         extra_headers["authorization"] = raw_headers["authorization"]
 
-    # 带一个 Scheduler分配的Request ID，便于链路追踪
+    # Carry a Scheduler-assigned Request ID for traceability
     extra_headers["scheduler-request-id"] = str(req_obj.Request_ID)
 
-    # 定义一个 async 生成器，从下游流式读取，再回给上游
+    # Define an async generator that reads streaming data from downstream and returns it upstream
     async def iter_upstream():
         try:
-            # forward_request 本身是一个 async generator
+            # forward_request itself is an async generator
             async for chunk in forward_request(
                 url=downstream_url,
                 data=data_for_downstream,
-                use_chunked=True,            # chat/completions 一般是流式
-                extra_headers=extra_headers, # 透传必要头
+                use_chunked=True,            # chat/completions is usually streaming
+                extra_headers=extra_headers, # pass through required headers
             ):
-                # 这里 chunk 已经是 bytes，直接 yield 出去即可
+                # chunk is already bytes here, so yield it directly
                 yield chunk
         finally:
             await pool.inflight_delta(proxy_id, -1)
 
-    # 用 StreamingResponse 包一层，实现用户侧的流式响应
+    # Wrap with StreamingResponse to provide the user-side streaming response
     return StreamingResponse(iter_upstream(), media_type="application/json")
 
 
 @scheduler.post("/v1/completions")
 async def create_completions(request: FastAPIRequest):
     """
-    对应：
+    Corresponds to:
       curl http://HOST:PORT/v1/completions -H "Content-Type: application/json" -d '{...}'
-    payload 结构类似 OpenAI completions 接口：
+    payload structure is similar to the OpenAI completions API:
       {
         "model": "...",
-        "prompt": "...." 或 ["..."],
+        "prompt": "...." or ["..."],
         "max_tokens": ...,
         "temperature": ...,
         "top_p": ...,
@@ -558,14 +558,14 @@ async def create_completions(request: FastAPIRequest):
             content={"error": "invalid_json", "detail": str(e)},
         )
 
-    # 取客户端 IP 和路径（用于构建内部 Request）
+    # Get client IP and path for building the internal Request
     client_ip = request.client.host if request.client else "unknown"
     url_path = request.url.path
 
-    # 把用户请求头转成 dict[str, str]
+    # Convert user request headers to dict[str, str]
     raw_headers = {k.lower(): v for k, v in request.headers.items()}
 
-    # 构建内部 Request（包含 Prompt/Service/Task 等）
+    # Build the internal Request, including Prompt/Service/Task, etc.
     pool = get_pool()
     proxy_infos = await pool.list(include_dead=False)
     proxies = [
@@ -614,7 +614,7 @@ async def create_completions(request: FastAPIRequest):
     if not req_obj.Task.KDN_server_addr or not req_obj.Task.P_proxy_addr or req_obj.Task.P_proxy_port <= 0:
         raise RuntimeError("Routing failed: missing KDN or Proxy selection")
 
-    # 根据调度结果选择下游 URL，更新对应proxy_id的inflight
+    # Select downstream URL from the scheduling result and update inflight for the corresponding proxy_id
     host = req_obj.Task.P_proxy_addr
     port = req_obj.Task.P_proxy_port
     endpoint = getattr(req_obj.Service, "Endpoint_type", "completions")
@@ -626,35 +626,35 @@ async def create_completions(request: FastAPIRequest):
     if not ok:
         raise RuntimeError(f"Proxy not found in pool: {proxy_id}")
 
-    # 转化payload
+    # Transform payload
     data_for_downstream = req_obj.to_payload()
 
-    # 处理需要透传给下游的 headers（可选择性过滤）
+    # Handle headers that need to be passed through downstream, optionally filtering them
     extra_headers = {}
 
-    # 把用户的 Authorization 原样传给下游（如果希望由 Proxy 做鉴权）
+    # Pass the user Authorization downstream unchanged if Proxy should perform authentication
     if "authorization" in raw_headers:
         extra_headers["authorization"] = raw_headers["authorization"]
 
-    # 带一个 Scheduler分配的Request ID，便于链路追踪
+    # Carry a Scheduler-assigned Request ID for traceability
     extra_headers["scheduler-request-id"] = str(req_obj.Request_ID)
 
-    # 定义一个 async 生成器，从下游流式读取，再回给上游
+    # Define an async generator that reads streaming data from downstream and returns it upstream
     async def iter_upstream():
         try:
-            # forward_request 本身是一个 async generator
+            # forward_request itself is an async generator
             async for content in forward_request(
                     url=downstream_url,
                     data=data_for_downstream,
-                    use_chunked=False,  # chat/completions 一般是流式
-                    extra_headers=extra_headers,  # 透传必要头
+                    use_chunked=False,  # chat/completions is usually streaming
+                    extra_headers=extra_headers,  # pass through required headers
             ):
-                # 这里 chunk 已经是 bytes，直接 yield 出去即可
+                # chunk is already bytes here, so yield it directly
                 yield content
         finally:
             await pool.inflight_delta(proxy_id, -1)
 
-    # 用 StreamingResponse 包一层，实现用户侧的流式响应
+    # Wrap with StreamingResponse to provide the user-side streaming response
     return StreamingResponse(iter_upstream(), media_type="application/json")
 
 
@@ -746,7 +746,7 @@ async def debug_status() -> Dict[str, Any]:
     kids = list(units.keys())
     kids_sorted = sorted(kids)[:10]
 
-    # 尽量从 table 拿到 dim
+    # Try to get dim from the table
     dim = getattr(table, "dim", None)
 
     # FAISS
@@ -758,15 +758,15 @@ async def debug_status() -> Dict[str, Any]:
         except Exception:
             faiss_total = None
 
-    # KnowledgeUnit 字段探测（帮助你看 snapshot 后到底存了什么）
+    # KnowledgeUnit field probing, to help inspect what is actually stored after snapshot
     unit_fields: List[str] = []
     if kids_sorted:
         u0 = units[kids_sorted[0]]
-        # dataclass 一般有 __dict__
+        # dataclasses generally have __dict__
         if hasattr(u0, "__dict__"):
             unit_fields = sorted(list(u0.__dict__.keys()))
         else:
-            # fallback：dir 过滤
+            # fallback：dir filtering
             unit_fields = [x for x in dir(u0) if not x.startswith("_")]
 
     return {
@@ -822,7 +822,7 @@ async def debug_peek_knowledge(payload: PeekPayload) -> Dict[str, Any]:
         if "text_abstract" in allow:
             it["text_abstract"] = getattr(u, "text_abstract", None)
 
-        # 可选：你若在 KnowledgeUnit/metadata 里存了 kv_ready 等，也可以在这里输出
+        # Optional: if kv_ready or similar fields are stored in KnowledgeUnit/metadata, they can also be output here
         if "meta" in allow and hasattr(u, "meta"):
             it["meta"] = getattr(u, "meta")
         if "kv_ready" in allow:
@@ -855,12 +855,12 @@ async def debug_strategy() -> Dict[str, Any]:
     pool = get_pool()
     proxy_infos = await pool.list(include_dead=False)
 
-    # 只返回简要信息，避免输出过大
+    # Return only concise information to avoid overly large output
     sample = [{
         "proxy_id": p.proxy_id,
         "host": p.host,
         "port": p.port,
-        "is_alive": True,  # list(include_dead=False) 已保证 alive
+        "is_alive": True,  # list(include_dead=False) already guarantees alive
     } for p in proxy_infos[:10]]
 
     out = {
@@ -875,7 +875,7 @@ async def debug_strategy() -> Dict[str, Any]:
             out["strategy_debug"] = {"error": "strategy debug snapshot unavailable"}
     return out
 
-# 预留：/knowledge/update 等路由以后再加
+# Reserved: add routes such as /knowledge/update later
 # @api.post("/knowledge/update")
 # async def knowledge_update(request: FastAPIRequest):
 #     payload = await request.json()

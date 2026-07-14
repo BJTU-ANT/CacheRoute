@@ -1,4 +1,5 @@
 # proxy/queue/instance_queues.py
+"""Defines per-instance proxy queues and concurrency limits for prepare and ready phases."""
 from __future__ import annotations
 
 import asyncio
@@ -11,18 +12,18 @@ from .task import ProxyTask
 @dataclass
 class InstanceQueues:
     """
-    每个 instance 的本地队列与并发控制：
-    - prepare_q：知识准备阶段
-    - ready_q：知识已就绪，等待推理转发阶段
-    - prepare_sem：限制同一 instance 上 prepare/inject 的并发数
+    Per-instance local queues and concurrency controls:
+    - prepare_q: knowledge preparation phase
+    - ready_q: knowledge is ready and the task is waiting for inference forwarding
+    - prepare_sem: limits prepare/inject concurrency on the same instance
     """
     prepare_q: "asyncio.Queue[ProxyTask]" = field(default_factory=lambda: asyncio.Queue(maxsize=256))
     ready_q: "asyncio.Queue[ProxyTask]" = field(default_factory=lambda: asyncio.Queue(maxsize=256))
 
-    # 运行时由 PerInstanceQueueMap 注入具体并发度
+    # PerInstanceQueueMap injects the concrete concurrency at runtime
     prepare_sem: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(1))
 
-    # 仅用于观测
+    # Only used for observability
     active_prepare: int = 0
     active_ready: int = 0
 

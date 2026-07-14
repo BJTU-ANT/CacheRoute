@@ -1,3 +1,4 @@
+"""Provides CLI commands for inspecting Scheduler resource and knowledge state."""
 import argparse
 import os
 import shlex
@@ -69,7 +70,7 @@ def infer_cp_url(base_url: str) -> str:
     host = u.hostname or "127.0.0.1"
     port = u.port
 
-    # 保守：无端口就默认 7002
+    # Conservative fallback: default to 7002 when no port is provided
     cp_port = 7002 if port is None else (7002 if port == 7001 else port + 1)
 
     scheme = u.scheme or "http"
@@ -135,7 +136,7 @@ def cmd_peek(base_url: str, kids: list[str]):
 
     payload = {
         "kids": kids,
-        # 默认只看安全字段，避免输出大 embedding
+        # By default, show only safe fields to avoid printing large embeddings
         "need_fields": ["length", "avail_kdn_servers", "avail_llm_systems", "kv_ready","kv_dumped_keys"],
     }
     r = http_post(base_url, "/debug/knowledge/peek", payload)
@@ -182,7 +183,7 @@ def cmd_kdn(cp_url: str, include_dead: bool = False):
         alive = k.get("is_alive")
         last_seen = k.get("last_seen_at")
 
-        # 兼容两种结构：平铺字段或 load 子对象
+        # Support both shapes: flattened fields or a load sub-object
         items = k.get("items")
         qps_1m = k.get("qps_1m")
         if items is None and isinstance(k.get("load"), dict):
@@ -210,7 +211,7 @@ def cmd_proxies(cp_url: str, include_dead: bool = False):
         alive = p.get("is_alive")
         last_seen = p.get("last_seen_at")
 
-        # ---- dynamic (兼容平铺或 load 子对象) ----
+        # ---- dynamic (compatible with flattened fields or a load sub-object) ----
         inflight = p.get("inflight")
         qps_1m = p.get("qps_1m")
         gpu_util = p.get("gpu_util")
@@ -223,7 +224,7 @@ def cmd_proxies(cp_url: str, include_dead: bool = False):
             if gpu_util is None:
                 gpu_util = load.get("gpu_util")
 
-        # ---- static capability (注册时上报/或由scheduler计算) ----
+        # ---- static capability (reported at registration or computed by the scheduler) ----
         max_capacity = p.get("max_capacity")
         instance_count = p.get("instance_count")
         kv_mem_per_instance_gb = p.get("kv_mem_per_instance_gb")
@@ -239,7 +240,7 @@ def cmd_proxies(cp_url: str, include_dead: bool = False):
             if kv_cache_pool_gb is None:
                 kv_cache_pool_gb = load.get("kv_cache_pool_gb")
 
-        # policy（你要求放在 proxyinfo 内；如果后端做成平铺字段就直接读，否则 fallback meta）
+        # policy（requested inside proxyinfo; read directly if backend exposes flat fields, otherwise fall back to meta）
         kv_policy = p.get("kv_cache_update_policy")
         if kv_policy is None and isinstance(p.get("meta"), dict):
             kv_policy = p["meta"].get("kv_cache_update_policy")
