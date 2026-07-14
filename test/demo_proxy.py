@@ -1,7 +1,7 @@
 """
 demo_proxy.py
 
-启动 Proxy 服务，用于接收 Scheduler 转发的 Request payload。
+Start the Proxy service to receive Request payloads forwarded by the Scheduler.
 """
 
 import sys
@@ -238,10 +238,10 @@ if __name__ == "__main__":
             ui_proc = None
 
     import uvicorn
-    from proxy import proxy  # 确保在设置环境变量后导入
+    from proxy import proxy  # Ensure this is imported after setting environment variables
 
     try:
-        # 选择一个与 Scheduler 不同的端口，例如 8001
+        # Choose a port different from the Scheduler port, for example 8001
         uvicorn.run(proxy, host=host, port=port, reload=False)
     finally:
         if ui_proc is not None:

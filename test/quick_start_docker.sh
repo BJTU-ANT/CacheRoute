@@ -7,7 +7,7 @@ REDIS_C="lmcache-redis"
 GS_SCHEMA="org.gnome.Terminal.Legacy.Settings"
 GS_KEY="new-terminal-mode"
 
-# 临时把“新终端行为”设为 tab，保证 --tab 一定加到当前窗口
+# Temporarily set "new terminal behavior" to tab so --tab is always added to the current window
 ORIG_MODE="$(gsettings get ${GS_SCHEMA} ${GS_KEY})"
 gsettings set ${GS_SCHEMA} ${GS_KEY} 'tab'
 trap 'gsettings set '"${GS_SCHEMA}"' '"${GS_KEY}"' '"${ORIG_MODE}"' >/dev/null 2>&1 || true' EXIT

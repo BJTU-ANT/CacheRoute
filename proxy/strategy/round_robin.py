@@ -1,4 +1,5 @@
 # proxy/strategy/round_robin.py
+"""Implements round-robin instance selection for the proxy."""
 from __future__ import annotations
 
 import threading
@@ -18,7 +19,7 @@ class RoundRobinStrategy(BaseInstanceStrategy):
         if not instances:
             raise RuntimeError("no instances")
         with self._lock:
-            # idx 只在这里增长，避免并发请求下重复/跳号不一致
+            # idx only increases here to avoid duplicates or inconsistent skips under concurrent requests
             i = self._idx % len(instances)
             self._idx += 1
             return instances[i]

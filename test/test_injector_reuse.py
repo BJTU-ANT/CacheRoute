@@ -1,7 +1,7 @@
 # save as tools/test_reuse.py
 import time, json, requests, pathlib
 """
-注意使用前修改路径
+Note: update paths before use.
 """
 API="http://127.0.0.1:8000/v1/chat/completions"
 MODEL="llama3-70b"

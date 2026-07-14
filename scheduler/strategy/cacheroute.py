@@ -14,27 +14,27 @@ logger = logging.getLogger("scheduler.strategy.cacheroute")
 
 class CacheRouteStrategy(ProxySelectionStrategy):
     """
-    CacheRoute 调度策略的第一阶段实现。
+    First-stage implementation of the CacheRoute scheduling strategy.
 
-    当前版本只做最小可用能力：
-    1) 基于 request 的 Knowledge_List，在每个 KDN 的知识元数据索引里判断
-       - 是否能完整提供请求所需知识文本；
-       - 该 KDN 上 kv_ready 覆盖的总长度。
-    2) KDN 选择采用“词典序规则”，避免引入加权打分：
-       - 优先完整文本覆盖；
-       - 优先非过载 KDN；
-       - 再比 kv_ready 覆盖长度；
-       - 最后比轻负载与稳定顺序。
-    3) Proxy 选择（第二阶段）升级为“非加权词典序”：
-       - 先在 chosen_kdn 锚点下选择拓扑最优组（带宽层级优先，时延层级其次）；
-       - 再做负载安全窗口过滤（避免单机过载）；
-       - 再比较知识历史偏好（倾向同一 LLM 连续处理相近知识）；
-       - 最后按当前负载 + 稳定轮转打破并列。
+    The current version implements only the minimum usable capabilities:
+    1) Based on the request Knowledge_List, check each KDN knowledge metadata index for
+       - whether it can fully provide the knowledge text required by the request;
+       - the total length covered by kv_ready on that KDN.
+    2) KDN selection uses lexicographic rules to avoid introducing weighted scoring:
+       - prefer complete text coverage;
+       - prefer non-overloaded KDNs;
+       - then compare kv_ready coverage length;
+       - finally compare lighter load and stable order.
+    3) Proxy selection (stage 2) is upgraded to non-weighted lexicographic ordering:
+       - first select the topology-best group anchored at chosen_kdn (bandwidth tier first, latency tier second);
+       - then apply load safety-window filtering to avoid single-node overload;
+       - then compare knowledge history preference, favoring the same LLM for consecutive similar knowledge;
+       - finally break ties by current load plus stable rotation.
 
-    备注：
-    - 这里不依赖 Injection_type 做模式分支；正式策略默认先满足文本可服务性，
-      再在可服务候选中偏向 KVCache 覆盖更高的 KDN。
-    - request_ctx / kdn_knowledge_index 由 scheduler 内部准备。
+    Notes:
+    - This does not branch on Injection_type; the formal strategy first satisfies text serviceability by default,
+      then prefers KDNs with higher KVCache coverage among serviceable candidates.
+    - request_ctx / kdn_knowledge_index are prepared inside the scheduler.
     """
 
     name: str = "cacheroute"
@@ -42,29 +42,29 @@ class CacheRouteStrategy(ProxySelectionStrategy):
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._proxy_cursor = 0
-        # 第一阶段参数：使用阈值规则（非加权）判断 KDN 过载。
-        # 值为 0 表示不启用对应阈值。
+        # Stage-1 parameters: use threshold rules (non-weighted) to determine KDN overload.
+        # A value of 0 means the corresponding threshold is disabled.
         self._kdn_qps_overload_th = float(os.environ.get("SCHEDULER_CACHEROUTE_KDN_QPS_OVERLOAD_TH", str(config.SCHEDULER_CACHEROUTE_KDN_QPS_OVERLOAD_TH)).strip() or 0)
         self._kdn_items_overload_th = int(os.environ.get("SCHEDULER_CACHEROUTE_KDN_ITEMS_OVERLOAD_TH", str(config.SCHEDULER_CACHEROUTE_KDN_ITEMS_OVERLOAD_TH)).strip() or 0)
         self._kdn_pending_overload_th = int(os.environ.get("SCHEDULER_CACHEROUTE_KDN_PENDING_OVERLOAD_TH", str(config.SCHEDULER_CACHEROUTE_KDN_PENDING_OVERLOAD_TH)).strip() or 0)
         self._kdn_active_overload_th = int(os.environ.get("SCHEDULER_CACHEROUTE_KDN_ACTIVE_OVERLOAD_TH", str(config.SCHEDULER_CACHEROUTE_KDN_ACTIVE_OVERLOAD_TH)).strip() or 0)
         self._kdn_queue_ms_overload_th = float(os.environ.get("SCHEDULER_CACHEROUTE_KDN_QUEUE_MS_OVERLOAD_TH", str(config.SCHEDULER_CACHEROUTE_KDN_QUEUE_MS_OVERLOAD_TH)).strip() or 0.0)
-        # Proxy 侧第二阶段参数：负载安全窗口（非加权过滤）
+        # Proxy-side stage-2 parameters: load safety window (non-weighted filtering)
         self._proxy_inflight_delta = int(os.environ.get("SCHEDULER_CACHEROUTE_PROXY_INFLIGHT_DELTA", str(config.SCHEDULER_CACHEROUTE_PROXY_INFLIGHT_DELTA)).strip() or 0)
         self._proxy_gpu_delta = float(os.environ.get("SCHEDULER_CACHEROUTE_PROXY_GPU_DELTA", str(config.SCHEDULER_CACHEROUTE_PROXY_GPU_DELTA)).strip() or 0.0)
-        # Step2新增：基于负载比例(real_time_inflight/max_inflight)的安全窗口，delta范围建议[0,1]
+        # Step 2 addition: safety window based on load ratio (real_time_inflight/max_inflight); recommended delta range is [0,1]
         self._proxy_load_ratio_delta = float(os.environ.get("SCHEDULER_CACHEROUTE_PROXY_LOAD_RATIO_DELTA", str(config.SCHEDULER_CACHEROUTE_PROXY_LOAD_RATIO_DELTA)).strip() or 0.0)
-        # 历史偏好衰减（每次选择后应用），默认 0.9
+        # History-preference decay applied after each selection; default is 0.9
         self._affinity_decay = float(os.environ.get("SCHEDULER_CACHEROUTE_AFFINITY_DECAY", str(config.SCHEDULER_CACHEROUTE_AFFINITY_DECAY)).strip() or 0.9)
-        # 每个 proxy 只保留最近最有价值的 top-k kid，避免状态无限增长
+        # Keep only the most valuable recent top-k kids per proxy to avoid unbounded state growth
         self._affinity_topk = int(os.environ.get("SCHEDULER_CACHEROUTE_AFFINITY_TOPK", str(config.SCHEDULER_CACHEROUTE_AFFINITY_TOPK)).strip() or 256)
-        # 输出简洁的一行决策日志，默认开启；设为 0 可关闭。
+        # Output a concise one-line decision log; enabled by default and disabled by setting 0.
         self._log_decision = bool(int(os.environ.get("SCHEDULER_CACHEROUTE_LOG_DECISION", str(config.SCHEDULER_CACHEROUTE_LOG_DECISION)).strip() or 0))
-        # 记录最近一次决策快照，供 /debug/strategy 读取。
+        # Record the latest decision snapshot for /debug/strategy.
         self._last_decision: Dict[str, Any] = {}
-        # 粗粒度知识历史偏好：proxy_id -> kid -> decayed_score
+        # Coarse-grained knowledge history preference: proxy_id -> kid -> decayed_score
         self._proxy_kid_affinity: Dict[str, Dict[str, float]] = {}
-        # v0.1.7: 策略计数器（便于实验比较，不参与调度）
+        # v0.1.7: Strategy counters for experiment comparison; not used in scheduling
         self._counters: Dict[str, int] = {
             "requests_total": 0,
             "kdn_overload_filtered": 0,
@@ -95,11 +95,11 @@ class CacheRouteStrategy(ProxySelectionStrategy):
 
     def _proxy_load_ratio(self, proxy: Dict[str, Any]) -> float:
         """
-        实时负载比例：
+        Real-time load ratio:
           load_ratio = real_time_inflight / max_inflight
-        说明：
-        - max_inflight<=0 时视为不可归一化，返回 1.0（保守处理）
-        - 结果限制在 [0, +inf)，上层比较时只做相对大小
+        Notes:
+        - When max_inflight <= 0, treat it as non-normalizable and return 1.0 conservatively
+        - The result is limited to [0, +inf); upper-layer comparison only uses relative size
         """
         max_inflight = self._proxy_max_inflight(proxy)
         if max_inflight <= 0:
@@ -116,17 +116,17 @@ class CacheRouteStrategy(ProxySelectionStrategy):
 
     @staticmethod
     def _is_overloaded(kdn: Dict[str, Any]) -> bool:
-        """向后兼容：保留 meta.overloaded 显式覆盖。"""
+        """Backward compatibility: keep explicit meta.overloaded override."""
         meta = kdn.get('meta') or {}
         return bool(meta.get('overloaded', False))
 
     @staticmethod
     def _topology_link_for_proxy(proxy: Dict[str, Any], chosen_kdn: Dict[str, Any]) -> Tuple[float, float]:
         """
-        从 proxy.meta.kdn_links 中读取 chosen_kdn 的链路信息：
-        - bandwidth_mbps: 越大越好（默认 0.0）
-        - latency_ms: 越小越好（默认 +inf）
-        支持 key 为 kdn_id 或 kdn://host:port。
+        Read chosen_kdn link information from proxy.meta.kdn_links:
+        - bandwidth_mbps: larger is better (default 0.0)
+        - latency_ms: smaller is better (default +inf)
+        Supports keys as either kdn_id or kdn://host:port.
         """
         meta = proxy.get("meta") or {}
         links = meta.get("kdn_links") or {}
@@ -145,9 +145,9 @@ class CacheRouteStrategy(ProxySelectionStrategy):
 
     def _is_overloaded_by_threshold(self, kdn: Dict[str, Any]) -> bool:
         """
-        第一阶段过载判定（非加权）：
-        1) meta.overloaded 显式为 True -> 过载；
-        2) 若配置了阈值，按 qps/items/meta.pending_transfers 逐条判定。
+        Stage-1 overload check (non-weighted):
+        1) meta.overloaded explicitly True -> overloaded;
+        2) if thresholds are configured, check qps/items/meta.pending_transfers one by one.
         """
         if self._is_overloaded(kdn):
             return True
@@ -180,7 +180,7 @@ class CacheRouteStrategy(ProxySelectionStrategy):
         if not kdns:
             return None
 
-        # 没有知识需求时，退化为最轻负载 KDN，避免复杂逻辑干扰原有流程。
+        # When there is no knowledge requirement, fall back to the lightest-load KDN so complex logic does not interfere with the existing flow.
         if not knowledge_list:
             ranked = sorted(
                 kdns,
@@ -200,7 +200,7 @@ class CacheRouteStrategy(ProxySelectionStrategy):
             kdn_id = str(kdn.get('kdn_id') or '')
             kdn_addr = self._kdn_addr(kdn)
 
-            # 支持两种索引键：kdn_id 优先，其次 kdn://host:port，方便后续平滑过渡。
+            # Support two index keys: kdn_id first, then kdn://host:port, enabling a smooth future transition.
             meta_by_kid = knowledge_index.get(kdn_id) or knowledge_index.get(kdn_addr) or {}
 
             text_full = True
@@ -215,13 +215,13 @@ class CacheRouteStrategy(ProxySelectionStrategy):
                 if int(item.get('kv_ready', 0) or 0) == 1:
                     kv_cover_len += int(item.get('length', 0) or 0)
 
-            # 词典序：
-            # 1. 完整文本覆盖优先
-            # 2. 非过载优先
-            # 3. KVCache 覆盖长度越大越优
-            # 4. 缺失知识数越少越优（作为非完整覆盖场景的回退）
-            # 5. QPS / items 越小越优
-            # 6. kdn_id 稳定打破并列
+            # Lexicographic order:
+            # 1. prefer complete text coverage
+            # 2. prefer non-overloaded resources
+            # 3. larger KVCache coverage length is better
+            # 4. fewer missing knowledge items is better, as a fallback when coverage is incomplete
+            # 5. lower QPS / item count is better
+            # 6. use kdn_id for stable tie-breaking
             key = (
                 0 if text_full else 1,
                 0 if not self._is_overloaded_by_threshold(kdn) else 1,
@@ -243,17 +243,17 @@ class CacheRouteStrategy(ProxySelectionStrategy):
                     "items": self._kdn_items(kdn),
                 }
             )
-            # Step1目标语义：可用KDN = 文本完整覆盖 + 不过载
+            # Step 1 target semantics: usable KDN = complete text coverage + not overloaded
             if text_full and (not self._is_overloaded_by_threshold(kdn)):
                 usable_key = (
-                    -kv_cover_len,           # 可复用KV覆盖长度越大越优
-                    self._kdn_qps(kdn),      # 并列时优先低负载
+                    -kv_cover_len,           # larger reusable KV coverage length is better
+                    self._kdn_qps(kdn),      # prefer lower load on ties
                     self._kdn_items(kdn),
                     kdn_id,
                 )
                 usable_rows.append((usable_key, kdn))
 
-        # Step1：优先从可用集合中选择；若为空再回退到原排序规则
+        # Step 1: prefer selecting from the usable set; if empty, fall back to the original ordering rule
         if usable_rows:
             usable_rows.sort(key=lambda x: x[0])
             chosen = usable_rows[0][1]
@@ -292,12 +292,12 @@ class CacheRouteStrategy(ProxySelectionStrategy):
     ) -> Optional[Dict[str, Any]]:
         if not proxies:
             return None
-        # Step2语义对齐：
-        #  0) 仅在 chosen_kdn 可连接的LLM系统中选择
-        #  1) 负载安全窗口（load_ratio最小 + delta）
-        #  2) 历史知识偏好
-        #  3) 链路带宽更优
-        #  4) 负载更低
+        # Step 2 semantic alignment:
+        #  0) select only among LLM systems reachable from chosen_kdn
+        #  1) load safety window (minimum load_ratio + delta)
+        #  2) historical knowledge preference
+        #  3) better link bandwidth
+        #  4) lower load
         if chosen_kdn:
             connectable = [
                 p for p in proxies
@@ -307,7 +307,7 @@ class CacheRouteStrategy(ProxySelectionStrategy):
         else:
             proxy_pool = proxies
 
-        # Step1: 负载安全（优先使用 load_ratio；无max_inflight时回退inflight窗口）
+        # Step1: load safety (prefer load_ratio; fall back to inflight window when max_inflight is unavailable)
         min_ratio = min(self._proxy_load_ratio(p) for p in proxy_pool)
         safe_group = [
             p for p in proxy_pool
@@ -329,7 +329,7 @@ class CacheRouteStrategy(ProxySelectionStrategy):
                 if self._proxy_gpu(p) <= (min_gpu + self._proxy_gpu_delta)
             ] or safe_group
 
-        # Step2: 历史偏好（累积kid + 衰减）
+        # Step2: history preference (accumulated kids + decay)
         affinity_rows: List[Tuple[float, Dict[str, Any]]] = []
         for p in safe_group:
             pid = str(p.get("proxy_id", ""))
@@ -340,7 +340,7 @@ class CacheRouteStrategy(ProxySelectionStrategy):
             with self._lock:
                 self._counters["proxy_affinity_hits"] += 1
 
-        # Step3+Step4: 带宽更优 -> 负载更低
+        # Step3+Step4: better bandwidth -> lower load
         ranked = sorted(
             aff_group,
             key=lambda p: (
@@ -377,7 +377,7 @@ class CacheRouteStrategy(ProxySelectionStrategy):
             ) == best_key
         ]
 
-        # 更新亲和性：选中 proxy 对本次知识集合增益；其他 proxy 衰减
+        # Update affinity: boost the selected proxy for this knowledge set and decay other proxies
         chosen = best
         with self._lock:
             if len(tied) > 1:
@@ -399,7 +399,7 @@ class CacheRouteStrategy(ProxySelectionStrategy):
             chosen_table = self._proxy_kid_affinity.setdefault(chosen_pid, {})
             for kid in knowledge_list:
                 chosen_table[kid] = float(chosen_table.get(kid, 0.0)) + 1.0
-            # 只保留 top-k，避免长期实验状态膨胀
+            # Keep only top-k to avoid state growth in long-running experiments
             if self._affinity_topk > 0 and len(chosen_table) > self._affinity_topk:
                 kept = sorted(chosen_table.items(), key=lambda kv: kv[1], reverse=True)[: self._affinity_topk]
                 self._proxy_kid_affinity[chosen_pid] = dict(kept)
@@ -442,7 +442,7 @@ class CacheRouteStrategy(ProxySelectionStrategy):
         ctx = request_ctx or {}
         knowledge_list = [str(x).strip().lower() for x in (ctx.get('knowledge_list') or []) if str(x).strip()]
         knowledge_index = ctx.get('kdn_knowledge_index') or {}
-        # 统一使用知识索引中的 length，作为亲和性打分的长度权重来源
+        # Consistently use length from the knowledge index as the length-weight source for affinity scoring
         length_by_kid: Dict[str, int] = {}
         for _kdn_id, by_kid in (knowledge_index or {}).items():
             if not isinstance(by_kid, dict):
@@ -474,6 +474,6 @@ class CacheRouteStrategy(ProxySelectionStrategy):
                     len(self._last_decision.get("proxy_candidates", []) or []),
                 )
             except Exception:
-                # 日志失败不应影响调度路径
+                # Logging failures must not affect the scheduling path
                 pass
         return chosen_kdn, chosen_proxy

@@ -1,8 +1,8 @@
 # demo_scheduler.py
 """
-Scheduler_v1启动demo：
-  - 引用 scheduler.py 里的 api
-  - 使用 uvicorn 启动 HTTP 服务
+Scheduler_v1 startup demo:
+  - Import the API from scheduler.py
+  - Start the HTTP service with uvicorn
 """
 import argparse
 import os, logging
@@ -11,7 +11,7 @@ import uvicorn
 from scheduler import scheduler
 from core import config
 
-# 在 demo 里配置要预热的模型路径以及知识库路径
+# Configure the model path to warm up and the knowledge-base path in the demo
 MODEL_PATH = config.DEFAULT_MODEL
 KNOWLEDGE_YAML_PATH = config.KNOWLEDGE_YAML_PATH
 EMBEDDING_MODEL = config.EMBEDDING_MODEL
@@ -25,9 +25,9 @@ SCHEDULER_CACHEROUTE_KDN_QUEUE_MS_OVERLOAD_TH = config.SCHEDULER_CACHEROUTE_KDN_
 SCHEDULER_CACHEROUTE_LOG_DECISION = config.SCHEDULER_CACHEROUTE_LOG_DECISION
 
 def main():
-    # logging配置
+    # logging configuration
     logging.basicConfig(
-        level=logging.INFO,  # 根 logger 级别设为 INFO
+        level=logging.INFO,  # set the root logger level to INFO
         format=" [%(levelname)s] %(name)s: %(message)s",
     )
 
@@ -53,7 +53,7 @@ def main():
 
     strategy_name = "cacheroute" if args.cacheroute else args.strategy
 
-    # 把模型路径暴露给 scheduler（scheduler.py 里通过 os.getenv 读取）
+    # Expose the model path to scheduler; scheduler.py reads it through os.getenv
     os.environ["SCHEDULER_MODEL_PATH"] = MODEL_PATH
     os.environ["SCHEDULER_TOKENIZER_MAP"]='{"llama3-70b":"/workspace/llm-stack/models/LLM-Research/Meta-Llama-3-70B-Instruct"}'
     os.environ["SCHEDULER_KNOWLEDGE_YAML"] = str(KNOWLEDGE_YAML_PATH)
@@ -68,7 +68,7 @@ def main():
     os.environ["SCHEDULER_CACHEROUTE_PROXY_LOAD_RATIO_DELTA"] = str(args.proxy_load_ratio_delta)
     os.environ["SCHEDULER_CACHEROUTE_LOG_DECISION"] = str(args.cacheroute_log_decision)
 
-    # 配置 uvicorn.Server
+    # Configure uvicorn.Server
     config = uvicorn.Config(scheduler, host=dp_host, port=dp_port, reload=False)
     server = uvicorn.Server(config)
     server.run()

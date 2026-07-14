@@ -1,4 +1,5 @@
 # proxy/resource/hb_log.py
+"""Aggregates proxy heartbeat outcomes into compact periodic logs."""
 from __future__ import annotations
 
 import asyncio
@@ -17,10 +18,10 @@ class HBWindow:
 
 class HeartbeatReporter:
     """
-    Proxy 心跳日志聚合器（输出层）：
-      - record() 仅做计数，不改变任何业务逻辑
-      - report_loop() 每 interval_s 输出一次简报
-    线程/协程安全：用 asyncio.Lock 保护窗口。
+    Proxy heartbeat log aggregator (output layer):
+      - record() only counts and does not change business logic
+      - report_loop() outputs one summary every interval_s
+    Thread/coroutine safe: protects the window with asyncio.Lock.
     """
 
     def __init__(self, interval_s: float = 30.0):
@@ -37,7 +38,7 @@ class HeartbeatReporter:
             else:
                 self._win.fail += 1
                 if err:
-                    self._win.last_err = err[:200]  # 防止错误信息过长刷屏
+                    self._win.last_err = err[:200]  # Prevent overly long error messages from spamming logs
 
     async def snapshot_and_reset(self) -> tuple[float, HBWindow]:
         async with self._lock:
@@ -56,17 +57,17 @@ async def hb_report_loop(
     stop_event: asyncio.Event,
 ) -> None:
     """
-    周期输出简报。注意：这是“输出层”，不影响业务功能。
+    Periodically output summaries. Note: this is the output layer and does not affect business behavior.
     """
     while not stop_event.is_set():
         await asyncio.sleep(reporter.interval_s)
         dur, w = await reporter.snapshot_and_reset()
 
-        # 窗口内完全没发生心跳调用：就不输出，避免空刷
+        # If no heartbeat call occurred in the window, do not output anything to avoid empty reports
         if w.total == 0:
             continue
 
-        # 正常情况下不刷屏：仅当出现失败时输出 warning。
+        # Do not spam logs in normal cases; output warnings only when failures occur.
         if w.fail <= 0:
             continue
 

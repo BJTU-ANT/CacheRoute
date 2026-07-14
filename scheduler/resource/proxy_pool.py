@@ -1,16 +1,16 @@
 # scheduler/resource/proxy_pool.py
 # -*- coding: utf-8 -*-
 """
-Proxy 资源池：Scheduler 控制平面的“状态模型层”。
+Proxy resource pool: the state-model layer of the Scheduler control plane.
 
-设计目的：
-- control_plane.py 只负责 HTTP 接入、参数校验、把状态写进池
-- 调度策略（未来的 CacheRoute）只读这个池来选择 proxy
-- 将“状态模型”和“HTTP/协议层”解耦，避免后续策略改动牵一发动全身
+Design goals:
+- control_plane.py only handles HTTP entry, parameter validation, and writing state into the pool
+- Scheduling strategies (future CacheRoute policies) only read this pool to choose proxies
+- Decouple the state model from the HTTP/protocol layer to prevent later strategy changes from affecting everything
 
-当前实现是“内存版”（单进程单 worker），足够验证功能。
-后续如果要做分布式（多 scheduler 实例共享 proxy 状态），可替换该文件实现为
-Redis/etcd/SQL 等，而不用改 control_plane API 与调度代码。
+The current implementation is in-memory (single process, single worker), which is enough for validation.
+If distributed mode is needed later (multiple scheduler instances sharing proxy state), this file can be replaced with
+Redis/etcd/SQL or similar storage without changing the control_plane API or scheduling code.
 """
 
 from __future__ import annotations
@@ -24,40 +24,40 @@ from typing import Any, Dict, List, Optional
 @dataclass
 class ProxyLoad:
     """
-    Proxy 的“负载信息”结构体（后续可扩充）。
+    Proxy load-information structure, extensible later.
 
-    说明：
-    - 负载字段不应“拍脑袋”定义太多；先给出最通用的占位字段。
-    - 后续如果 proxy 可以周期性上报统计信息（如 inflight/qps/gpu_util/kv_hit），
-      只需要在这里加字段，再在 control_plane 的 heartbeat 更新即可。
+    Notes:
+    - Avoid inventing too many load fields prematurely; start with the most general placeholder fields.
+    - If proxies can periodically report statistics later (such as inflight/qps/gpu_util/kv_hit),
+      only add fields here and update them in the control_plane heartbeat.
     """
     # ---- static capability (register-time) ----
-    max_capacity: int = 0      # 最大处理能力（注册时上报，生命周期内不变）
+    max_capacity: int = 0      # maximum processing capacity, reported at registration and unchanged during the lifecycle
 
-    instance_count: int = 0     # proxy管理的实例数量（注册上报）
-    kv_mem_per_instance_gb: float = 0.0  # 单实例KV内存大小（GB）（注册上报）
-    kv_cache_pool_gb: float = 0.0  # instance_count * kv_mem_per_instance_gb（scheduler计算）
+    instance_count: int = 0     # number of instances managed by the proxy, reported at registration
+    kv_mem_per_instance_gb: float = 0.0  # per-instance KV memory size in GB, reported at registration
+    kv_cache_pool_gb: float = 0.0  # instance_count * kv_mem_per_instance_gb, computed by the scheduler
 
     # ---- dynamic load (heartbeat) ----
-    inflight: int = 0          # 正在处理的请求数（或 decode session 数）
-    qps_1m: float = 0.0        # 最近 1 分钟 QPS（proxy 上报值）
-    gpu_util: float = 0.0      # GPU 利用率（0-100 或 0-1，由你统一约定）
+    inflight: int = 0          # number of requests currently being processed, or decode sessions
+    qps_1m: float = 0.0        # QPS over the last minute, reported by the proxy
+    gpu_util: float = 0.0      # GPU utilization, either 0-100 or 0-1 depending on the chosen convention
 
 
 @dataclass
 class ProxyInfo:
     """
-    Proxy 的“静态 + 动态”信息结构体。
+    Proxy static + dynamic information structure.
 
-    静态信息（注册时给）：
+    Static information, supplied at registration:
     - proxy_id/host/port/endpoints/tags/weight/meta
 
-    动态信息（心跳/监控更新）：
+    Dynamic information, updated by heartbeat/monitoring:
     - load/last_seen_at
 
-    备注：
-    - endpoints 约定采用 OpenAI 风格 path 片段：["chat/completions","completions"]
-    - meta 放不方便结构化的扩展字段（字典），例如版本号/机型/TP size 等
+    Notes:
+    - endpoints use OpenAI-style path fragments, for example ["chat/completions", "completions"]
+    - meta stores extension fields that are inconvenient to structure, such as version, machine type, TP size, etc.
     """
     proxy_id: str
     host: str
@@ -69,22 +69,22 @@ class ProxyInfo:
     meta: Dict[str, Any] = field(default_factory=dict)
     kv_cache_update_policy: str = "lru"
 
-    # 负载信息，后续调度策略会用
+    # Load information used by future scheduling strategies
     load: ProxyLoad = field(default_factory=ProxyLoad)
 
-    # 时间戳：注册时间、最后心跳时间
+    # Timestamps: registration time and last heartbeat time
     registered_at: float = field(default_factory=lambda: time.time())
     last_seen_at: float = field(default_factory=lambda: time.time())
 
     def touch(self) -> None:
-        """收到心跳/更新时刷新 last_seen_at。"""
+        """Refresh last_seen_at when a heartbeat/update is received."""
         self.last_seen_at = time.time()
 
     def is_alive(self, ttl_s: int, now: Optional[float] = None) -> bool:
         """
-        根据 TTL 判断 proxy 是否存活。
-        - ttl_s: 超过 ttl_s 没心跳就判定失活
-        - now: 可选，用于批量判断时减少多次 time.time() 调用
+        Determine whether the proxy is alive based on TTL.
+        - ttl_s: mark inactive after no heartbeat for ttl_s
+        - now: optional, used to reduce repeated time.time() calls during batch checks
         """
         now = now or time.time()
         return (now - self.last_seen_at) <= ttl_s
@@ -92,16 +92,16 @@ class ProxyInfo:
 
 class ProxyPool:
     """
-    Proxy 资源池（内存版）。
+    Proxy resource pool (in-memory version).
 
-    并发模型：
-    - control_plane 的 register/heartbeat/unregister 会并发访问
-    - scheduler 的数据平面（调度逻辑）会并发 list/get
-    - 所有读写通过 asyncio.Lock 串行化，避免状态竞争
+    Concurrency model:
+    - control_plane register/heartbeat/unregister can access it concurrently
+    - the scheduler data plane (scheduling logic) can concurrently list/get
+    - all reads and writes are serialized through asyncio.Lock to avoid state races
 
-    注意：
-    - 这是单进程内存结构。如果你开多 worker，会出现“每个进程一份池”。
-      你目前的设计（7002 embedded server）也要求单进程单 worker，否则端口冲突。
+    Note:
+    - This is a single-process in-memory structure. With multiple workers, each process gets its own pool.
+      The current design (7002 embedded server) also requires a single process and single worker to avoid port conflicts.
     """
     def __init__(self, ttl_s: int = 30):
         self.ttl_s = ttl_s
@@ -110,11 +110,11 @@ class ProxyPool:
 
     async def upsert(self, info: ProxyInfo) -> None:
         """
-        注册/更新一个 proxy（幂等 upsert）。
+        Register/update a proxy with idempotent upsert semantics.
 
-        行为约定：
-        - 若首次出现 proxy_id：直接插入
-        - 若已存在同 proxy_id：更新所有字段，但保留原 registered_at（表示首次注册时间）
+        Behavior contract:
+        - if proxy_id appears for the first time, insert directly
+        - if the same proxy_id already exists, update all fields but keep the original registered_at as the first registration time
         """
         async with self._lock:
             old = self._data.get(info.proxy_id)
@@ -122,7 +122,7 @@ class ProxyPool:
                 self._data[info.proxy_id] = info
                 return
 
-            # 保留首次注册时间，其他字段以最新为准
+            # Keep the first registration time; use the newest values for other fields
             info.registered_at = old.registered_at
             self._data[info.proxy_id] = info
 
@@ -133,9 +133,9 @@ class ProxyPool:
         meta_patch: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
-        proxy 心跳。
-        - 成功：刷新 last_seen_at；如果提供 load，则一并更新
-        - 失败：proxy_id 不存在，返回 False
+        Proxy heartbeat.
+        - Success: refresh last_seen_at and also update load if provided
+        - Failure: proxy_id does not exist, return False
         """
         async with self._lock:
             p = self._data.get(proxy_id)
@@ -152,20 +152,20 @@ class ProxyPool:
             return True
 
     async def remove(self, proxy_id: str) -> None:
-        """注销一个 proxy（不存在也不报错）。"""
+        """Unregister a proxy; do not error if it does not exist."""
         async with self._lock:
             self._data.pop(proxy_id, None)
 
     async def get(self, proxy_id: str) -> Optional[ProxyInfo]:
-        """获取单个 proxy 信息（可能返回 None）。"""
+        """Get one proxy info object, possibly returning None."""
         async with self._lock:
             return self._data.get(proxy_id)
 
     async def list(self, include_dead: bool = False) -> List[ProxyInfo]:
         """
-        列出 proxy 列表。
-        - include_dead=False：只返回存活的 proxy
-        - include_dead=True：返回全部（含失活）
+        List proxies.
+        - include_dead=False: return only live proxies
+        - include_dead=True：return all proxies, including inactive ones
         """
         async with self._lock:
             now = time.time()
@@ -176,7 +176,7 @@ class ProxyPool:
                     continue
                 out.append(p)
 
-            # 输出顺序稳定：按最近心跳时间排序（最新的在前）
+            # Stable output order: sort by most recent heartbeat first
             out.sort(key=lambda x: x.last_seen_at, reverse=True)
             return out
 

@@ -56,10 +56,10 @@ def _interp_by_anchors_ms(length: int, anchors: list[tuple[int, float]]) -> floa
 
 def _short_length_calibrated_seconds(length: int, bs: int) -> float:
     """
-    短请求最小时延曲线（经验值）：
-    - 解决四项式在小长度区间低估/裁零的问题。
-    - 返回“该长度下建议的标定总时延（秒）”。
-    - 当前先按 bs=1 的实验曲线生效；bs>1 暂不启用。
+    Minimum latency curve for short requests (empirical):
+    - Addresses quartic-model underestimation/clipping in the short-length range.
+    - Returns the recommended calibrated total latency in seconds for that length.
+    - Currently only enabled for the bs=1 experiment curve; bs>1 is not enabled yet.
     """
     if bs != 1:
         return 0.0
@@ -167,15 +167,15 @@ def queue_predictor(
         + float(c["c"]) * batch_size
         + float(c["d"])
     )
-    # 先裁零再补偿，避免短请求在 base_pred<0 时被“抵消”成过小值。
+    # Clip to zero before compensation, avoiding short requests being offset to too-small values when base_pred < 0.
     pred = max(0.0, base_pred)
     calibrated_pred = _short_length_calibrated_seconds(length=int(length), bs=batch_size)
 
-    # 小长度（<=115）直接采用标定曲线，允许对四项式做“下修”或“上修”。
+    # For short lengths (<=115), use the calibrated curve directly, allowing the quartic estimate to be adjusted down or up.
     if batch_size == 1 and int(length) <= 115 and calibrated_pred > 0:
         return calibrated_pred
 
-    # 中短长度保守策略：只做下限保护，避免低估。
+    # Conservative policy for medium-short lengths: only apply a lower bound to avoid underestimation.
     return max(pred, calibrated_pred)
 
 

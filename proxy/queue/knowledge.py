@@ -1,6 +1,6 @@
 # proxy/queue/knowledge.py
 """
-proxy维护的知识注入方法，由准备队列调用
+Knowledge injection helpers maintained by the proxy and called by the prepare queue.
 """
 from __future__ import annotations
 
@@ -24,8 +24,8 @@ def format_retrieved_context(items: List[Dict[str, Any]]) -> str:
 
 async def fetch_knowledge_from_kdn(kdn_base_url: str, knowledge_ids: List[str]) -> Tuple[List[Dict[str, Any]], List[str]]:
     """
-    向 KDN 请求知识（非流式）。
-    返回：(items, miss)
+    Request knowledge from the KDN (non-streaming).
+    Returns: (items, miss).
     """
     if not knowledge_ids:
         return [], []
@@ -63,9 +63,9 @@ async def fetch_knowledge_from_kdn(kdn_base_url: str, knowledge_ids: List[str]) 
 
 def inject_rag_into_instance_body(instance_body: Dict[str, Any], endpoint_type: str, retrieved_context: str, injection_type: str = "text") -> Dict[str, Any]:
     """
-    将 retrieved_context 注入 instance_body（OpenAI 风格），返回新 dict。
-    - text: 保持现有 instruction 包装
-    - kvcache: 使用纯文本 system 前缀，尽量贴近 KV 预构建格式
+    Inject retrieved_context into instance_body (OpenAI style) and return a new dict.
+    - text: keep the existing instruction wrapper
+    - kvcache: use a plain-text system prefix to stay close to the KV prebuild format
     """
     if not retrieved_context:
         return instance_body
@@ -77,10 +77,10 @@ def inject_rag_into_instance_body(instance_body: Dict[str, Any], endpoint_type: 
         msgs = list(new_body.get("messages") or [])
 
         if injection_type == "kvcache":
-            # KVCache 模式：system 直接放纯知识文本，不加额外包装
+            # KVCache mode: put plain knowledge text directly in the system message without extra wrapping
             msgs.insert(0, {"role": "system", "content": retrieved_context})
         else:
-            # text 模式：保持现有模板
+            # text mode: keep the existing template
             system_prompt = (
                 "You are a helpful assistant.\n"
                 "Use the following retrieved context to answer the user. "
@@ -96,8 +96,8 @@ def inject_rag_into_instance_body(instance_body: Dict[str, Any], endpoint_type: 
     prompt = str(new_body.get("prompt") or "")
 
     if injection_type == "kvcache":
-        # completions 下没有 role 结构，只能尽量贴近：
-        # 把纯知识文本直接放在 prompt 最前面
+        # completions has no role structure, so approximate as closely as possible:
+        # put the plain knowledge text directly at the beginning of the prompt
         new_body["prompt"] = retrieved_context + "\n" + prompt
     else:
         rag_prefix = (
@@ -118,21 +118,21 @@ def classify_kdn_items(
     miss: List[str],
 ) -> Dict[str, Any]:
     """
-    按 KDN 返回结果对知识块分类：
-      - kv_ready_items: 已有 KV，可用于后续 KV 注入
-      - text_only_items: 只有文本，没有现成 KV
-      - miss_ids: KDN 未命中的 kid
-    并保持输入顺序稳定。
+    Classify knowledge chunks based on the KDN response:
+      - kv_ready_items: KV already exists and can be used for subsequent KV injection
+      - text_only_items: text exists but no ready KV is available
+      - miss_ids: kids missed by the KDN
+    Keep the input order stable.
     """
     miss_set = {str(x) for x in (miss or [])}
 
-    # KDN 返回 items 不保证我们想要的顺序，这里先建索引
+    # KDN returned items are not guaranteed to be in the requested order, so build an index first
     item_map: Dict[str, Dict[str, Any]] = {}
     for it in items or []:
         kid = str(it.get("knowledge_id") or it.get("kid") or it.get("id") or "")
         rel_path = it.get("rel_path")
         if not kid and rel_path:
-            # 兜底：从 rel_path 推断 kid（如 knowledge/a.txt -> a）
+            # Fallback: infer kid from rel_path (for example, knowledge/a.txt -> a)
             try:
                 kid = str(rel_path).split("/")[-1].split(".")[0]
             except Exception:
@@ -151,7 +151,7 @@ def classify_kdn_items(
 
         it = item_map.get(kid)
         if not it:
-            # KDN 没明确放进 miss，但也没返回 item，当 miss 处理
+            # If the KDN did not explicitly include it in miss but also returned no item, treat it as a miss
             miss_ids.append(kid)
             continue
 
@@ -172,8 +172,8 @@ def build_ordered_context(
     text_only_items: List[Dict[str, Any]],
 ) -> str:
     """
-    构造注入文本：
-    先放 kv_ready 的文本，再放 text_only 的文本。
+    Build the injection text:
+    Place kv_ready text first, then text_only text.
     """
     ordered = list(kv_ready_items) + list(text_only_items)
     return format_retrieved_context(ordered)

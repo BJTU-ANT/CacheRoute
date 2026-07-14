@@ -1,5 +1,6 @@
 # proxy/resource/p_control_plane.py
 
+"""Exposes the proxy control plane for instance registration, heartbeat, and topology metadata."""
 from __future__ import annotations
 
 import asyncio
@@ -74,8 +75,8 @@ async def get_kdn_links_snapshot() -> Dict[str, Dict[str, Any]]:
 
 def _is_better_link(new_item: Dict[str, Any], old_item: Dict[str, Any]) -> bool:
     """
-    比较两个 Instance->KDN 链路，返回 new_item 是否更优。
-    规则：带宽更高优先；带宽相同时时延更低优先。
+    Compare two Instance->KDN links and return whether new_item is better.
+    Rule: prefer higher bandwidth; when bandwidth ties, prefer lower latency.
     """
     new_bw = float(new_item.get("bandwidth_mbps", 0.0) or 0.0)
     old_bw = float(old_item.get("bandwidth_mbps", 0.0) or 0.0)
@@ -144,7 +145,7 @@ async def register(req: InstanceRegisterReq) -> Dict[str, Any]:
         it.instance_id, it.host, it.port, it.endpoints, it.tags, it.weight, it.meta
     )
 
-    # 给 instance 建议心跳周期：固定 10s，或 ttl/3（取较小）
+    # Suggest an instance heartbeat interval: fixed 10s or ttl/3, whichever is smaller
     hb = min(10, max(1, pool.ttl_s // 3))
     return {
         "instance_id": it.instance_id,
@@ -305,5 +306,5 @@ async def list_topology_links() -> Dict[str, Any]:
     return {"kdn_links": await get_kdn_links_snapshot()}
 
 
-# 对外导出 app
+# Export app publicly
 control_plane = _control_plane

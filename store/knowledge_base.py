@@ -1,21 +1,21 @@
 """
 store/knowledge_base.py
 =======================
-定义知识库维护单元数据结构
-定义知识库单元维护基本方法
+Defines the knowledge-base maintenance unit data structure.
+Defines basic knowledge-base unit maintenance methods.
 
-调度器启动知识库入口，负责：
-  1) 从 YAML 文件中读取初始知识条目，构建 KnowledgeTable；
-  2) 提供统一的知识表更新接口 apply_knowledge_update，方便后续接入：
-       - HTTP API / gRPC / 消息队列等上层协议；
-       - 调度器内部模块直接调用。
+Scheduler knowledge-base startup entry point, responsible for:
+  1) reading initial knowledge entries from a YAML file and building a KnowledgeTable;
+  2) providing the unified knowledge-table update interface apply_knowledge_update for future integration with:
+       - upper-layer protocols such as HTTP API / gRPC / message queues;
+       - direct calls from scheduler internal modules.
 
-依赖：
-  - base.py 中定义的：
+Dependencies:
+  - base.py defines:
       * KnowledgeTable
-  - embedding_index_method.py 中定义的：
-      * EmbeddingModel（具体实现，例如 DummyEmbeddingModel）
-  - pyyaml 用于解析 YAML 配置文件
+  - embedding_index_method.py defines:
+      * EmbeddingModel(specific implementations, for example DummyEmbeddingModel)
+  - pyyaml is used to parse YAML configuration files
 """
 import numpy as np
 import math
@@ -28,7 +28,7 @@ from store import EmbeddingModel
 try:
     import yaml
 except ImportError as e:
-    raise ImportError("需要安装 pyyaml 库以支持 YAML 配置解析：pip install pyyaml") from e
+    raise ImportError("pyyaml must be installed to support YAML config parsing: pip install pyyaml") from e
 
 try:
     import faiss
@@ -39,14 +39,14 @@ except ImportError:
 @dataclass
 class KnowledgeUnit:
     """
-        表征单个知识块的信息（不包含知识正文）：
+        Represents information for one knowledge chunk, excluding the full knowledge text:
         Class KnowledgeUnit
-          |- embedding: 表征知识块的高维向量List[float]，用于向量检索来定位知识块信息
-          |- length: 知识块长度（token数、字符数等，自定义）
-          |- avail_llm_systems: 可用 LLM 系统地址列表,e.g., ["llm://10.0.0.3:8000"]
-          |- avail_kdn_servers: 可用 KDN 服务器地址列表，e.g., ["kdn://10.0.1.5:9000"]
-          |- text_abstract: （可选）知识的文本描述/摘要，仅用于展示和调试
-          |- default_servers: 对所有知识单元可用的“默认服务器”（由 KnowledgeTable 注入）
+          |- embedding: high-dimensional vector List[float] representing the knowledge chunk, used for vector retrieval to locate chunk information
+          |- length: knowledge chunk length, such as token count or character count; user-defined
+          |- avail_llm_systems: list of available LLM system addresses,e.g., ["llm://10.0.0.3:8000"]
+          |- avail_kdn_servers: list of available KDN server addresses,e.g., ["kdn://10.0.1.5:9000"]
+          |- text_abstract: optional text description/summary of the knowledge, used only for display and debugging
+          |- default_servers: default servers available to all knowledge units, injected by KnowledgeTable
     """
     embedding: List[float]
     length: int
@@ -60,52 +60,52 @@ class KnowledgeUnit:
     kv_rel_dir: Optional[str] = None
     kv_dumped_keys: Optional[int] = None
     kv_updated_at: Optional[int] = None
-    # 可选：保存完整正文，供 scheduler 按目标模型 tokenizer 估 token 长度。
+    # Optional: keep the full text so the scheduler can estimate token length with the target model tokenizer.
     full_content: Optional[str] = None
 
 
 class KnowledgeTable:
     """
-    知识库表格：
-      - 维护 knowledge_id -> KnowledgeUnit 的映射
-      - 提供更新接口（增减某知识的 LLM / KDN）
-      - 动态更新knowledge_id
-      - 提供基于 embedding 的相似度检索接口
+    Knowledge-base table:
+      - maintains the knowledge_id -> KnowledgeUnit mapping
+      - provides update APIs to add/remove LLMs or KDNs for a knowledge item
+      - dynamically updates knowledge_id
+      - provides an embedding-based similarity search interface
 
-    注意：
-      这里用的是最简单的“内存 + 余弦相似度”实现。
-      后续你可以替换为 FAISS，只要保持 search_by_embedding 的接口不变即可。
+    Note:
+      This uses the simplest in-memory + cosine-similarity implementation.
+      You can later replace it with FAISS as long as the search_by_embedding interface remains unchanged.
     """
 
     def __init__(self, dim: int, default_servers: List[str] = None):
         self.dim = dim
-        # 外部：kid(str) -> KnowledgeUnit
+        # External mapping: kid(str) -> KnowledgeUnit
         self._units: Dict[str, KnowledgeUnit] = {}
         self._next_id = 0
 
-        # 全局默认的文本注入服务器，对所有知识单元都可用
+        # Global default text-injection servers available to all knowledge units
         self._default_servers : List[str] =list(default_servers or [])
 
-        # 内部：FAISS 需要 int64 id，所以做 kid <-> int64 映射（对外透明）
+        # Internal mapping: FAISS needs int64 IDs, so map kid <-> int64 transparently to callers
         self._kid_to_i64: Dict[str, int] = {}
         self._i64_to_kid: Dict[int, str] = {}
 
-        # ---- 新增：FAISS 索引相关 ----
+        # ---- New: FAISS-index related state ----
         self._faiss_index = None
-        self._faiss_ids: List[int] = []  # row_idx -> knowledge_id 映射
+        self._faiss_ids: List[int] = []  # row_idx -> knowledge_id mapping
 
 
     # ----------------------------------------------
-    # ------------------- 基础工具 ------------------
+    # ------------------- Basic utilities ------------------
     # ----------------------------------------------
     def _check_dim(self, vec: Sequence[float]):
-        """检查embedding维度是否正确"""
+        """Check whether the embedding dimension is correct."""
         if len(vec) != self.dim:
             raise ValueError(f"Embedding dim mismatch: expect {self.dim}, got {len(vec)}")
 
     @staticmethod
     def _cosine_similarity(vec1: Sequence[float], vec2: Sequence[float]) -> float:
-        """计算两个向量间的余弦相似度，作为检索得分"""
+        """Compute cosine similarity between two vectors as the retrieval score."""
         dot = 0.0
         n_vec1 = 0.0
         n_vec2 = 0.0
@@ -118,26 +118,26 @@ class KnowledgeTable:
         return dot / math.sqrt(n_vec1 * n_vec2)
 
     def assign_new_id(self) -> int:
-        """为“新来的知识”（没有显式指定 ID）分配一个递增 ID。"""
+        """Allocate an increasing ID for new knowledge that has no explicit ID."""
         kid = self._next_id
         self._next_id += 1
         return kid
 
     def _update_next_id_with_existing(self, knowledge_id: int) -> None:
         """
-            当外部显式指定了 knowledge_id（例如从 YAML 中读到 id=5），
-            需要保证 _next_id 始终大于现有最大 ID。
+            When an external caller explicitly specifies knowledge_id, for example id=5 read from YAML,
+            ensure _next_id is always greater than the current maximum ID.
         """
         if knowledge_id >= self._next_id:
             self._next_id = knowledge_id + 1
 
     def get_llm_parsed(self, knowledge_id: int, default_port: int = 7000):
-        """解析指定知识ID的字符串，返回 [(ip, port), (ip, port), ...]"""
+        """Parse address strings for the specified knowledge ID and return [(ip, port), (ip, port), ...]."""
         unit = self._units.get(knowledge_id)
         return [parse_host_port(addr, default_port) for addr in unit.avail_llm_systems]
 
     def get_kdn_parsed(self, knowledge_id: int, default_port: int = 8000):
-        """解析指定知识ID的字符串，返回 [(ip, port), (ip, port), ...]"""
+        """Parse address strings for the specified knowledge ID and return [(ip, port), (ip, port), ...]."""
         unit = self._units.get(knowledge_id)
         return [parse_host_port(addr, default_port) for addr in unit.avail_kdn_servers]
 
@@ -155,7 +155,7 @@ class KnowledgeTable:
 
     def _register_kid(self, kid: str) -> int:
         """
-        冲突回退逻辑，防止重复的int64碰撞
+        Collision fallback logic to avoid duplicate int64 collisions.
         """
         kid = kid.strip().lower()
         i64 = self._kid_to_int64(kid)
@@ -192,11 +192,11 @@ class KnowledgeTable:
         return new_table
 
     # --------------------------------------------------
-    # ------------------- 知识管理接口 -------------------
+    # ------------------- Knowledge management interface -------------------
     # --------------------------------------------------
     def upsert_kid(self, kid: str, unit: KnowledgeUnit) -> None:
         """
-        upsert_knowledge是早期基于yaml本地文件的知识库维护方式，新版本下应只用本方法
+        upsert_knowledge is the early local-YAML knowledge-base maintenance method; in the new version, only this method should be used.
         :param kid:
         :param unit:
         :return:
@@ -237,10 +237,10 @@ class KnowledgeTable:
             text_abstract: Optional[str] = None,
     ) -> None:
         """
-            新增或更新一个知识块。
-            如果 knowledge_id 已存在，则覆盖原有记录；
-            如果为新 ID，则插入并更新 _next_id。
-            调度器或后台管理程序可以调用这个接口动态维护知识库。
+            Add or update one knowledge chunk.
+            If knowledge_id already exists, overwrite the original record;
+            if it is a new ID, insert it and update _next_id.
+            The scheduler or backend management program can call this interface to maintain the knowledge base dynamically.
         """
         self._check_dim(embedding)
 
@@ -250,42 +250,42 @@ class KnowledgeTable:
             avail_llm_systems=list(avail_llm_systems or []),
             avail_kdn_servers=list(avail_kdn_servers or []),
             text_abstract=text_abstract,
-            # 每个知识单元自动继承当前全局默认服务器列表
+            # Each knowledge unit automatically inherits the current global default server list
             default_servers=list(self._default_servers),
         )
         self._units[knowledge_id] = unit
-        # 保证 next_id 始终大于最大已使用 ID
+        # Ensure next_id is always greater than the maximum used ID
         self._update_next_id_with_existing(knowledge_id)
 
     def get_unit(self, knowledge_id: int) -> KnowledgeUnit:
-        """获取某知识ID的单元信息"""
+        """Get unit information for a knowledge ID."""
         return self._units[knowledge_id]
 
     def add_llm_for_knowledge(self, knowledge_id: int, llm_addr: str) -> None:
-        """更新知识的可用LLM系统"""
+        """Update available LLM systems for the knowledge item."""
         unit = self.get_unit(knowledge_id)
         if llm_addr not in unit.avail_llm_systems:
             unit.avail_llm_systems.append(llm_addr)
 
     def remove_llm_for_knowledge(self, knowledge_id: int, llm_addr: str) -> None:
-        """移除知识的可用LLM系统"""
+        """Remove available LLM systems from the knowledge item."""
         unit = self.get_unit(knowledge_id)
         unit.avail_llm_systems = [x for x in unit.avail_llm_systems if x != llm_addr]
 
     def add_kdn_for_knowledge(self, knowledge_id: int, kdn_addr: str) -> None:
-        """添加知识的可用KDN服务器"""
+        """Add available KDN servers for the knowledge item."""
         unit = self.get_unit(knowledge_id)
         if kdn_addr not in unit.avail_kdn_servers:
             unit.avail_kdn_servers.append(kdn_addr)
 
     def remove_kdn_for_knowledge(self, knowledge_id: int, kdn_addr: str) -> None:
-        """移除知识的可用KDN服务器"""
+        """Remove available KDN servers from the knowledge item."""
         unit = self.get_unit(knowledge_id)
         unit.avail_kdn_servers = [x for x in unit.avail_kdn_servers if x != kdn_addr]
 
     def build_faiss_index(self) -> None:
         """
-        根据当前所有 KnowledgeUnit 的 embedding 重建 FAISS 索引。
+        Rebuild the FAISS index from embeddings of all current KnowledgeUnits.
         """
         if faiss is None:
             print("[KnowledgeTable] faiss not installed; will use python fallback search.")
@@ -310,7 +310,7 @@ class KnowledgeTable:
         print(f"[KnowledgeTable] FAISS index built, size={index.ntotal}, dim={self.dim}")
 
     # --------------------------------------------------
-    # ------------------- 向量检索接口 -------------------
+    # ------------------- Vector retrieval interface -------------------
     # --------------------------------------------------
     def search_by_embedding(
             self,
@@ -320,14 +320,14 @@ class KnowledgeTable:
             min_ratio: float = 0.75,
     ) -> List[Tuple[str, KnowledgeUnit, float]]:
         """
-            用 query_embedding 在整个知识库里做相似度检索。
-            返回：
-            List[(knowledge_id, unit, score)]，按 score 降序。
-            优先使用 FAISS；未安装或索引为空时退回 Python 版本。
+            Run similarity search over the full knowledge base with query_embedding.
+            Returns:
+            List[(knowledge_id, unit, score)], sorted by descending score.
+            Prefer FAISS; fall back to the Python version when FAISS is not installed or the index is empty.
         """
         self._check_dim(query_embedding)
 
-        # ---- 分支 1：FAISS 可用 ----
+        # ---- Branch 1: FAISS is available ----
         if not self._units:
             return []
 
@@ -342,7 +342,7 @@ class KnowledgeTable:
                 score = float(score)
                 if score < float(min_score):
                     continue
-                # best<=0 时 ratio 没意义，仅用 min_score
+                # When best <= 0, ratio is meaningless; use only min_score
                 if best > 0 and score < best * float(min_ratio):
                     continue
                 kept.append((kid, unit, score))
@@ -365,7 +365,7 @@ class KnowledgeTable:
 
             return _filter_hits(out)
 
-        # ---- 分支 2：回退到纯 Python 版本 ----
+        # ---- Branch 2: fall back to the pure Python version ----
         # fallback: brute force cosine (inner product)
         out = []
         for kid, unit in self._units.items():
@@ -380,66 +380,66 @@ def init_knowledge_table(
         embedder: EmbeddingModel,
 ) -> KnowledgeTable:
     """
-       从 YAML 文件中加载知识条目，构建并返回一个 KnowledgeTable 实例。
+       Load knowledge entries from a YAML file, build a KnowledgeTable instance, and return it.
 
-       参数
+       Parameters
        ----
-       yaml_path : str YAML 配置文件路径。
-       embedder : EmbeddingModel 用于将 text 转为 embedding 的模型实例。
-           - 如果 YAML 中某条知识没有直接提供 embedding 字段，则必须依赖 embedder 根据 text 生成。
+       yaml_path : str Path to the YAML configuration file.
+       embedder : EmbeddingModel Model instance used to convert text to embeddings.
+           - If a YAML knowledge item does not directly provide an embedding field, embedder must generate one from text.
 
-       知识条目的YAML格式约定（示例）
+       Knowledge item YAML format convention (example)
        ---------------------
-       knowledge_dim: 64      # 向量维度，建议显式给出；否则尝试从 embedder.dim 推断
+       knowledge_dim: 64      # vector dimension; explicitly setting it is recommended, otherwise infer from embedder.dim
 
        knowledge_items:
          - id: 1
            length: 512
-           text: "该知识块的描述、标题或摘要，用于生成 embedding"
-           # embedding: [0.1, 0.2, ...]  # 必须携带
+           text: "description, title, or summary of this knowledge chunk, used to generate embeddings"
+           # embedding: [0.1, 0.2, ...]  # must be provided
            llm_systems:
              - "10.0.0.11:8000"
              - "10.0.0.12:8000"
            kdn_servers:
              - "10.0.1.21:9000"
 
-         - id: 2                           # 特殊情况下也可以没有id，系统会自动分配
+         - id: 2                           # id may be omitted in special cases; the system will allocate one automatically
            length: 800
-           embedding: [0.01, 0.02, ...]    # 可以没有文本
+           embedding: [0.01, 0.02, ...]    # text may be omitted
            llm_systems: []
            kdn_servers: []
 
-       返回
+       Returns
        ----
        KnowledgeTable
-           已填充好初始知识单元的知识表对象。
+           KnowledgeTable object filled with initial knowledge units.
     """
 
-    # 一、读取 YAML 配置文件
+    # 1. Read the YAML configuration file
     with open(yaml_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f) or {}
 
-    # 二、确定向量维度 dim，如果 YAML 没写 knowledge_dim，则尝试从 embedder 上读取，否则报错
+    # 2. Determine vector dimension dim; if YAML lacks knowledge_dim, try to read it from embedder, otherwise raise an error
     dim = config.get("knowledge_dim", None)
     if dim is None:
         if hasattr(embedder, "dim"):
             dim = int(getattr(embedder, "dim"))
         else:
             raise ValueError(
-                "YAML 中未配置 knowledge_dim，且 embedder 无 dim 属性，"
-                "无法确定向量维度，请在 YAML 顶层添加 knowledge_dim 字段。"
+                "YAML does not configure knowledge_dim, and embedder has no dim attribute; "
+                "cannot determine vector dimension. Please add a top-level knowledge_dim field to YAML."
             )
 
-    # 读取全局默认服务器列表（可选）
+    # Read the global default server list (optional)
     default_servers = config.get("default_servers", []) or []
 
-    # 三、构建 KnowledgeTable
+    # 3. Build KnowledgeTable
     table = KnowledgeTable(dim=dim, default_servers=default_servers)
 
-    # 四、逐条加载 knowledge_items
+    # 4. Load knowledge_items one by one
     items = config.get("knowledge_items", []) or []
     for item in items:
-        # 1) 处理 knowledge_id：有则用之，无则动态分配
+        # 1) Handle knowledge_id: use it if present; otherwise allocate dynamically
         if "id" in item:
             kid = int(item["id"])
         else:
@@ -450,14 +450,14 @@ def init_knowledge_table(
         kdn_servers: List[str] = list(item.get("kdn_servers", []) or [])
         text = item.get("text")
 
-        # 2) embedding / text 处理
+        # 2) embedding / text processing
         embedding = item.get("embedding", None)
         text = item.get("text", None)
 
         if embedding is None:
-            raise ValueError(f"知识条目 id={kid} 缺少 embedding 字段（默认必须有 embedding）")
+            raise ValueError(f"knowledge item id={kid} missing embedding field (embedding is required by default)")
 
-        # 3) 写入 KnowledgeTable（内部会检查维度）
+        # 3) Write into KnowledgeTable; dimensions are checked internally
         table.upsert_knowledge(
             knowledge_id=kid,
             embedding=embedding,
@@ -467,7 +467,7 @@ def init_knowledge_table(
             text_abstract=text,
         )
 
-    # 所有知识条目就绪后，构建 FAISS 索引
+    # After all knowledge items are ready, build the FAISS index
     table.build_faiss_index()
 
     return table
@@ -480,86 +480,86 @@ def apply_knowledge_update(
     payload: Dict[str, Any],
 ) -> Optional[int]:
     """
-        统一的知识表更新接口。
-        - 上层（HTTP / RPC / MQ 消费者）只需要把请求解析成一个 dict，
-        - 真正的知识表操作细节都封装在这里。
+        Unified knowledge-table update interface.
+        - Upper layers (HTTP / RPC / MQ consumers) only need to parse the request into a dict,
+        - and the actual knowledge-table operation details are encapsulated here.
 
-        payload 约定格式
+        Payload format convention
         ----------------
-        1) 新增 / 更新知识单元（upsert）：
+        1) Add/update knowledge unit (upsert):
            {
              "op": "upsert",
              "knowledge_id": 1,
-             "length": 512,                 # 必填
-             "embedding": [...],            # 必填
-             "text": "该知识块的描述",      # 可选
-             "llm_systems": ["10.0.0.11:8000", ...],  # 可选
-             "kdn_servers": ["10.0.1.21:9000", ...],  # 可选
+             "length": 512,                 # required
+             "embedding": [...],            # required
+             "text": "description of this knowledge chunk",      # optional
+             "llm_systems": ["10.0.0.11:8000", ...],  # optional
+             "kdn_servers": ["10.0.1.21:9000", ...],  # optional
            }
 
-        2) 为指定知识增加一个可用 LLM（add_llm）：
+        2) Add an available LLM for the specified knowledge (add_llm):
            {
              "op": "add_llm",
              "knowledge_id": 1,
              "llm_addr": "10.0.0.13:8000"
            }
 
-        3) 为指定知识移除一个 LLM（remove_llm）：
+        3) Remove an LLM from the specified knowledge (remove_llm):
            {
              "op": "remove_llm",
              "knowledge_id": 1,
              "llm_addr": "10.0.0.13:8000"
            }
 
-        4) 为指定知识增加一个可用 KDN（add_kdn）：
+        4) Add an available KDN for the specified knowledge (add_kdn):
            {
              "op": "add_kdn",
              "knowledge_id": 1,
              "kdn_addr": "10.0.1.23:9000"
            }
 
-        5) 为指定知识移除一个 KDN（remove_kdn）：
+        5) Remove a KDN from the specified knowledge (remove_kdn):
            {
              "op": "remove_kdn",
              "knowledge_id": 1,
              "kdn_addr": "10.0.1.23:9000"
            }
 
-        参数
+        Parameters
         ----
         table : KnowledgeTable
-            要更新的知识表实例。
+            KnowledgeTable instance to update.
         embedder : Optional[EmbeddingModel]
-            在 op == "upsert" 且未提供 embedding 时，用于根据 text 计算 embedding。
-            某些情况下你可能只允许“embedding 必须由外部提供”，那可以传入 None 并在此处抛错。
+            When op == "upsert" and no embedding is provided, this is used to compute embedding from text.
+            In some cases, you may require embeddings to be externally provided; pass None and raise an error here.
         payload : Dict[str, Any]
-            外部请求解析后的字典。
+            Dict parsed from the external request.
     """
     op = payload.get("op")
     if not op:
-        raise ValueError("知识更新请求缺少 'op' 字段")
-    op = str(op).lower() # 规范一下 op 字符串，避免大小写问题
+        raise ValueError("knowledge update request is missing the 'op' field")
+    op = str(op).lower() # Normalize the op string to avoid case-sensitivity issues
 
-    # ----------- 1) upsert：新增或更新知识单元 -----------
+    # ----------- 1) upsert:add or update a knowledge unit -----------
     if op == "upsert":
-        # 1) 有 knowledge_id 则更新，无则新建并自动分配
+        # 1) update when knowledge_id exists; otherwise create and allocate automatically
         if "knowledge_id" in payload:
             knowledge_id = int(payload["knowledge_id"])
         else:
             knowledge_id = table.assign_new_id()
 
         length = int(payload.get("length", 0))
-        # 可选字段
+        # Optional fields
         llm_systems = payload.get("llm_systems")
         kdn_servers = payload.get("kdn_servers")
         embedding = payload.get("embedding")
         text = payload.get("text")
 
-        # embedding / text 二选一
+        # embedding / text choose one of the two
         if embedding is None:
-            raise ValueError(f"知识条目 id={knowledge_id} 缺少 embedding 字段（默认必须有 embedding）")
+            raise ValueError(f"knowledge item id={knowledge_id} missing embedding field (embedding is required by default)")
 
-        # 真正写入 KnowledgeTable
+        # Actually write into KnowledgeTable
         table.upsert_knowledge(
             knowledge_id=knowledge_id,
             embedding=embedding,
@@ -570,43 +570,43 @@ def apply_knowledge_update(
         )
         return knowledge_id
 
-    # ----------- 2) add_llm：为某知识增加一个 LLM 地址 -----------
+    # ----------- 2) add_llm: add one LLM address for a knowledge item -----------
     if op == "add_llm":
         knowledge_id = int(payload["knowledge_id"])
         llm_addr = str(payload["llm_addr"])
         table.add_llm_for_knowledge(knowledge_id, llm_addr)
         return None
 
-    # ----------- 3) remove_llm：为某知识移除一个 LLM 地址 -----------
+    # ----------- 3) remove_llm: remove one LLM address from a knowledge item -----------
     if op == "remove_llm":
         knowledge_id = int(payload["knowledge_id"])
         llm_addr = str(payload["llm_addr"])
         table.remove_llm_for_knowledge(knowledge_id, llm_addr)
         return None
 
-    # ----------- 4) add_kdn：为某知识增加一个 KDN 地址 -----------
+    # ----------- 4) add_kdn: add one KDN address for a knowledge item -----------
     if op == "add_kdn":
         knowledge_id = int(payload["knowledge_id"])
         kdn_addr = str(payload["kdn_addr"])
         table.add_kdn_for_knowledge(knowledge_id, kdn_addr)
         return None
 
-    # ----------- 5) remove_kdn：为某知识移除一个 KDN 地址 -----------
+    # ----------- 5) remove_kdn: remove one KDN address from a knowledge item -----------
     if op == "remove_kdn":
         knowledge_id = int(payload["knowledge_id"])
         kdn_addr = str(payload["kdn_addr"])
         table.remove_kdn_for_knowledge(knowledge_id, kdn_addr)
         return None
 
-    raise ValueError(f"未知的知识更新操作类型 op={op!r},可选类型有upsert, add_llm, remove_llm, add_kdn, remove_kdn")
+    raise ValueError(f"unknown knowledge update operation type op={op!r},valid operations are upsert, add_llm, remove_llm, add_kdn, remove_kdn")
 
 
 
 def print_knowledge_table_state(table: KnowledgeTable) -> None:
     """
-        打印当前知识库的状态：
+        Print the current knowledge-base status:
           - knowledge_id
-          - text（若有）
+          - text(if present)
           - length
           - llm_systems
           - kdn_servers
@@ -616,8 +616,8 @@ def print_knowledge_table_state(table: KnowledgeTable) -> None:
     print("Current KnowledgeTable State:")
     print("-" * 60)
 
-    # KnowledgeTable 内部是 dict[int, KnowledgeUnit]，只需要遍历即可
-    # 具体见Class KnowledgeTable self._units 字段
+    # KnowledgeTable internally uses dict[int, KnowledgeUnit], so iterating it is enough
+    # See the KnowledgeTable class self._units field for details
     units = getattr(table, "_units", {})
     for kid in sorted(units.keys()):
         unit = units[kid]

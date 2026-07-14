@@ -1,5 +1,5 @@
 """
-将raw_data通过Embedding模型转化为Knowledge_base.yaml
+Convert raw_data to Knowledge_base.yaml through the Embedding model.
 """
 import sys
 from pathlib import Path
@@ -20,11 +20,11 @@ def build_knowledge_yaml(
     model_name: Optional[str] = None,
 ) -> None:
     """
-        从原始文本知识库 YAML 生成带向量的 knowledge_base.yaml
+        Generate vectorized knowledge_base.yaml from the raw text knowledge-base YAML.
 
-        source_path: 原始文本知识库 (data/raw_data.yaml)
-        output_path: 输出的向量知识库 (data/knowledge_base.yaml)
-        model_name : 可选，显式指定 embedding 模型名
+        source_path: raw text knowledge base (data/raw_data.yaml)
+        output_path: output vector knowledge base (data/knowledge_base.yaml)
+        model_name : optional,explicitly specify the embedding model name
     """
     src_file = Path(source_path)
     out_file = Path(output_path)
@@ -47,7 +47,7 @@ def build_knowledge_yaml(
     next_id = 1
 
     for item in raw_items:
-        # id：有则用之，无则自动递增
+        # id: use it if present; otherwise auto-increment
         if "id" in item:
             kid = int(item["id"])
         else:
@@ -56,20 +56,20 @@ def build_knowledge_yaml(
 
         content: str = (item.get("content") or "").strip()
         if not content:
-            # 空内容直接跳过
+            # Skip empty content directly
             continue
 
-        # length：优先用用户给的，否则 fallback 为字符长度
+        # length: prefer the user-provided value; otherwise fall back to character length
         length = int(item.get("length", len(content)))
 
         llm_systems = list(item.get("llm_systems", []) or [])
         kdn_servers = list(item.get("kdn_servers", []) or [])
 
-        # 生成向量
+        # Generate embedding vector
         vec = embedder.encode_vector([content])[0]  # (dim,)
         vec_list = [float(x) for x in vec.tolist()]
 
-        # text 摘要：优先用 item.text，否则取前 10 个字
+        # text summary: prefer item.text; otherwise take the first 10 characters
         summary = (item.get("text") or content[:10]).strip()
 
         out_items.append(
@@ -95,7 +95,7 @@ def build_knowledge_yaml(
             f,
             sort_keys=False,
             allow_unicode=True,
-            width=120,  # 行不要太窄
+            width=120,  # Do not make lines too narrow
         )
 
     print(f"[build] embedding dim = {dim}, items = {len(out_items)}")
@@ -103,7 +103,7 @@ def build_knowledge_yaml(
 
 
 if __name__ == "__main__":
-    # 按需修改这两个路径
+    # Modify these two paths as needed
     build_knowledge_yaml(
         source_path= str(KNOWLEDGE_YAML_PATH / "raw_data.yaml"),
         output_path=str(KNOWLEDGE_YAML_PATH / "knowledge_base.yaml"),

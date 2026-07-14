@@ -19,8 +19,8 @@ def main():
     print(f"Model loaded in {time.time() - t0:.2f} s")
 
     texts = [
-        "这是一个部署测试。",
-        "第二句话用于测试批处理。",
+        "This is a deployment test.",
+        "The second sentence is used to test batching.",
     ]
 
     t1 = time.time()
@@ -32,9 +32,9 @@ def main():
     )
     t2 = time.time()
 
-    print("Shape:", emb.shape)                     # 预期 (2, 512)
-    print("Encode time (ms):", (t2 - t1) * 1000)   # 编码耗时
-    print("First 5 dims:", emb[0][:5])             # 看看向量长啥样
+    print("Shape:", emb.shape)                     # expected (2, 512)
+    print("Encode time (ms):", (t2 - t1) * 1000)   # encoding latency
+    print("First 5 dims:", emb[0][:5])             # inspect what the vector looks like
 
 if __name__ == "__main__":
     main()

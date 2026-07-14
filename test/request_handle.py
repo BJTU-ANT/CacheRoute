@@ -5,27 +5,27 @@ from CacheRoute.core import TokenizerRegistry
 
 
 """
-    输入一个用户问题，检验构建request结构体的能力
-    输入：用户问题
-    输出：完整的class request
+    Input a user question to test the ability to build the request structure.
+    Input: user question
+    Output: full class request
 """
 
 if __name__ == "__main__":
-    # 调度器预热tokenizer
+    # Scheduler tokenizer warmup
     TokenizerRegistry.warmup_tokenizers("DeepseekV3")
 
-    # 提取任务信息，用tokenizer分词器计算seq长度
+    # Extract task information and compute sequence length with the tokenizer
     start = time.perf_counter()
     raw_data = {
         "model": "DeepseekV3",
-        "user_prompt": "请根据下面的需求为我生成一个高性能的调度策略，并解释其中的关键步骤。"
+        "user_prompt": "Generate a high-performance scheduling strategy based on the requirements below and explain the key steps."
     }
     request = Request.build_request(raw_data,"192.168.0.167")
     end = time.perf_counter()
     print(request)
     time = (end - start) * 1000
-    print(f"build_request_info 耗时：{time:.4f} ms")
+    print(f"build_request_info elapsed:{time:.4f} ms")
 
-    # 读取任务的模型参数
+    # Read task model parameters
     # model_config = model_config.get_config_by_model(request.Prompt.model)
     # print(model_config)
