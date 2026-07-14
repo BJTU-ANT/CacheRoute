@@ -1,3 +1,4 @@
+"""Request-generation helpers for TPOT benchmark collection."""
 import asyncio
 import hashlib
 import itertools
@@ -20,7 +21,7 @@ def _timehash_uuid() -> str:
 
 
 def generate_prompt_with_tokens(tokenizer, target_token_count: int) -> str:
-    """生成 token 数不小于目标值的 prompt。"""
+    """Generate a prompt whose token count is at least the target value."""
     if target_token_count <= 0:
         return ""
 
@@ -79,7 +80,7 @@ def _extract_delta_content(event: dict) -> str:
     if isinstance(delta.get("content"), str):
         return delta["content"]
 
-    # 兼容部分服务的多模态/结构化 delta.content
+    # Support multimodal or structured delta.content from some services.
     content = delta.get("content")
     if isinstance(content, list):
         texts = []
@@ -100,9 +101,9 @@ async def send_stream_request_for_tpot(
     tokenizer,
 ) -> TaskTPOTResult:
     """
-    正确解析 chat completion SSE stream：
-    - 只在检测到“新增文本 token”时推进 token_index
-    - 若单次 event 带来多个 token，按“新增 token 数”展开多条记录
+    Parse chat completion SSE streams correctly:
+    - Advance token_index only when new text tokens are detected.
+    - If one event carries multiple tokens, expand records by the number of new tokens.
     """
     api_url = f"http://{host}:{port}/v1/chat/completions"
     headers = {"Content-Type": "application/json"}
@@ -243,9 +244,9 @@ async def send_prefill_only_request(
     max_tokens: int = 1,
 ) -> Optional[float]:
     """
-    近似 Prefill 干扰请求：
-    使用“长 prompt + 极短生成(max_tokens=1)”模拟 Prefill 计算占用。
-    严格 prefill-only 在 /v1/chat/completions 下通常不可直接表达，这里采用近似方式。
+    Approximate a Prefill interference request:
+    use a long prompt plus very short generation (max_tokens=1) to simulate Prefill compute occupancy.
+    Strict prefill-only behavior is usually not directly expressible under /v1/chat/completions, so this approximation is used.
     """
     api_url = f"http://{host}:{port}/v1/chat/completions"
     headers = {"Content-Type": "application/json"}
@@ -281,8 +282,8 @@ async def run_background_prefill_load(
     stop_event: Optional[asyncio.Event] = None,
 ):
     """
-    后台 Prefill 干扰协程：
-    持续发送“长 prompt + max_tokens=1”请求，直到 stop_event 被置位。
+    Background Prefill interference coroutine:
+    continuously sends long-prompt + max_tokens=1 requests until stop_event is set.
     """
     stop_event = stop_event or asyncio.Event()
     interval_sec = max(0.0, prefill_interval_ms / 1000.0)

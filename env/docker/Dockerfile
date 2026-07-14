@@ -2,10 +2,10 @@ ARG CUDA_VERSION=12.8.0
 ARG PYTHON_VERSION=3.12
 ARG RUST_TOOLCHAIN=stable
 
-# 使用 Ubuntu 22.04 和 CUDA 12.8 的基础镜像
+# Use the base image of Ubuntu 22.04 and CUDA 12.8
 FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu22.04 AS base
 
-# 设置环境变量以避免交互式提示
+# Set environment variables to avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install Rust for resource-monitoring agents and future control-plane extensions.
@@ -14,7 +14,7 @@ ENV RUSTUP_HOME=/opt/rustup
 ENV CARGO_HOME=/opt/cargo
 ENV PATH="/opt/cargo/bin:${PATH}"
 
-# 安装系统依赖
+# Install system dependencies
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     software-properties-common \
@@ -45,26 +45,26 @@ RUN apt-get update && \
     libhiredis-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# 安装 Rust toolchain
+# install Rust toolchain
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
     sh -s -- -y --profile minimal --default-toolchain ${RUST_TOOLCHAIN} && \
     chmod -R a+w ${RUSTUP_HOME} ${CARGO_HOME} && \
     rustc --version && \
     cargo --version
 
-# 添加 deadsnakes PPA 以安装 Python 3.12
+# Add the deadsnakes PPA to install Python 3.12
 RUN add-apt-repository ppa:deadsnakes/ppa && \
     apt-get update && \
     apt-get install -y python3.12 python3.12-venv python3.12-dev python3.12-tk && \
     rm -rf /var/lib/apt/lists/*
 
-# 设置 Python 3.12 为默认版本
+# Set Python 3.12 as the default version
 RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
 
-# 安装 pip
+# install pip
 RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3
 
-# 设置工作目录
+# Set the working directory
 WORKDIR /workspace
 
 CMD ["bash"]

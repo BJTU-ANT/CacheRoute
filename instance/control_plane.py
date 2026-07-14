@@ -1,4 +1,5 @@
 # instance/control_plane.py
+"""Instance control-plane endpoints that forward runtime KV injection requests to KDN."""
 from __future__ import annotations
 
 import logging
@@ -31,8 +32,8 @@ async def healthz() -> Dict[str, Any]:
 @_control_plane.post("/v1/kv/inject_ready")
 async def inject_ready(req: KVInjectReadyReq) -> Dict[str, Any]:
     """
-    仅负责把 Proxy 的控制请求转给 KDN。
-    Instance 自己提供目标 Redis 参数。
+    Forward Proxy control requests to KDN only.
+    Instance supplies the target Redis parameters.
     """
     redis_host = os.environ.get("INSTANCE_REDIS_HOST", getattr(config, "INSTANCE_REDIS_HOST", "127.0.0.1"))
     redis_port = int(os.environ.get("INSTANCE_REDIS_PORT", str(getattr(config, "INSTANCE_REDIS_PORT", 6379))))

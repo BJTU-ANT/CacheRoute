@@ -1,6 +1,6 @@
 # instance/kv_service.py
 """
-给 Instance 控制平面复用，负责调用 KDN 的运行时注入接口。
+Shared by the Instance control plane to call KDN runtime injection APIs.
 """
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ class KDNRuntimeClient:
         redis_password: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        调 KDN 运行时接口，只对已 kv_ready 的 kid 做 Redis 注入。
+        Call the KDN runtime API and inject Redis data only for kids that are already kv_ready.
         """
         if not kdn_addr:
             raise ValueError("kdn_addr is empty")
@@ -37,7 +37,7 @@ class KDNRuntimeClient:
         if kdn_addr.startswith("http://") or kdn_addr.startswith("https://"):
             base_url = kdn_addr.rstrip("/")
         else:
-            # 默认补 http://，端口由上游决定是否已携带
+            # Add http:// by default; the upstream caller decides whether the port is already included.
             base_url = f"http://{kdn_addr}".rstrip("/")
 
         payload = {

@@ -1,3 +1,4 @@
+"""Regression and curve-building utilities for TPOT measurements."""
 import asyncio
 import csv
 import json
@@ -369,14 +370,14 @@ class TPOTRegressor:
                         }
                     )
 
-                # 同 bs 内滑动中位数平滑（用 filtered_median 优先）
+                # Sliding median smoothing within the same batch size; prefer filtered_median.
                 for p in points:
                     p["_base_for_smooth"] = p.get("filtered_median_tpot_ms") if p.get("filtered_median_tpot_ms") is not None else p.get("filtered_mean_tpot_ms")
                 smoothed = self._rolling_median(points, "_base_for_smooth")
                 for i, s in enumerate(smoothed):
                     points[i]["smoothed_tpot_ms"] = s
 
-                # 邻域突增检测：低置信点 + 相邻长度比较
+                # Neighborhood spike detection: low-confidence points plus adjacent-length comparison.
                 for i, p in enumerate(points):
                     if not p.get("is_low_confidence"):
                         continue
@@ -398,7 +399,7 @@ class TPOTRegressor:
                     if neigh_ref > 0 and cur > neigh_ref * self._spike_ratio_threshold:
                         p["suspicious_spike"] = True
 
-                # default 值优先级：filtered_median -> smoothed -> filtered_mean
+                # Default value priority: filtered_median -> smoothed -> filtered_mean.
                 for p in points:
                     p["default_tpot_ms"] = (
                         p.get("filtered_median_tpot_ms")

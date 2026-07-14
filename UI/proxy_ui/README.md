@@ -62,7 +62,7 @@ The UI polls the Proxy control plane through the UI server, so the browser does 
 
 ## Polished dashboard features
 
-Issue #100 upgrades the first Proxy UI into a richer frontend-only dashboard while keeping the same observability-only contract.
+upgrades the first Proxy UI into a richer frontend-only dashboard while keeping the same observability-only contract.
 
 - Sticky top navigation with Proxy/Scheduler badges, last refresh time, refresh, pause/resume, and theme controls.
 - Auto-refresh interval selector for 1s / 3s / 5s / 10s polling.

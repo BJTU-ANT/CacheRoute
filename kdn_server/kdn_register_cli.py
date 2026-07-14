@@ -1,11 +1,12 @@
+"""Unified KDN registration and KV build CLI for text and KVCache workflows."""
 import argparse
 import os
 import shlex
 import requests
 from core import config
 """
-KDN 统一注册/构建工具（Text + KV）
---base-url http://127.0.0.1:9101 指定KDN_API
+Unified KDN registration/build tool for Text + KV.
+--base-url http://127.0.0.1:9101 specifies KDN_API
 
 HTTP endpoints:
 - POST /knowledge/register_text
@@ -13,28 +14,28 @@ HTTP endpoints:
 - POST /knowledge/search/text
 - POST /knowledge/delete
 
-交互模式:
-- 单行：粘贴后回车 -> register_text
+Interactive mode:
+- Single line: paste and press Enter -> register_text
 - :file <path> -> register_text (file content)
 - :buildkv <kid> [--api-url ... --model ... --max-tokens ... --redis-host ...]
-- :buildkv_file <path> [kv args...] -> 先 register_text(file) 再 build_kv(kid)
+- :buildkv_file <path> [kv args...] -> register_text(file), then build_kv(kid)
 - :status <kid> -> search knowledge status
 - :delete <kid> [--kv] -> delete knowledge
 - :purge [--no-kv]  -> delete all base (!!!)
 
-命令行模式:
-- --file <path>                 只注册文本
-- --build-kv-kid <kid>          只触发 build_kv
-- --build-kv-file <path>        先注册文本再 build_kv（推荐）
-- --delete-kid <kid>            只删除文本
-- --delete-kv                   删除KV，需要配合文本kid使用
-- --status-kid <kid>            查询指定kid的状态
+Command-line mode:
+- --file <path>                 register text only
+- --build-kv-kid <kid>          trigger build_kv only
+- --build-kv-file <path>        register text first, then build_kv; recommended
+- --delete-kid <kid>            delete text only
+- --delete-kv                   delete KV; must be used with a text kid
+- --status-kid <kid>            query the status of the specified kid
 """
 
 DEFAULT_BASE_URL = config.KDN_BASE_URL
 DEFAULT_WARN_LEN = config.DEFAULT_WARN_LEN
 
-# build_kv 的默认值（与你服务端默认保持一致）
+# build_kv defaults, kept consistent with server defaults.
 DEFAULT_API_URL = config.DEFAULT_API_URL
 DEFAULT_MODEL = config.DEFAULT_MODEL_SHORTNAME
 DEFAULT_MAX_TOKENS = config.DEFAULT_MAX_TOKENS
@@ -127,7 +128,7 @@ def build_kv(base_url: str, kid: str, kv_args: dict, timeout_s: int = 600) -> di
 
 
 def query_kid_status(base_url: str, kid: str, timeout_s: int = 15) -> dict:
-    # 尽量使用 need_fields，避免 content/embedding 太大
+    # Prefer need_fields to avoid large content/embedding payloads.
     payload = {
         "knowledge_ids": [kid],
         "need_fields": [
@@ -182,7 +183,7 @@ def print_status(resp: dict, kid: str):
         return
 
     it = items[0]
-    # 兼容：有的实现字段名可能不同
+    # Compatibility: some implementations may use different field names.
     rel_path = it.get("rel_path") or it.get("path")
     length = it.get("length")
     import math
@@ -191,7 +192,7 @@ def print_status(resp: dict, kid: str):
     emb_head = it.get("embedding_head")
     has_embedding = isinstance(emb_head, list) and len(emb_head) > 0
 
-    # 只用 head 做一个轻量的 sanity check（不是全量 norm）
+    # Use only the head for a lightweight sanity check, not a full norm.
     emb_head_l2 = None
     if has_embedding:
         try:
@@ -223,8 +224,8 @@ def print_status(resp: dict, kid: str):
 
 def parse_kv_cli_tokens(tokens: list[str]) -> dict:
     """
-    解析 build_kv 的可选参数（适用于交互命令和命令行模式）
-    支持：
+    Parse optional build_kv arguments for both interactive commands and command-line mode.
+    Supports:
       --api-url, --model, --max-tokens, --temperature,
       --redis-host, --redis-port, --redis-db, --redis-password,
       --match, --scan-count, --flushdb
@@ -265,15 +266,15 @@ def main():
     ap.add_argument("--timeout", type=int, default=30, help="timeout seconds for register_text")
     ap.add_argument("--warn-len", type=int, default=DEFAULT_WARN_LEN)
 
-    # 非交互：文本注册
+    # Non-interactive: text registration.
     ap.add_argument("--file", help="Register text from a file, then exit")
 
-    # 非交互：KV build
+    # Non-interactive: KV build.
     ap.add_argument("--build-kv-kid", help="Build KV for an existing kid, then exit")
     ap.add_argument("--build-kv-file", help="Register text from file and then build KV, then exit")
     ap.add_argument("--status-kid", help="Query status for a kid, then exit")
 
-    # build_kv 的可选参数（非交互用）
+    # Optional build_kv arguments for non-interactive mode.
     ap.add_argument("--api-url", default=DEFAULT_API_URL)
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--max-tokens", type=int, default=DEFAULT_MAX_TOKENS)
@@ -308,7 +309,7 @@ def main():
         "flushdb": bool(args.flushdb),
     }
 
-    # ========== 非交互模式 1：只注册文本 ==========
+    # ========== Non-interactive mode 1: register text only ==========
     if args.file:
         content = read_file(args.file)
         if not content.strip():
@@ -318,14 +319,14 @@ def main():
         print_text_ok(resp)
         return
 
-    # ========== 非交互模式 2：只 build kv ==========
+    # ========== Non-interactive mode 2: build KV only ==========
     if args.build_kv_kid:
         kid = args.build_kv_kid.strip().lower()
         resp = build_kv(base_url, kid, kv_args_from_flags, timeout_s=max(600, args.timeout))
         print_kv_ok(resp)
         return
 
-    # ========== 非交互模式 3：文件 -> 注册 -> build kv（最常用） ==========
+    # ========== Non-interactive mode 3: file -> register -> build KV; most common ==========
     if args.build_kv_file:
         content = read_file(args.build_kv_file)
         if not content.strip():
@@ -340,7 +341,7 @@ def main():
         print_kv_ok(r2)
         return
 
-    # ========== 非交互模式 4：查询知识块状态 <Kid> ==========
+    # ========== Non-interactive mode 4: query knowledge-block status <Kid> ==========
     if args.status_kid:
         kid = args.status_kid.strip().lower()
         resp = query_kid_status(base_url, kid, timeout_s=min(60, args.timeout))
@@ -352,14 +353,14 @@ def main():
         print_pool_status(resp)
         return
 
-    # ========== 非交互模式 5：删除知识块 ==========
+    # ========== Non-interactive mode 5: delete knowledge blocks ==========
     if args.delete_kid:
         kid = args.delete_kid.strip().lower()
         resp = delete_kids(base_url, [kid], delete_kv=bool(args.delete_kv), timeout_s=max(60, args.timeout))
         print(resp)
         return
 
-    # ========== 交互模式 ==========
+    # ========== Interactive mode ==========
     print("=" * 80)
     print("KDN Register CLI (Text + KV)")
     print(f"KDN: {base_url}")
@@ -406,7 +407,7 @@ def main():
         # -------- KV: buildkv_file --------
         if line.startswith(":buildkv_file "):
             rest = line[len(":buildkv_file ") :].strip()
-            # 用 shlex 支持带空格路径的引号
+            # Use shlex to support quoted paths with spaces.
             tokens = shlex.split(rest)
             if not tokens:
                 print("[ERROR] usage: :buildkv_file <path> [kv args...]")

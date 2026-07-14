@@ -1,4 +1,5 @@
 # prefill_predictor.py
+"""Singleton-style TTFT predictor facade with detailed warmup support."""
 
 import asyncio
 import logging
@@ -8,15 +9,15 @@ from typing import Optional, List, Tuple, Dict, Any
 from prefill_regressor import PrefillTimeRegressor
 
 # ==========================================
-# 1. 配置区域 (保持不变)
+# 1. Configuration area (unchanged).
 # ==========================================
 VLLM_CONFIG_DEFAULT = {
     "host": "0.0.0.0",
     "port": 8000,
     "model_id": "llama3-70b",
-    "tokenizer_path": "/workspace/llm-stack/models/LLM-Research/Meta-Llama-3-70B-Instruct/"
-    # 训练样本口径：
-    # mid_minmax(默认) / mean_ttft / max_arrival / max_ttft / min_ttft
+    "tokenizer_path": "/workspace/llm-stack/models/LLM-Research/Meta-Llama-3-70B-Instruct/",
+    # Training sample policy:
+    # mid_minmax(default) / mean_ttft / max_arrival / max_ttft / min_ttft
     "batch_sample_policy": "mid_minmax",
 }
 
@@ -27,11 +28,11 @@ WARM_UP_CONFIGS_DEFAULT = [
     (bs, pl)
     for bs in BATCH_SIZES_TO_TEST
     for pl in TOKEN_LENGTHS_TO_TEST
-    if bs * pl <= 10000  # 过滤掉bs*pl大于10000的组合
+    if bs * pl <= 10000  # Filter out combinations where bs*pl is greater than 10000.
 ]
 
 # ==========================================
-# 2. 单例管理 (保持不变)
+# 2. Singleton management (unchanged).
 # ==========================================
 _regressor: Optional[PrefillTimeRegressor] = None
 _lock = asyncio.Lock()
@@ -42,7 +43,7 @@ async def get_regressor() -> PrefillTimeRegressor:
         if _regressor is None:
             print("[TTFT Predictor] Initializing Regressor...")
             _regressor = PrefillTimeRegressor()
-            # 快速冷启动 Dummy Data
+            # Fast cold-start dummy data.
             dummy_data = [(1, 100, 0.04), (1, 1000, 0.22), (8, 100, 0.06), (8, 1000, 0.35), (4, 500, 0.12)]
             print("[TTFT Predictor] Seeding with dummy data for fast start...")
             try:
@@ -53,7 +54,7 @@ async def get_regressor() -> PrefillTimeRegressor:
     return _regressor
 
 # ==========================================
-# 3. 核心功能接口 (保持不变)
+# 3. Core functional interface (unchanged).
 # ==========================================
 async def predict_ttft(batch_size: int, prompt_length: int) -> float:
     regressor = await get_regressor()
@@ -71,7 +72,7 @@ async def update_prefill_data(batch_size: int, prompt_length: int, prefill_time:
         logging.error(f"[TTFT Predictor] Data collection failed: {e}")
 
 # ==========================================
-# 4. 真实预热逻辑 (大幅修改：逐个配置测试)
+# 4. Real warmup logic (major change: test each configuration individually).
 # ==========================================
 
 async def perform_detailed_warmup(
@@ -79,8 +80,8 @@ async def perform_detailed_warmup(
     repeats: int = 3
 ):
     """
-    [管理接口] 执行真实的基准测试流程。
-    修改后：逐个配置触发，并实时打印该配置的测试结果。
+    [Management interface] Execute the real benchmark flow.
+    After modification: trigger each configuration individually and print its result in real time.
     """
     print("\n" + "="*50)
     print("🚀 [Detailed Warmup] Starting Step-by-Step Benchmark...")
@@ -91,23 +92,23 @@ async def perform_detailed_warmup(
     
     regressor = await get_regressor()
 
-    # 1. 清空旧数据，准备重新收集
+    # 1. Clear old data and prepare to recollect.
     regressor.clear_data()
     
     total_configs = len(WARM_UP_CONFIGS_DEFAULT)
     
     try:
-        # 2. 遍历每个配置，逐个触发并等待
+        # 2. Iterate over configurations, triggering and waiting one by one.
         for idx, (bs, pl) in enumerate(WARM_UP_CONFIGS_DEFAULT):
             print(f"\n[{idx+1}/{total_configs}] Testing: BatchSize={bs}, PromptLen={pl} ...", end="", flush=True)
             
-            # 记录当前缓冲区已有的大小，用于计算本次新增了多少数据
+            # Record current buffer size to calculate how many data points this run adds.
             start_data_count = len(regressor._training_data)
-            # trigger_warmup_requests 现在按“每个 repeat 一条批次样本”写入数据
+            # trigger_warmup_requests now writes data as one batch sample per repeat.
             expected_new_points = repeats
             
-            # 2.1 触发当前配置的请求
-            # 我们构造一个只包含当前配置的单元素列表
+            # 2.1 Trigger requests for the current configuration.
+            # Build a single-element list containing only the current configuration.
             current_config = [(bs, pl)]
             await regressor.trigger_warmup_requests(
                 test_configs=current_config,
@@ -115,27 +116,27 @@ async def perform_detailed_warmup(
                 repeats_per_config=repeats
             )
             
-            # 2.2 等待数据回流
-            # 轮询检查数据量是否增加了预期数量
-            max_retries = 30 # 最多等30秒
+            # 2.2 Wait for data to return.
+            # Poll until the data volume has increased by the expected amount.
+            max_retries = 30 # Wait up to 30 seconds.
             collected_this_round = []
             
             while max_retries > 0:
                 current_data_count = len(regressor._training_data)
-                # 检查是否收集够了
+                # Check whether enough data has been collected.
                 if current_data_count >= start_data_count + expected_new_points:
-                    # 更新收集到的这批数据的batch_size和prompt_length为当前测试的参数
+                    # Update the collected batch_size and prompt_length to the current test parameters.
                     for i in range(start_data_count, current_data_count):
-                        # 获取当前数据点
+                        # Get the current data point.
                         _, _, time_old = regressor._training_data[i]
-                        # 更新为正确的batch_size和prompt_length
+                        # Update to the correct batch_size and prompt_length.
                         regressor._training_data[i] = (bs, pl, time_old)
                     break
                 await asyncio.sleep(0.5)
                 max_retries -= 1
             
-            # 2.3 提取并打印本次测试结果
-            # 从 buffer 末尾提取出最新加入的数据点
+            # 2.3 Extract and print this test result.
+            # Extract the newest data points from the end of the buffer.
             new_data_points = regressor._training_data[start_data_count:]
             if new_data_points:
                 times = [t for _, _, t in new_data_points]
@@ -144,7 +145,7 @@ async def perform_detailed_warmup(
             else:
                 print(" Timeout/Failed. No data collected.")
 
-        # 3. 所有配置跑完，统一拟合
+        # 3. Fit once after all configurations finish.
         final_count = len(regressor._training_data)
         if final_count == 0:
             print("\n❌ [Detailed Warmup] No data collected at all.")
@@ -153,7 +154,7 @@ async def perform_detailed_warmup(
         print(f"\n[Detailed Warmup] All tests finished. Total points: {final_count}. Fitting model...")
         regressor.fit()
         
-        # 打印最终系数
+        # Print final coefficients.
         coeffs = regressor.get_coefficients()
         print("\n✅ [Detailed Warmup] Model calibrated.")
         print(f"   a (B*L) = {coeffs['a']:.2e}")
@@ -165,11 +166,11 @@ async def perform_detailed_warmup(
     except Exception as e:
         logging.error(f"❌ [Detailed Warmup] Failed: {e}", exc_info=True)
 
-# ... (main block 保持不变)
+# ... Main block remains unchanged. ...
 if __name__ == "__main__":
-    # 配置日志
+    # Configure logging.
     logging.basicConfig(level=logging.INFO)
     async def main():
-        # ... (同上)
+        # ... Same as above. ...
         pass
     asyncio.run(main())

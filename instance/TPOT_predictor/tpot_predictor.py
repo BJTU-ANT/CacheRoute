@@ -1,3 +1,4 @@
+"""High-level TPOT benchmark orchestration and prediction helpers."""
 import asyncio
 import logging
 import math
@@ -134,7 +135,7 @@ def _build_configs_for_sequence_range(
             target_pl = max(1, real_input - offset)
             configs.append((bs, target_pl))
 
-    # 去重并排序
+    # Deduplicate and sort.
     uniq = sorted(set(configs), key=lambda x: (x[0], x[1]))
     return uniq
 
@@ -149,8 +150,8 @@ def _build_continuous_configs_for_single_bs(
     overlap_tokens: int = 4,
 ) -> List[Tuple[int, int]]:
     """
-    为单个 bs 规划“连续长度采样模式”：
-    通过若干 real_input_length 起点 + 固定 max_tokens，尽量覆盖 [length_start, length_end]。
+    Plan a continuous-length sampling mode for one batch size:
+    use several real_input_length starts plus fixed max_tokens to cover [length_start, length_end] as much as possible.
     """
     offset = _estimate_offset(tokenizer)
     window = max(1, int(max_tokens))
@@ -170,7 +171,7 @@ def _build_continuous_configs_for_single_bs(
     starts = sorted(set(starts))
     configs: List[Tuple[int, int]] = []
     for real_start in starts:
-        # 这个请求观测窗口是 [real_start, real_start + max_tokens - 1]
+        # This request observation window is [real_start, real_start + max_tokens - 1].
         if real_start > length_end:
             continue
         if real_start + window - 1 < length_start:
@@ -203,10 +204,10 @@ async def collect_tpot_range(
     prefill_max_tokens: int = 1,
 ):
     """
-    面向真实 sequence_length 区间 [length_start, length_end] 的接口。
+    Interface for the real sequence_length range [length_start, length_end].
 
-    对用户暴露的 length 语义：真实 sequence_length，而不是 target_prompt_length。
-    内部会自动把区间映射为一组待测 target_prompt_length。
+    The length exposed to users means real sequence_length, not target_prompt_length.
+    Internally, the range is mapped automatically to target_prompt_length values to test.
     """
     tokenizer = AutoTokenizer.from_pretrained(vllm_config["tokenizer_path"])
     configs = _build_configs_for_sequence_range(
@@ -293,8 +294,8 @@ async def collect_continuous_tpot_curve(
     prefill_max_tokens: int = 1,
 ):
     """
-    连续长度采样主模式（单 bs）：
-    用 real_input_length 起点 + max_tokens 窗口覆盖 [length_start, length_end]。
+    Main continuous-length sampling mode for one batch size:
+    cover [length_start, length_end] with real_input_length starts plus max_tokens windows.
     """
     tokenizer = AutoTokenizer.from_pretrained(vllm_config["tokenizer_path"])
     configs = _build_continuous_configs_for_single_bs(

@@ -1,4 +1,5 @@
 # kdn_server/text_db.py
+"""SQLite-backed text knowledge database with embedding and KVCache status metadata."""
 from __future__ import annotations
 
 import hashlib
@@ -13,7 +14,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 
 def _normalize_text(s: str) -> str:
-    # 稳定、可复现：仅统一换行 + 去首尾空白，不做大小写/空格折叠以避免误合并
+    # Stable and reproducible: normalize newlines and trim only; do not fold case or spaces to avoid accidental merges.
     s = s.replace("\r\n", "\n").replace("\r", "\n")
     return s.strip()
 
@@ -49,10 +50,10 @@ class TextDatabase:
         self._ensure_embedding_columns()
 
     def _connect(self) -> sqlite3.Connection:
-        # 每次操作独立连接：适配多并发 & 多线程（uvicorn 默认 async + 线程池）
+        # Use one independent connection per operation for concurrency and threads; uvicorn defaults to async plus thread pool.
         conn = sqlite3.connect(str(self.db_path), timeout=30, isolation_level=None, check_same_thread=False)
         conn.row_factory = sqlite3.Row
-        # WAL：提升并发读写体验（写仍然串行，但读不会被写长时间阻塞）
+        # WAL improves concurrent read/write behavior; writes remain serialized, but reads are not blocked by long writes.
         conn.execute("PRAGMA journal_mode=WAL;")
         conn.execute("PRAGMA synchronous=NORMAL;")
         conn.execute("PRAGMA temp_store=MEMORY;")
@@ -99,7 +100,7 @@ class TextDatabase:
 
     def register_text(self, content: str, meta: Optional[Dict[str, Any]] = None) -> Tuple[str, str, int]:
         """
-        返回: (kid, status, length)
+        Return: (kid, status, length)
           status: "created" | "exists"
         """
         if not isinstance(content, str):
@@ -122,20 +123,20 @@ class TextDatabase:
             embedding_blob = vec.tobytes()
             embed_dim = int(vec.shape[0])
 
-        # 先尝试查索引，命中则直接返回（幂等）
+        # Check the index first; return directly on hit for idempotency.
         with self._connect() as conn:
             row = conn.execute("SELECT kid FROM knowledge_blocks WHERE kid = ?", (kid,)).fetchone()
             if row:
                 return kid, "exists", length
 
-        # 原子写文件：tmp -> replace
+        # Atomic file write: tmp -> replace.
         tmp_dir = self.base_dir / "tmp"
         tmp_dir.mkdir(parents=True, exist_ok=True)
         tmp_path = tmp_dir / f"{kid}.{os.getpid()}.tmp"
         tmp_path.write_text(norm, encoding="utf-8")
         os.replace(tmp_path, final_path)
 
-        # 写索引：用事务，确保索引与文件一致（若并发注册同一 kid，INSERT OR IGNORE 保幂等）
+        # Write index in a transaction to keep index and file consistent; INSERT OR IGNORE preserves idempotency under concurrent registration of the same kid.
         now = int(time.time())
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE;")
@@ -160,7 +161,7 @@ class TextDatabase:
 
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE;")
-            # kid 必须已经存在（先注册文本），否则你要决定是否允许“只KV无文本”
+            # kid must already exist after text registration; otherwise decide whether KV-only without text is allowed.
             row = conn.execute("SELECT kid FROM knowledge_blocks WHERE kid=?", (kid,)).fetchone()
             if not row:
                 conn.execute("ROLLBACK;")
@@ -184,7 +185,7 @@ class TextDatabase:
         if not kids_list:
             return items, miss
 
-        # 批量查索引：新增 embedding / embed_dim
+        # Batch index lookup, including embedding and embed_dim.
         q_marks = ",".join(["?"] * len(kids_list))
         with self._connect() as conn:
             rows = conn.execute(
@@ -206,17 +207,17 @@ class TextDatabase:
             emb_list: Optional[List[float]] = None
             emb_dim: Optional[int] = None
 
-            # embedding 反序列化：BLOB(float32 bytes) -> List[float]
+            # Deserialize embedding: BLOB(float32 bytes) -> List[float].
             blob = r["embedding"]
             if blob is not None:
                 emb_dim = int(r["embed_dim"]) if r["embed_dim"] is not None else None
-                # 注意：这里假设你注册时写入的是 float32
+                # Assumes registration wrote float32 values.
                 arr = np.frombuffer(blob, dtype=np.float32)
                 emb_list = arr.tolist()
-                # 可选一致性校验：embed_dim 存在则检查维度匹配
+                # Optional consistency check: validate dimension when embed_dim exists.
                 if emb_dim is not None and emb_dim != len(emb_list):
-                    # 维度不一致时，你可以选择：报错 / 忽略 embedding / 标记 miss
-                    # 我这里选择忽略 embedding，避免因为单条脏数据拖垮整个查询
+                    # On dimension mismatch, options include raising, ignoring embedding, or marking miss.
+                    # This path ignores the embedding to avoid one dirty row breaking the entire query.
                     emb_list = None
 
             kv_ready = int(r["kv_ready"]) if r["kv_ready"] is not None else 0
@@ -226,7 +227,7 @@ class TextDatabase:
 
             by_kid[r["kid"]] = (rel_path, length, emb_list, emb_dim, kv_ready, kv_rel_dir, kv_dumped_keys, kv_updated_at)
 
-        # 按输入顺序返回，不去重
+        # Return in input order without deduplication.
         for kid in kids_list:
             rec = by_kid.get(kid)
             if not rec:
@@ -259,8 +260,8 @@ class TextDatabase:
 
     def snapshot(self, limit: int = 1000000, offset: int = 0, include_embedding: bool = True) -> List[dict]:
         """
-        返回知识索引快照（不读正文 txt，专用于 scheduler 初始化建库）。
-        - include_embedding=True 时，会把 embedding(BLOB) 反序列化成 list[float]
+        Return a knowledge-index snapshot without reading txt bodies, dedicated to scheduler initialization.
+        - When include_embedding=True, deserialize embedding BLOBs into list[float].
         """
         limit = max(1, int(limit))
         offset = max(0, int(offset))
@@ -287,7 +288,7 @@ class TextDatabase:
         for r in rows:
             it = dict(r)
 
-            # embedding: BLOB -> list[float]（float32）
+            # embedding: BLOB -> list[float] (float32).
             if include_embedding:
                 blob = it.get("embedding")
                 if blob is not None:
@@ -296,7 +297,7 @@ class TextDatabase:
                 else:
                     it["embedding"] = None
 
-            # 规整类型
+            # Normalize types.
             it["length"] = int(it.get("length") or 0)
             it["embed_dim"] = int(it.get("embed_dim") or 0) if it.get("embed_dim") is not None else None
             it["kv_ready"] = int(it.get("kv_ready") or 0)
@@ -310,16 +311,16 @@ class TextDatabase:
 
     def delete_one(self, kid: str) -> Tuple[bool, str]:
         """
-        删除一个知识块（索引 + 文件）。
-        返回 (deleted, reason)
-          deleted=True: 本次确实删除了索引记录（以及尽力删除文件）
-          deleted=False: 不存在 or 参数非法
+        Delete one knowledge block, including index and file.
+        Return (deleted, reason).
+          deleted=True: index record was actually deleted, and file deletion was best-effort.
+          deleted=False: not found or invalid argument.
         """
         kid = (kid or "").strip().lower()
         if not kid:
             return False, "empty kid"
 
-        # 先查出路径（若索引不存在，直接返回 not_found）
+        # Query the path first; return not_found directly if the index does not exist.
         with self._connect() as conn:
             row = conn.execute(
                 "SELECT rel_path FROM knowledge_blocks WHERE kid = ?",
@@ -331,24 +332,24 @@ class TextDatabase:
             rel_path = row["rel_path"]
             file_path = (self.base_dir / rel_path).resolve()
 
-            # 先删索引（事务内），再删文件（避免删错文件时索引无法回滚的问题）
+            # Delete the index first inside a transaction, then delete the file to avoid rollback issues after deleting the wrong file.
             conn.execute("BEGIN IMMEDIATE;")
             conn.execute("DELETE FROM knowledge_blocks WHERE kid = ?", (kid,))
             conn.execute("COMMIT;")
 
-        # 文件删除尽力而为：不存在也算成功（因为索引已删）
+        # File deletion is best-effort; missing files count as success because the index is already deleted.
         try:
             if file_path.exists():
                 os.remove(file_path)
         except Exception as e:
-            # 这里不回滚索引；把异常作为 reason 返回，便于你排查权限/占用
+            # Do not roll back the index here; return the exception as reason to help diagnose permission or lock issues.
             return True, f"index_deleted_file_delete_failed: {e}"
 
         return True, "deleted"
 
     def delete_many(self, kids: Iterable[str]) -> dict:
         """
-        批量删除，返回统计信息。
+        Delete in batches and return statistics.
         """
         deleted: List[str] = []
         not_found: List[str] = []
@@ -360,7 +361,7 @@ class TextDatabase:
                 if reason == "deleted":
                     deleted.append(str(kid))
                 else:
-                    # 例如 index_deleted_file_delete_failed
+                    # For example, index_deleted_file_delete_failed.
                     deleted.append(str(kid))
                     errors.append({"kid": str(kid), "error": reason})
             else:

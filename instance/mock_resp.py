@@ -1,16 +1,17 @@
+"""Mock OpenAI-compatible responses used when Instance runs without a real vLLM backend."""
 import time, json, asyncio
 from typing import Dict, Any, AsyncGenerator
 
 # ==================================================
-#   Mock Engine：用于本地开发 / 未接 vLLM 时的输出模拟
+#   Mock Engine: simulates output for local development or when vLLM is not connected
 # ==================================================
 async def mock_chat_stream(payload: Dict[str, Any]) -> AsyncGenerator[bytes, None]:
-    """模拟 chat/completions 的流式输出（OpenAI/vLLM 风格）"""
+    """Simulate streaming chat/completions output in OpenAI/vLLM style."""
     base_id = f"chatcmpl-mock-{int(time.time())}"
     model_name = payload.get("model", "mock-model")
     created = int(time.time())
 
-    # 1) 第一块：只带 role
+    # 1) First chunk: role only.
     first_chunk = {
         "id": base_id,
         "object": "chat.completion.chunk",
@@ -26,8 +27,8 @@ async def mock_chat_stream(payload: Dict[str, Any]) -> AsyncGenerator[bytes, Non
     }
     yield f"data: {json.dumps(first_chunk, ensure_ascii=False)}\n\n".encode("utf-8")
 
-    # 2) 中间内容块
-    for piece in ["你好，", "这里是 Instance 模拟 ", "流式输出。"]:
+    # 2) Intermediate content chunks.
+    for piece in ["Hello, ", "this is simulated Instance ", "streaming output."]:
         chunk = {
             "id": base_id,
             "object": "chat.completion.chunk",
@@ -44,7 +45,7 @@ async def mock_chat_stream(payload: Dict[str, Any]) -> AsyncGenerator[bytes, Non
         yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n".encode("utf-8")
         await asyncio.sleep(0.05)
 
-    # 3) 最后一块：finish_reason=stop, delta 为空
+    # 3) Final chunk: finish_reason=stop with an empty delta.
     last_chunk = {
         "id": base_id,
         "object": "chat.completion.chunk",
@@ -60,12 +61,12 @@ async def mock_chat_stream(payload: Dict[str, Any]) -> AsyncGenerator[bytes, Non
     }
     yield f"data: {json.dumps(last_chunk, ensure_ascii=False)}\n\n".encode("utf-8")
 
-    # SSE 语义上的结束标记
+    # SSE completion marker.
     yield b"data: [DONE]\n\n"
 
 
 async def mock_chat_completion(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """模拟 chat/completions 的非流式输出"""
+    """Simulate non-streaming chat/completions output."""
     base_id = f"chatcmpl-mock-{int(time.time())}"
     model_name = payload.get("model", "mock-model")
 
@@ -81,7 +82,7 @@ async def mock_chat_completion(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "index": 0,
                 "message": {
                     "role": "assistant",
-                    "content": "你好，这里是 Instance 模拟完整回复。",
+                    "content": "Hello, this is a complete simulated Instance response.",
                 },
                 "finish_reason": "stop",
             }
@@ -95,7 +96,7 @@ async def mock_chat_completion(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def mock_text_completion(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """模拟 completions 模式"""
+    """Simulate completions mode."""
     base_id = f"cmpl-mock-{int(time.time())}"
     model_name = payload.get("model", "mock-model")
     prompt = payload.get("prompt", "")

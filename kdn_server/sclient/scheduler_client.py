@@ -1,4 +1,5 @@
 # kdn_server/sclient/scheduler_client.py
+"""Async client used by KDN nodes to register and heartbeat with the scheduler."""
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
