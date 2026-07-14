@@ -1,4 +1,4 @@
-# 构建任务和任务批次的信息结构
+# Build task and task-batch information structures.
 import time
 from dataclasses import dataclass, asdict
 from core.tokenizer_registry import estimate_tokens
@@ -14,48 +14,25 @@ from store import EmbeddingModel, KnowledgeTable
 from util import parse_stream_flag
 
 """
-定义调度器-本地代理的交互数据结构体 -> Class Request，调度器通过调度策略构建request并发给本地Proxy，随后Proxy按需求执行对应动作完成选池推理
-    
-    Class Request:
-      |  Request_ID:用户任务的唯一标识ID
-      |__Request_type：请求类型，如request，control，update等
-      |  
-      |__Class Prompt: 记录用户问题的基本信息，如具体问题，模型类型，问题长度等
-      |   |  model                      模型类型
-      |   |  user_prompt                用户问题
-      |   |  token_length               问题的token长度
-      |   |  max_token                  最长生成token数
-      |   |  stream                     是否启用流式传输
-      |   |  temperature                采样温度，默认1.0
-      |   |__top_p                      nucleus sampling 截断阈值，默认1.0
-      |
-      |__Class Service： 映射用户问题的服务需求，如是否支持PD分离，是否支持知识注入，TTFT，E2E和TPOT的SLO需求
-      |   |  Enable_PD_Disaggregation   是否启用PD分离
-      |   |  Enable_know_injection      是否启用知识注入
-      |   |  Injection_type             知识注入类型（文本orKV）
-      |   |  Enable_compress            是否允许对KVCache压缩
-      |   |  Compress_factor            压缩比例
-      |   |  Enable_security            是否启用安全模式（预留接口）
-      |   |  Knowledge_block_num        知识块数量
-      |   |  Knowledge_List             问题所需知识清单
-      |   |  Knowledge_length           知识注入长度
-      |   |  SLO_TTFT                   首token生成时间
-      |   |  SLO_E2E                    端到端时延
-      |   |  SLO_TPOT                   每秒token生成
-      |   |__Endpoint_type              转发给vLLM的请求类型，包括 chat/completions 或 completions，对话类或补全类
-      |  
-      |__Class Task： 记录调度相关的任务信息，如KDN知识服务器的IP地址，PD池代理的IP地址，端口号
-          |  User_addr                  用户IP地址
-          |  KDN_server_addr            KDN服务器地址
-          |  default_know_addr          默认文本注入服务器地址
-          |  P_proxy_id                 选择代理的ID号
-          |  P_proxy_addr               P池代理IP地址
-          |  D_proxy_addr               D池代理IP地址
-          |  P_proxy_port               P池代理端口号
-          |  D_proxy_port               D池代理端口号
-          |  prefill_instance           该请求分配的Prefill实例IP地址及端口
-          |  decode_instance            该请求分配的Decode实例IP地址及端口
-          |__batch_order                该请求在其所分配实例中的批次顺序
+Core request data structures shared by the scheduler and local Proxy.
+
+The scheduler builds a Request through its strategy path and forwards it to the
+selected Proxy. The Proxy then executes the required action, including
+knowledge selection, optional injection, and inference routing.
+
+Request layout:
+    Request_ID: Unique user-task identifier.
+    Request_type: Request category, such as request, control, or update.
+
+    Prompt: User-content metadata including model, prompt text, token length,
+        generation limit, streaming flag, temperature, and top_p.
+
+    Service: Service-level requirements including PD disaggregation, knowledge
+        injection settings, compression flags, security placeholder, selected
+        knowledge ids, knowledge length, SLO targets, and endpoint type.
+
+    Task: Scheduling metadata including user address, selected KDN, selected
+        Proxy, assigned instances, and batch order.
 """
 
 # ========================================================================================================================
@@ -63,17 +40,7 @@ from util import parse_stream_flag
 # ========================================================================================================================
 @dataclass
 class Prompt:
-    """
-        定义用户问题的基本信息
-            model<任务模型，str>
-            user_prompt<用户问题，str>
-            token_length<问题的token长度>
-            bs<任务组的batch_size，通常情况下默认1>
-            max_token<任务支持生成的最大token数>
-            stream<是否启用流式传输>
-            temperature<采样温度，默认1.0>
-            top_p<nucleus sampling 截断阈值，默认1.0>
-    """
+    """User prompt metadata used by scheduling and downstream inference."""
     model: str
     user_prompt: str
     token_length: int
@@ -87,11 +54,7 @@ class Prompt:
 
     @classmethod
     def extract_prompt_info(cls, model: str, user_prompt: str) -> int:
-        """
-            根据 user_prompt 自动计算 token_length并返回。
-            输入：model，user_prompt
-            输出：token_length
-        """
+        """Estimate and return token_length from the model name and user prompt."""
         seq_length = estimate_tokens(user_prompt, model)
         print(f"[Prompt-tokenizer]: get task prompt_length complete, prompt_length={seq_length}")
 
@@ -103,22 +66,7 @@ class Prompt:
 # ========================================================================================================================
 @dataclass
 class Service:
-    """
-        定义问题服务的SLO基本信息，通过用户IP地址映射具体服务等级，支持映射模块出于安全、个性化等方面的扩展
-            Enable_PD_Disaggregation<是否允许问题进行PD分离处理，默认为True>
-            Enable_know_injection<是否允许调用远端知识，默认为True>
-            Injection_type<知识注入类型，默认为text，由proxy后续根据策略调整>
-            Enable_compress<是都允许进行KVCache的压缩，默认为True>
-            Compress_factor<KVCache的压缩比率，默认0.3，可选0.3,0.5和0.7>
-            Enable_security<是否启用安全模式，默认false，为后续安全内容提供接口>
-            Knowledge_block_num<任务注入知识块的top数量，默认为3>
-            Knowledge_List<知识块列表，里面的元素是Knowledge_ID,表征一个具体的知识块>
-            Knowledge_length<任务注入知识库的token长度，默认为0>
-            SLO_TTFT<任务组的TTFT SLO需求，即问题开始推理至产生提一个token所需要的时间，默认2000ms>
-            SLO_E2E<任务从开始Prefill到结束Decode所需的完整时间，ms>
-            SLO_TPOT<任务组的TPOT SLO需求，即自回归推理阶段平均生成默认20ms>
-            Endpoint_type<转发给vLLM的请求类型，包括 chat/completions 或 completions，对话类或补全类>
-    """
+    """Service requirements, SLO targets, and knowledge-injection metadata."""
     Enable_PD_Disaggregation: bool
     Enable_know_injection: bool
     Injection_type: str
@@ -136,11 +84,7 @@ class Service:
 
     @classmethod
     def mapping_slo_info(cls, user_addr: str) -> Dict[str, Any]:
-        """
-            通过用户的IP地址映射出具体的服务SLO和功能启用
-            输入：user_addr
-            输出：服务SLO，如TTFT、TPOT、E2E，以及启用功能，是否启用PD分离，是否允许压缩，是否开启安全
-        """
+        """Map a user IP address to service SLO targets and feature flags."""
         if user_addr.startswith("10.0."):
             return {
                 "Enable_PD_Disaggregation": False,
@@ -174,21 +118,21 @@ class Service:
             model_name: str,
     ) -> Tuple[List[str], int]:
         """
-            根据用户问题，从知识库中检索出最相关的知识清单。
+        Retrieve the most relevant knowledge ids for a user prompt.
 
-            参数：
-                user_prompt：str ->用户问句，用于生成查询 embedding
-                knowledge_block_num：int ->希望返回的知识块数量（top-k）
-                embedder： EmbeddingModel ->外部注入的embedding模型
-                knowledge_table: KnowledgeTable ->实例，内部已经构建好 FAISS 索引
+        Args:
+            user_prompt: User query text used to build the query embedding.
+            knowledge_block_num: Desired top-k knowledge block count.
+            embedder: Injected embedding model used for query encoding.
+            knowledge_table: KnowledgeTable instance with a prepared FAISS index.
+            model_name: Model name used when tokenizing retrieved full content.
 
-            输出：
-                knowledge_ids: 检索到的知识块 ID 列表（长度 <= knowledge_block_num）
-                total_knowledge_length: 这些知识块 token 长度总和
+        Returns:
+            A pair of knowledge id list and total retrieved knowledge token length.
         """
         user_prompt = (user_prompt or "").strip()
         if not user_prompt:
-            # 空问题，直接返回空列表
+            # Empty prompts return an empty result immediately.
             return [], 0
 
         if knowledge_block_num <= 0:
@@ -196,10 +140,10 @@ class Service:
 
         print(f"[Knowledge retriever]: use embedder={DEFAULT_EMBED_MODEL}")
 
-        # 1) 将 user_prompt 编码为 embedding
+        # 1) Encode user_prompt into an embedding.
         query_embedding = embedder.encode_vector([user_prompt])[0]
 
-        # 2) 在知识库中检索 top-k 知识块（内部优先用 FAISS，失败则回退 Python 扫描）
+        # 2) Retrieve top-k knowledge blocks; FAISS is preferred with Python scan fallback.
         results = knowledge_table.search_by_embedding(
             query_embedding=query_embedding,
             top_k=knowledge_block_num,
@@ -207,7 +151,7 @@ class Service:
             min_ratio=float(SCHEDULER_RETRIEVAL_MIN_RATIO),
         )
 
-        # 3) 提取 ID 列表和总长度
+        # 3) Extract the id list and total length.
         knowledge_ids: List[str] = []
         total_len = 0
         for kid, unit, score in results:
@@ -216,11 +160,11 @@ class Service:
             full_content = str(getattr(unit, "full_content", "") or "")
             raw_text = full_content if full_content else str(getattr(unit, "text_abstract", "") or "")
 
-            # 兼容两类来源：
-            # 1) KDN 同步路径：full_content 会放入完整 content，length 通常是字符长度
-            # 2) 本地 YAML 路径：text_abstract 可能仅摘要，不能直接分词
+            # Support two source types:
+            # 1) KDN sync path: full_content contains complete content, and length is usually character length.
+            # 2) Local YAML path: text_abstract may be only a summary and cannot always be tokenized directly.
             #
-            # 若存在 full_content，直接按 tokenizer 分词；否则保留兼容判断。
+            # If full_content exists, tokenize it directly; otherwise keep compatibility checks.
             if full_content:
                 looks_like_full_content = True
             elif raw_text and stored_len > 0:
@@ -235,7 +179,7 @@ class Service:
             else:
                 total_len += stored_len
 
-        # 简单 debug
+        # Lightweight debug output.
         print(
             "[Service.knowledge_retriever] user_prompt_len={}, "
             "top_k={}, hit={}, knowledge_list_ids={}, total_len={}".format(
@@ -252,11 +196,12 @@ class Service:
 
 def normalize_injection_type(value: Any) -> str:
     """
-    规范化知识注入类型：
-      - 未传 / 空值：默认 kvcache
-      - 接受常见别名：kvcache / kv / kv_cache -> kvcache
-      - text / prompt -> text
-      - 非法值：回退 kvcache
+    Normalize knowledge injection type.
+
+    - Missing or empty values default to kvcache.
+    - Common aliases kvcache, kv, kv_cache, and kv-cache map to kvcache.
+    - text and prompt map to text.
+    - Invalid values fall back to kvcache.
     """
     if value is None:
         return "kvcache"
@@ -278,20 +223,7 @@ def normalize_injection_type(value: Any) -> str:
 # ========================================================================================================================
 @dataclass
 class Task:
-    """
-        定义任务调度基本信息
-            User_addr：用户的IP地址，表征用户身份
-            KDN_server_addr<任务根据知识需求挑选出的最合适的KDN服务器地址>
-            default_know_addr<默认的知识注入服务器，采用文本的注入方式>
-            P_proxy_id<处理任务的代理ID，用于追踪流>
-            P_proxy_addr<处理任务的P池代理IP地址，默认为本地换回地址>
-            P_proxy_port<处理任务的P池代理端口号，默认为8001>
-            D_proxy_addr<处理任务的D池代理IP地址，默认为本地换回地址>
-            D_proxy_port<处理任务的D池代理端口号，默认为8001>
-            prefill_instance<该请求分配的Prefill实例IP地址及端口>
-            decode_instance<该请求分配的Decode实例IP地址及端口>
-            batch_order<该请求在其所分配实例中的批次顺序>
-    """
+    """Scheduling metadata for selected KDN, Proxy, instances, and batch order."""
     User_addr: str
     KDN_server_addr: str
     default_know_addr: str
@@ -311,14 +243,7 @@ class Task:
 # ========================================================================================================================
 @dataclass
 class Request:
-    """
-        主结构体，用于描述任务的所有需求
-            Request_ID：用户任务的唯一标识ID
-            Request_type：请求类型，如request，control，update等
-            Prompt<用于处理用户内容的相关信息>
-            Service<用于处理用户服务的相关信息>
-            Task<用于记录调度任务时的相关信息>
-    """
+    """Complete task request containing prompt, service, and scheduling metadata."""
     Request_ID: int
     Request_type: str
     Prompt: Prompt
@@ -341,50 +266,41 @@ class Request:
             kdn_knowledge_index: Optional[Dict[str, Dict[str, Dict[str, Any]]]] = None,
     ) -> "Request":
         """
-            将原始用户请求信息payload，以及转换为完整的 Request 对象。
-            url_path:用户发送的url地址，例如 http://127.0.0.1:7001/v1/chat/completions
-            payload兼容的格式：
-                1）旧版TCP协议纯payload：{"model": "...", "user_prompt": "..."}
-                2）/v1/chat/completions 风格：{
-                    "model": "...",
-                    "messages": [
-                        {"role": "system", "content": "..."},
-                        {"role": "user",   "content": "..."},
-                        ...],
-                    "max_tokens": 1024,
-                    "temperature": 0.7,
-                    "top_p": 0.95,
-                    "stream": true,
-                    ...}
-                3）/v1/completions 风格：{
-                    "model": "...",
-                    "prompt": "...." 或 ["...","..."],
-                    "max_tokens": 1024,
-                    "temperature": 0.7,
-                    "top_p": 0.95,
-                    "stream": false,
-                    ...}
-            user_addr：调度器从 TCP / HTTP 层获取的客户端 IP
-            request_id：调度器分配的请求 ID（可保持默认 0，然后调度器后续覆盖）
+        Convert a raw user payload into a complete Request object.
+
+        Supported payload formats:
+            1. Legacy TCP payload: {"model": "...", "user_prompt": "..."}.
+            2. /v1/chat/completions style payload with model, messages, and
+               optional generation parameters.
+            3. /v1/completions style payload with model, prompt, and optional
+               generation parameters.
+
+        Args:
+            url_path: User request URL path, for example
+                http://127.0.0.1:7001/v1/chat/completions.
+            payload: Raw request payload.
+            user_addr: Client IP obtained by scheduler from TCP or HTTP layer.
+            request_id: Scheduler-assigned request id; callers may keep 0 and
+                let the scheduler overwrite it later.
         """
 
         # print("[BuildRequest] Receive user request payload:", payload)
         model = payload.get("model")
         if not model:
-            raise ValueError("Request payload 缺少必需字段 'model'")
+            raise ValueError("Request payload is missing required field 'model'")
 
-        #----------------- 为兼容多种格式，设置user_prompt判断提取 -----------------------
+        # Extract user_prompt while preserving compatibility with multiple request formats.
         user_prompt: Optional[str] = None
         t0 = time.perf_counter()
-        # Type A: 旧版协议，直接基于TCP给user_prompt
+        # Type A: legacy protocol provides user_prompt directly over TCP.
         if "user_prompt" in payload:
             user_prompt = str(payload["user_prompt"])
 
-        # Type B: chat/completions 风格，使用 messages
+        # Type B: chat/completions style uses messages.
         elif "messages" in payload:
             msgs = payload.get("messages") or []
             if not isinstance(msgs, list):
-                raise ValueError("'messages' 字段必须是列表")
+                raise ValueError("'messages' field must be a list")
 
             last_user: Optional[str] = None
             for m in msgs:
@@ -393,13 +309,13 @@ class Request:
                 role = m.get("role", "")
                 content = m.get("content", "")
                 if role == "user":
-                    # 不断覆盖，最终保留“最后一条 user 消息”
+                    # Keep overwriting so the last user message wins.
                     last_user = str(content)
 
             if last_user is not None:
                 user_prompt = last_user
             else:
-                # 没有 user 角色时，退化为把所有消息拼起来
+                # If there is no user role, fall back to joining all messages.
                 pieces: List[str] = []
                 for m in msgs:
                     if not isinstance(m, dict):
@@ -410,20 +326,20 @@ class Request:
                 if pieces:
                     user_prompt = "\n".join(pieces)
 
-        # Type C: completions 风格，使用 prompt
+        # Type C: completions style uses prompt.
         elif "prompt" in payload:
             prompt = payload.get("prompt")
             if isinstance(prompt, str):
                 user_prompt = prompt
             elif isinstance(prompt, list) and prompt:
-                # 这里简单取第一个元素，你后面可以根据需要改成拼接
+                # Use the first element for now; callers can change this to concatenation later if needed.
                 user_prompt = str(prompt[0])
 
         if not user_prompt:
-            raise ValueError("无法从请求中解析出 user_prompt（缺少 user_prompt/messages/prompt）")
+            raise ValueError("Unable to parse user_prompt from request; missing user_prompt/messages/prompt")
 
-        # ---- 通用请求参数：max_tokens / stream / temperature / top_p ----
-        # 兼容没传的情况，给默认值
+        # ---- Common request parameters: max_tokens / stream / temperature / top_p ----
+        # Use defaults when parameters are absent.
         max_tokens = int(payload.get("max_tokens", 1000) or 1000)
         stream = parse_stream_flag(payload.get("stream"))
         rag = parse_stream_flag(payload.get("RAG"))
@@ -437,13 +353,13 @@ class Request:
             top_p = float(payload.get("top_p", 1.0))
         except (TypeError, ValueError):
             top_p = 1.0
-        # 做一下简单夹紧，避免写乱
+        # Clamp simple numeric settings to avoid invalid values.
         if temperature <= 0:
             temperature = 1.0
         if not (0 < top_p <= 1.0):
             top_p = 1.0
 
-        # ---- Request_type，目前统一标记为 "request"，后续可扩展 control/update ----
+        # ---- Request_type defaults to "request" and can later extend to control/update. ----
         request_type = payload.get("Request_type", "request")
 
         print("=============================\n"
@@ -454,9 +370,9 @@ class Request:
         # print("[Request] user_prompt:", user_prompt)
 
         # =========================
-        # ---- 构造 Prompt 对象 ----
+        # ---- Build Prompt object ----
         # =========================
-        # 构造prompt主要是
+        # Prompt construction starts with token estimation.
         tokens = Prompt.extract_prompt_info(model, user_prompt)
         prompt_obj = Prompt(
             model=model,
@@ -470,7 +386,7 @@ class Request:
         )
 
         # ===========================
-        # ----  构造 Service 对象 ----
+        # ---- Build Service object ----
         # ===========================
         slo_mapping = Service.mapping_slo_info(user_addr)
         service_obj = Service(
@@ -489,13 +405,13 @@ class Request:
             Endpoint_type="",
         )
 
-        # 确认会话类型
+        # Determine endpoint type.
         if "messages" in payload:
             service_obj.Endpoint_type = "chat/completions"
         else:
             service_obj.Endpoint_type = "completions"
 
-        # 知识检索：填充 Knowledge_List / Knowledge_length
+        # Knowledge retrieval fills Knowledge_List and Knowledge_length.
         if (
                 service_obj.Enable_know_injection
                 and embedder is not None
@@ -514,11 +430,11 @@ class Request:
                 service_obj.Knowledge_length = total_len
             except Exception as e:
                 print(f"[Service] knowledge_retriever failed: {e}")
-                # 出错时维持默认值
+                # Keep defaults on retrieval errors.
                 service_obj.Knowledge_List = []
                 service_obj.Knowledge_length = 0
         else:
-            # 未开启知识注入或未初始化知识库，保持默认值
+            # Keep defaults when knowledge injection is disabled or the knowledge table is uninitialized.
             if not service_obj.Enable_know_injection:
                 print("[Service] Ban knowledge task, skip retriever!")
             elif knowledge_table is None:
@@ -528,12 +444,12 @@ class Request:
 
 
         # ==========================
-        # ---- 8) 构造 Task 对象 ----
+        # ---- Build Task object ----
         # ==========================
         task_obj = Task(
             User_addr=user_addr,
             KDN_server_addr = "",
-            default_know_addr = "",  # 这里暂时用 KDN 作为默认知识服务器，可按需调整
+            default_know_addr = "",  # Reserved for a default knowledge server; adjust when needed.
             P_proxy_id= "",
             P_proxy_addr = "",
             P_proxy_port = 0,
@@ -545,23 +461,22 @@ class Request:
             User_url_path=url_path
         )
 
-        # 若 scheduler 提供了策略和 proxy 列表，则在 build_request 内做选择
+        # If scheduler provides a strategy and proxy list, select targets inside build_request.
         try:
             if strategy and hasattr(strategy, "select"):
-                # 统一策略接口：要求策略提供 select(proxies, request_obj_like) 或 select(proxies, payload)
-                # 这里为了避免 build_request 依赖 scheduler 的 Request 类型，我们先把最小上下文传给策略：
+                # Unified strategy API: strategy should provide select(proxies, request_obj_like) or select(proxies, payload).
+                # Pass minimal context to avoid making build_request depend on scheduler Request types.
                 request_ctx = {
                     "request_id": request_id,
                     "knowledge_list": list(service_obj.Knowledge_List or []),
                     "knowledge_length": int(service_obj.Knowledge_length or 0),
                     "endpoint_type": service_obj.Endpoint_type,
-                    # Injection_type 当前主要用于调试；正式策略不应依赖它做硬分支。
+                    # Injection_type is mainly for debugging; production strategies should not hard-branch on it.
                     "injection_type": service_obj.Injection_type,
                     "rag_enabled": bool(service_obj.Enable_know_injection),
                     "prompt_token_length": int(prompt_obj.token_length or 0),
                     "user_prompt": user_prompt,
-                    # 下面两个上下文允许策略复用 scheduler 已维护的数据，
-                    # 避免重复做 embedding 或在线拼状态。
+                    # These contexts let strategies reuse scheduler-maintained data and avoid repeated embedding or online state assembly.
                     "knowledge_table": knowledge_table,
                     "kdn_knowledge_index": kdn_knowledge_index or {},
                 }
@@ -575,7 +490,7 @@ class Request:
                 )
 
                 if chosen_kdn:
-                    # 推荐统一成 http base_url，后面 KDN client 直接用
+                    # Prefer a normalized HTTP base URL for direct KDN client use later.
                     task_obj.KDN_server_addr = f"{chosen_kdn['host']}:{int(chosen_kdn['port'])}"
 
                 if chosen_proxy:
@@ -588,7 +503,7 @@ class Request:
 
 
         # =========================
-        # ---- 拼装最终 Request ----
+        # ---- Assemble final Request ----
         # =========================
         request_obj = Request(
             Request_type=request_type,
@@ -606,17 +521,7 @@ class Request:
 
 
     def to_payload(self) -> Dict[str, Any]:
-        """
-            将Request对象序列化为可以通过HTTP发送的payload。
-                默认使用 dataclasses 保留完整结构：
-                  {
-                    "Request_ID": ...,
-                    "Request_type": ...,
-                    "Prompt": { ... },
-                    "Service": { ... },
-                    "Task": { ... }
-                  }
-        """
+        """Serialize the Request into an HTTP-sendable payload preserving dataclass structure."""
         return asdict(self)
 
 
