@@ -1,5 +1,5 @@
-"""Coordinates proxy queue workers, knowledge preparation, and instance forwarding."""
 # proxy/queue/manager.py
+"""Coordinates proxy prepare/ready queues, knowledge preparation, and forwarding to instances."""
 from __future__ import annotations
 
 import os
@@ -30,7 +30,13 @@ def _now_ms() -> int:
 
 
 class QueueManager:
-    """Manages per-instance prepare and ready queues for proxy forwarding, including timing and injection bookkeeping."""
+    """
+    Step 2: per-instance prepare/ready queues and workers.
+
+    Note:
+    - Step 2 only implements the text injection path;
+    - the KVCache injection path (Injection_type="kvcache") is reserved for Step 3.
+    """
 
     _PREDICT_HEADER_OVERHEAD_TOKENS = 36
     _KNOW_PREPARE_FIXED_OVERHEAD_MS = 3.0
@@ -54,7 +60,7 @@ class QueueManager:
         self._workers_started = False
         self._worker_tasks: Dict[str, asyncio.Task] = {}
         self._http_timeout_s = 60.0
-        # Maintains the existing proxy/scheduler experiment flow.
+        # Throttle per-instance ready worker fetching (serialized with a minimum interval)
         self._ready_fetch_locks: Dict[str, asyncio.Lock] = {}
         self._ready_last_fetch_ts_s: Dict[str, float] = {}
         # reservation shared state: slot layer + shared prefill layer
@@ -138,7 +144,10 @@ class QueueManager:
 
     @staticmethod
     def _estimate_request_length(task: ProxyTask) -> int:
-        """Manages per-instance prepare and ready queues for proxy forwarding, including timing and injection bookkeeping."""
+        """
+        Length accounting used for TTFT prediction:
+          total_length = prompt_token_length + knowledge_length + header_overhead(36)
+        """
         prompt = getattr(task.req_obj, "Prompt", None)
         service = getattr(task.req_obj, "Service", None)
 
@@ -148,7 +157,10 @@ class QueueManager:
         return max(1, total_len)
 
     async def _estimate_know_prepare_ms(self, task: ProxyTask) -> float:
-        """Manages per-instance prepare and ready queues for proxy forwarding, including timing and injection bookkeeping."""
+        """
+        Estimate knowledge preparation time:
+          know_prepare_time = rtt(kdn->instance) + fixed_overhead(3ms)
+        """
         kdn_addr = str(task.kdn_addr or "").strip()
         if not kdn_addr:
             return 0.0
@@ -700,12 +712,16 @@ class QueueManager:
             await asyncio.sleep(0.005)
 
     def ensure_workers_started(self, instance_ids: Optional[list[str]] = None) -> None:
-        """Manages per-instance prepare and ready queues for proxy forwarding, including timing and injection bookkeeping."""
+        """
+        Start workers, only once.
+        - Step 2 simplification: call this once after proxy startup; dynamic instance add/remove is not required.
+        - Later, workers can be started dynamically when instances register.
+        """
         if self._workers_started:
             return
         self._workers_started = True
 
-        # Maintains the existing proxy/scheduler experiment flow.
+        # Step 2: does not strictly depend on instance_ids; workers can also be lazily started on the first enqueue.
         if instance_ids:
             for iid in instance_ids:
                 self._start_workers_for_instance(iid)
@@ -734,8 +750,10 @@ class QueueManager:
         return lock
 
     async def enqueue_prepare(self, task: ProxyTask) -> None:
-        """Manages per-instance prepare and ready queues for proxy forwarding, including timing and injection bookkeeping."""
-        # Maintains the existing proxy/scheduler experiment flow.
+        """
+        Handler call: put the task into the prepare queue and return immediately; the handler no longer performs injection.
+        """
+        # Lazily start workers for this instance
         self._start_workers_for_instance(task.instance_id)
         self._ensure_instance_reservation_state(task.instance_id)
         prepare_seq = int(self._instance_next_prepare_seq.get(task.instance_id, 1) or 1)
@@ -743,7 +761,7 @@ class QueueManager:
         task.prepare_seq = prepare_seq
         task.trace["prepare_seq"] = int(prepare_seq)
 
-        # Timing data used by experiment analysis.
+        # Predicted total processing time = wait time + processing time (bs is currently fixed at 1)
         try:
             svc = getattr(task.req_obj, "Service", None)
             injection_mode = str(getattr(svc, "Injection_type", "text") or "text").strip().lower()
@@ -783,7 +801,9 @@ class QueueManager:
         )
 
     async def iter_response(self, task: ProxyTask) -> AsyncGenerator[bytes, None]:
-        """Manages per-instance prepare and ready queues for proxy forwarding, including timing and injection bookkeeping."""
+        """
+        Handler call: iterate bytes from task.response_queue until the None terminator is received.
+        """
         while True:
             chunk = await task.response_queue.get()
             if chunk is None:
@@ -791,7 +811,10 @@ class QueueManager:
             yield chunk
 
     async def _run_prepare_task(self, instance_id: str, task: ProxyTask) -> None:
-        """Manages per-instance prepare and ready queues for proxy forwarding, including timing and injection bookkeeping."""
+        """
+        Prepare flow for a single task.
+        Tasks on the same instance may run concurrently, bounded by prepare_sem.
+        """
         q = self._qmap.get(instance_id)
 
         async with q.prepare_sem:
@@ -1045,10 +1068,13 @@ class QueueManager:
                 q.active_prepare = max(0, q.active_prepare - 1)
 
     async def _ready_worker_loop(self, instance_id: str, worker_idx: int) -> None:
-        """Manages per-instance prepare and ready queues for proxy forwarding, including timing and injection bookkeeping."""
+        """
+        ready worker: performs the actual forward to the instance and writes results into task.response_queue.
+        Multiple workers share the same ready_q, forming a per-instance ready concurrency window.
+        """
         q = self._qmap.get(instance_id)
         while True:
-            # Keep logs and state updates bounded for experiments.
+            # Serialized fetch: avoids obvious reordering caused by multiple ready workers fetching at the same time.
             async with self._get_ready_fetch_lock(instance_id):
                 now_s = time.time()
                 last_fetch_s = self._ready_last_fetch_ts_s.get(instance_id, 0.0)
@@ -1074,7 +1100,7 @@ class QueueManager:
                     q.ready_q.qsize(),
                 )
 
-                # Maintains the existing proxy/scheduler experiment flow.
+                # use_chunked: chat -> True, completions -> False (decided by task.url_path)
                 use_chunked = True if task.url_path.endswith("/chat/completions") else False
                 task.trace["forward_wait_end_ms"] = _now_ms()
                 task.trace["forward_start_ms"] = _now_ms()
@@ -1091,7 +1117,7 @@ class QueueManager:
                             task.trace["first_token_ms"] = _now_ms()
                             task.trace["ttft_observable"] = 1 if use_chunked else 0
                             if use_chunked:
-                                # Timing data used by experiment analysis.
+                                # Measured latency breakdown, starting from the proxy enqueue timestamp:
                                 # actual_total = proxy_enqueue -> first_token
                                 # actual_know_prepare = proxy_enqueue -> ready_enqueue
                                 # actual_ready_queue  = ready_enqueue -> forward_start
@@ -1196,7 +1222,7 @@ class QueueManager:
                 task.trace["forward_end_ms"] = _now_ms()
                 await self._mark_task_decode_end(task, instance_id)
 
-                # Maintains the existing proxy/scheduler experiment flow.
+                # Terminator
                 await task.response_queue.put(None)
                 logger.info(
                     "[Ready] worker=%s done rid=%s active_ready=%s",
@@ -1215,13 +1241,17 @@ class QueueManager:
                 task.trace["forward_end_ms"] = _now_ms()
                 await self._mark_task_decode_end(task, instance_id)
                 logger.exception("[Ready] worker=%s failed rid=%s", worker_idx, task.request_id)
-                # Maintains the existing proxy/scheduler experiment flow.
+                # Notify the handler to finish even on error; otherwise the upstream side will hang.
                 await task.response_queue.put(None)
             finally:
                 q.active_ready = max(0, q.active_ready - 1)
 
     async def _prepare_dispatch_loop(self, instance_id: str) -> None:
-        """Manages per-instance prepare and ready queues for proxy forwarding, including timing and injection bookkeeping."""
+        """
+        Take tasks from prepare_q without executing them serially.
+        Create a separate task for each item; _run_prepare_task performs the actual processing.
+        The concurrency limit is controlled by q.prepare_sem.
+        """
         q = self._qmap.get(instance_id)
         while True:
             task = await q.prepare_q.get()
@@ -1232,9 +1262,11 @@ class QueueManager:
             self,
             task: ProxyTask,
     ) -> Dict[str, Any]:
-        """Manages per-instance prepare and ready queues for proxy forwarding, including timing and injection bookkeeping."""
+        """
+        Call the Instance control plane to request KV injection for kv_ready_kids.
+        """
         instance_cp_host = task.instance_host
-        instance_cp_port = 9002  # Maintains the existing proxy/scheduler experiment flow.
+        instance_cp_port = 9002  # Fixed for the first version; later this can move to config/env
 
         url = f"http://{instance_cp_host}:{instance_cp_port}/v1/kv/inject_ready"
         payload = {

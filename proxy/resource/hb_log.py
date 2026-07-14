@@ -1,7 +1,6 @@
 # proxy/resource/hb_log.py
+"""Aggregates proxy heartbeat outcomes into compact periodic logs."""
 from __future__ import annotations
-
-"""Aggregates heartbeat and refresh outcomes into compact periodic status logs."""
 
 import asyncio
 import time
@@ -18,7 +17,12 @@ class HBWindow:
 
 
 class HeartbeatReporter:
-    """Aggregates heartbeat and refresh outcomes into compact periodic status logs."""
+    """
+    Proxy heartbeat log aggregator (output layer):
+      - record() only counts and does not change business logic
+      - report_loop() outputs one summary every interval_s
+    Thread/coroutine safe: protects the window with asyncio.Lock.
+    """
 
     def __init__(self, interval_s: float = 30.0):
         self.interval_s = float(interval_s)
@@ -34,7 +38,7 @@ class HeartbeatReporter:
             else:
                 self._win.fail += 1
                 if err:
-                    self._win.last_err = err[:200]  # Maintains the existing proxy/scheduler experiment flow.
+                    self._win.last_err = err[:200]  # Prevent overly long error messages from spamming logs
 
     async def snapshot_and_reset(self) -> tuple[float, HBWindow]:
         async with self._lock:
@@ -52,16 +56,18 @@ async def hb_report_loop(
     proxy_id: str,
     stop_event: asyncio.Event,
 ) -> None:
-    """Aggregates heartbeat and refresh outcomes into compact periodic status logs."""
+    """
+    Periodically output summaries. Note: this is the output layer and does not affect business behavior.
+    """
     while not stop_event.is_set():
         await asyncio.sleep(reporter.interval_s)
         dur, w = await reporter.snapshot_and_reset()
 
-        # Heartbeat-related bookkeeping.
+        # If no heartbeat call occurred in the window, do not output anything to avoid empty reports
         if w.total == 0:
             continue
 
-        # Maintains the existing proxy/scheduler experiment flow.
+        # Do not spam logs in normal cases; output warnings only when failures occur.
         if w.fail <= 0:
             continue
 

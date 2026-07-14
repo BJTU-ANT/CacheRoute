@@ -1,6 +1,21 @@
 # scheduler/resource/control_plane.py
 # -*- coding: utf-8 -*-
-"""Implements the Scheduler control-plane API for proxy and KDN registration, heartbeat, and resource-pool queries."""
+"""
+Scheduler control plane:
+
+Responsibilities:
+- Provide external proxy register / heartbeat / unregister / query APIs
+- Write state into ProxyPool (the resource pool)
+- Contains no scheduling strategy and is not coupled to the 7001 data plane
+
+Runtime model:
+- Current architecture: when the 7001 scheduler starts, lifespan also starts an extra uvicorn Server listening on 7002
+- The control_plane FastAPI app runs in the same process, so it naturally shares memory (the same ProxyPool instance)
+
+Note:
+- With multiple workers, each process would have its own ProxyPool and port 7002 would conflict.
+  Therefore this design assumes a single-process, single-worker scheduler.
+"""
 from __future__ import annotations
 
 import os
@@ -30,11 +45,19 @@ CONTROL_PLANE_TTL_S = int(os.environ.get("SCHEDULER_PROXY_TTL_S", config.CONTROL
 HEARTBEAT_INTERVAL_S = int(os.environ.get("SCHEDULER_PROXY_HEARTBEAT_S", config.HEARTBEAT_INTERVAL_S))
 
 # ----------------------------
-# Maintains the existing proxy/scheduler experiment flow.
+# Pydantic request/response models
 # ----------------------------
 
 class ProxyRegisterRequest(BaseModel):
-    """Implements the Scheduler control-plane API for proxy and KDN registration, heartbeat, and resource-pool queries."""
+    """
+    Proxy registration request.
+
+    Notes:
+    - proxy_id is optional; the control plane generates one if it is omitted
+    - host/port: the proxy address reachable by the Scheduler
+    - endpoints: forwarding endpoints supported by the proxy (OpenAI-style path fragments)
+    - tags/weight/meta: stored now so later scheduling strategies can use them
+    """
     proxy_id: Optional[str] = Field(default=None)
     host: str
     port: int = Field(..., ge=1, le=65535)
@@ -48,17 +71,25 @@ class ProxyRegisterRequest(BaseModel):
     kv_cache_update_policy: str = Field(default="lru")
 
 class ProxyRegisterResponse(BaseModel):
-    """Implements the Scheduler control-plane API for proxy and KDN registration, heartbeat, and resource-pool queries."""
+    """
+    Registration response:
+    - proxy_id: unique ID confirmed by the control plane
+    - heartbeat_interval_s: suggested heartbeat interval
+    - ttl_s: inactive threshold
+    """
     proxy_id: str
     heartbeat_interval_s: int
     ttl_s: int
 
 
 class ProxyHeartbeatRequest(BaseModel):
-    """Implements the Scheduler control-plane API for proxy and KDN registration, heartbeat, and resource-pool queries."""
+    """
+    Heartbeat request: currently only proxy_id is required
+    Future extension: add load fields here to report inflight/gpu_util and similar metrics.
+    """
     proxy_id: str
 
-    # Load-related state used by scheduling decisions.
+    # Future load reporting extension; enable it when ready
     inflight: Optional[int] = None
     qps_1m: Optional[float] = None
     gpu_util: Optional[float] = None
@@ -70,7 +101,10 @@ class ProxyUnregisterRequest(BaseModel):
 
 
 class ProxyInfoResponse(BaseModel):
-    """Implements the Scheduler control-plane API for proxy and KDN registration, heartbeat, and resource-pool queries."""
+    """
+    Proxy information returned by external queries.
+    The Pydantic model keeps the API stable and avoids exposing internal dataclass objects directly.
+    """
     proxy_id: str
     host: str
     port: int
@@ -137,15 +171,15 @@ class KDNInfoResponse(BaseModel):
     is_alive: bool
 
 # ----------------------------
-# Maintains the existing proxy/scheduler experiment flow.
+# Externally callable pool methods
 # ----------------------------
 def set_pool(pool: ProxyPool) -> None:
-    """Implements the Scheduler control-plane API for proxy and KDN registration, heartbeat, and resource-pool queries."""
+    """The scheduler (7001) injects the shared ProxyPool instance at startup."""
     global _pool
     _pool = pool
 
 def get_pool() -> ProxyPool:
-    """Implements the Scheduler control-plane API for proxy and KDN registration, heartbeat, and resource-pool queries."""
+    """Both the control plane and data plane use this to access the same pool."""
     if _pool is None:
         raise RuntimeError("ProxyPool is not initialized. Call set_pool() at scheduler startup.")
     return _pool
@@ -160,12 +194,12 @@ def get_kdn_pool() -> KDNPool:
     return _kdn_pool
 
 def set_on_kdn_register(cb: Callable[[], Coroutine[Any, Any, None]]) -> None:
-    """Implements the Scheduler control-plane API for proxy and KDN registration, heartbeat, and resource-pool queries."""
+    """Used to trigger KDN refresh updates."""
     global _on_kdn_register
     _on_kdn_register = cb
 
 # ----------------------------
-# Maintains the existing proxy/scheduler experiment flow.
+# FastAPI app + resource pool instances
 # ----------------------------
 
 
@@ -177,7 +211,7 @@ _hb_agg = HeartbeatLogAggregator()
 @control_plane.on_event("startup")
 async def _hb_report_startup():
     async def _get_proxies() -> List[ProxyInfo]:
-        # Maintains the existing proxy/scheduler experiment flow.
+        # Read the current in-pool state, including load/last_seen
         return await get_pool().list(include_dead=True)
 
     async def _get_kdns() -> List[KDNInfo]:
@@ -198,14 +232,14 @@ async def _hb_report_shutdown():
     t = getattr(control_plane.state, "_hb_report_task", None)  # type: ignore
     if t is not None:
         t.cancel()
-# Strategy-related configuration and state.
+# Single-process shared resource pool: control-plane APIs write to it, and future scheduling strategies read from the same pool
 # _pool = ProxyPool(ttl_s=CONTROL_PLANE_TTL_S)
 
 # -------------------
-# Maintains the existing proxy/scheduler experiment flow.
+# --- Proxy-side methods ---
 # -------------------
 def _to_response(info: ProxyInfo) -> ProxyInfoResponse:
-    """Implements the Scheduler control-plane API for proxy and KDN registration, heartbeat, and resource-pool queries."""
+    """Convert internal dataclasses to external response models."""
     pool = get_pool()
     return ProxyInfoResponse(
         proxy_id=info.proxy_id,
@@ -234,13 +268,19 @@ def _to_response(info: ProxyInfo) -> ProxyInfoResponse:
 
 @control_plane.get("/healthz")
 async def healthz():
-    """Implements the Scheduler control-plane API for proxy and KDN registration, heartbeat, and resource-pool queries."""
+    """
+    Health check: verifies that 7002 started successfully and routes are reachable.
+    """
     return {"ok": True}
 
 
 @control_plane.post("/v1/proxy/register", response_model=ProxyRegisterResponse)
 async def proxy_register(req: ProxyRegisterRequest):
-    """Implements the Scheduler control-plane API for proxy and KDN registration, heartbeat, and resource-pool queries."""
+    """
+    Register/update a proxy idempotently.
+    - If proxy_id is omitted, generate a new one
+    - If proxy_id already exists, update host/port/endpoints and refresh last_seen
+    """
     proxy_id = req.proxy_id or f"pxy_{uuid.uuid4().hex[:12]}"
     inst_cnt = int(req.instance_count or 0)
     kv_gb = float(req.kv_mem_per_instance_gb or 0.0)
@@ -258,9 +298,9 @@ async def proxy_register(req: ProxyRegisterRequest):
                        instance_count=int(req.instance_count or 0),
                        kv_mem_per_instance_gb=float(req.kv_mem_per_instance_gb or 0.0),
                        kv_cache_pool_gb=float(inst_cnt) * float(kv_gb),
-                       ),  # Heartbeat-related bookkeeping.
+                       ),  # Registration starts with an empty load; heartbeats update it later
     )
-    # Registration-related bookkeeping.
+    # Registration is essentially an upsert
     pool = get_pool()
     await pool.upsert(info)
 
@@ -278,11 +318,15 @@ async def proxy_register(req: ProxyRegisterRequest):
 
 @control_plane.post("/v1/proxy/heartbeat")
 async def proxy_heartbeat(req: ProxyHeartbeatRequest):
-    """Implements the Scheduler control-plane API for proxy and KDN registration, heartbeat, and resource-pool queries."""
+    """
+    Heartbeat:
+    - Refresh last_seen_at
+    - If the request carries load fields, update load to keep the API extensible
+    """
     load: Optional[ProxyLoad] = None
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Update load if any field is provided; omitted fields are left unchanged, with default 0
     if req.inflight is not None or req.qps_1m is not None or req.gpu_util is not None:
-        # Maintains the existing proxy/scheduler experiment flow.
+        # Only update dynamic fields
         load = ProxyLoad(
             inflight=int(req.inflight) if req.inflight is not None else 0,
             qps_1m=float(req.qps_1m) if req.qps_1m is not None else 0.0,
@@ -292,12 +336,12 @@ async def proxy_heartbeat(req: ProxyHeartbeatRequest):
     pool = get_pool()
     ok = await pool.heartbeat(req.proxy_id, load=load, meta_patch=req.meta_patch)
     if not ok:
-        # Maintains the existing proxy/scheduler experiment flow.
+        # Failure: output immediately and count it as an error
         await _hb_agg.record_proxy(req.proxy_id, ok=False)
         logger.warning("proxy.heartbeat rejected: proxy_id not registered, proxy_id=%s", req.proxy_id)
         raise HTTPException(status_code=404, detail="proxy_id not registered")
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Success: aggregate only; do not spam logger.info per heartbeat
     await _hb_agg.record_proxy(
         req.proxy_id,
         ok=True,
@@ -310,7 +354,7 @@ async def proxy_heartbeat(req: ProxyHeartbeatRequest):
 
 @control_plane.post("/v1/proxy/unregister")
 async def proxy_unregister(req: ProxyUnregisterRequest):
-    """Implements the Scheduler control-plane API for proxy and KDN registration, heartbeat, and resource-pool queries."""
+    """Unregister: remove the proxy from the pool."""
     pool = get_pool()
     await pool.remove(req.proxy_id)
     logger.info("proxy.unregister proxy_id=%s", req.proxy_id)
@@ -319,13 +363,17 @@ async def proxy_unregister(req: ProxyUnregisterRequest):
 
 @control_plane.get("/v1/proxy/list", response_model=List[ProxyInfoResponse])
 async def proxy_list(include_dead: bool = False):
-    """Implements the Scheduler control-plane API for proxy and KDN registration, heartbeat, and resource-pool queries."""
+    """
+    Query the proxy list:
+    - include_dead=False：return only live proxies by default
+    - include_dead=True：return all proxies, including inactive ones
+    """
     pool = get_pool()
     infos = await pool.list(include_dead=include_dead)
     return [_to_response(x) for x in infos]
 
 # -------------------
-# Knowledge/KDN-related state used by scheduling and injection.
+# --- KDN-side methods ---
 # -------------------
 def _kdn_to_response(info: KDNInfo) -> KDNInfoResponse:
     pool = get_kdn_pool()

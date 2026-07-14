@@ -30,7 +30,22 @@ def _format_kdn_addr(host: str, port: int) -> str:
 
 
 async def refresh_kdn_knowledge_index(app) -> Dict[str, Dict[str, Dict[str, int]]]:
-    """Synchronizes KDN metadata into Scheduler-side knowledge indexes used by scheduling strategies."""
+    """
+    Build a lightweight per-KDN knowledge metadata index for the scheduler.
+
+    Return structure:
+      {
+        <kdn_id>: {
+          <kid>: {"length": 123, "kv_ready": 1},
+          ...
+        },
+        "kdn://host:port": {...}  # compatible with address-based queries
+      }
+
+    Notes:
+    - Only fetch metadata here, not embeddings, to avoid mixing knowledge-table construction with KDN selection logic.
+    - Implement sequentially first to keep the change minimal; if the number of KDNs grows later, this can be parallelized.
+    """
     pool = getattr(app.state, "kdn_pool", None)
     if pool is None:
         app.state.kdn_knowledge_index = {}
@@ -212,10 +227,10 @@ async def kdn_refresh_once(app) -> dict:
                 unit = KnowledgeUnit(
                     embedding=list(emb),
                     length=int(it.get("length") or 0),
-                    # Knowledge/KDN-related state used by scheduling and injection.
-                    # Knowledge/KDN-related state used by scheduling and injection.
+                    # The current KnowledgeTable keeps the global view of which KDNs are available;
+                    # per-KDN coverage details are maintained by kdn_knowledge_index for cacheroute.
                     avail_kdn_servers=list(alive_addrs),
-                    # Maintains the existing proxy/scheduler experiment flow.
+                    # Keep the full content here so the scheduler side can estimate token length with the target model tokenizer.
                     text_abstract=str(it.get("content") or ""),
                     full_content=str(it.get("content") or ""),
                     kv_ready=int(it.get("kv_ready") or 0),
@@ -275,10 +290,10 @@ async def kdn_auto_refresh_loop(app, stop_event: asyncio.Event):
             try:
                 await _hb_agg.record_kdn_refresh(r)
             except Exception:
-                # Maintains the existing proxy/scheduler experiment flow.
+                # Output-layer failures must not affect business logic
                 logger.debug("[Scheduler] record_kdn_refresh failed", exc_info=True)
 
-            # Maintains the existing proxy/scheduler experiment flow.
+            # No more log spam: downgrade to debug
             if r.get("ok"):
                 logger.debug("[Scheduler] KDN auto-refresh OK: entries=%s, added=%s, updated=%s, removed=%s",
                              r.get("entries"), r.get("added"), r.get("updated"), r.get("removed"))

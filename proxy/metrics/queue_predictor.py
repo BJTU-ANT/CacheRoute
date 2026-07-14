@@ -55,7 +55,12 @@ def _interp_by_anchors_ms(length: int, anchors: list[tuple[int, float]]) -> floa
     return 0.0
 
 def _short_length_calibrated_seconds(length: int, bs: int) -> float:
-    """Predicts queue-side TTFT and compute-time components for proxy scheduling experiments."""
+    """
+    Minimum latency curve for short requests (empirical):
+    - Addresses quartic-model underestimation/clipping in the short-length range.
+    - Returns the recommended calibrated total latency in seconds for that length.
+    - Currently only enabled for the bs=1 experiment curve; bs>1 is not enabled yet.
+    """
     if bs != 1:
         return 0.0
 
@@ -162,15 +167,15 @@ def queue_predictor(
         + float(c["c"]) * batch_size
         + float(c["d"])
     )
-    # Keep logs and state updates bounded for experiments.
+    # Clip to zero before compensation, avoiding short requests being offset to too-small values when base_pred < 0.
     pred = max(0.0, base_pred)
     calibrated_pred = _short_length_calibrated_seconds(length=int(length), bs=batch_size)
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # For short lengths (<=115), use the calibrated curve directly, allowing the quartic estimate to be adjusted down or up.
     if batch_size == 1 and int(length) <= 115 and calibrated_pred > 0:
         return calibrated_pred
 
-    # Strategy-related configuration and state.
+    # Conservative policy for medium-short lengths: only apply a lower bound to avoid underestimation.
     return max(pred, calibrated_pred)
 
 

@@ -1,5 +1,7 @@
 # proxy/queue/knowledge.py
-"""Provides KDN knowledge fetch, classification, and request-body injection helpers used by the proxy queue."""
+"""
+Knowledge injection helpers maintained by the proxy and called by the prepare queue.
+"""
 from __future__ import annotations
 
 import json
@@ -21,7 +23,10 @@ def format_retrieved_context(items: List[Dict[str, Any]]) -> str:
 
 
 async def fetch_knowledge_from_kdn(kdn_base_url: str, knowledge_ids: List[str]) -> Tuple[List[Dict[str, Any]], List[str]]:
-    """Provides KDN knowledge fetch, classification, and request-body injection helpers used by the proxy queue."""
+    """
+    Request knowledge from the KDN (non-streaming).
+    Returns: (items, miss).
+    """
     if not knowledge_ids:
         return [], []
 
@@ -57,7 +62,11 @@ async def fetch_knowledge_from_kdn(kdn_base_url: str, knowledge_ids: List[str]) 
 
 
 def inject_rag_into_instance_body(instance_body: Dict[str, Any], endpoint_type: str, retrieved_context: str, injection_type: str = "text") -> Dict[str, Any]:
-    """Provides KDN knowledge fetch, classification, and request-body injection helpers used by the proxy queue."""
+    """
+    Inject retrieved_context into instance_body (OpenAI style) and return a new dict.
+    - text: keep the existing instruction wrapper
+    - kvcache: use a plain-text system prefix to stay close to the KV prebuild format
+    """
     if not retrieved_context:
         return instance_body
 
@@ -68,10 +77,10 @@ def inject_rag_into_instance_body(instance_body: Dict[str, Any], endpoint_type: 
         msgs = list(new_body.get("messages") or [])
 
         if injection_type == "kvcache":
-            # Knowledge/KDN-related state used by scheduling and injection.
+            # KVCache mode: put plain knowledge text directly in the system message without extra wrapping
             msgs.insert(0, {"role": "system", "content": retrieved_context})
         else:
-            # Maintains the existing proxy/scheduler experiment flow.
+            # text mode: keep the existing template
             system_prompt = (
                 "You are a helpful assistant.\n"
                 "Use the following retrieved context to answer the user. "
@@ -87,8 +96,8 @@ def inject_rag_into_instance_body(instance_body: Dict[str, Any], endpoint_type: 
     prompt = str(new_body.get("prompt") or "")
 
     if injection_type == "kvcache":
-        # Maintains the existing proxy/scheduler experiment flow.
-        # Knowledge/KDN-related state used by scheduling and injection.
+        # completions has no role structure, so approximate as closely as possible:
+        # put the plain knowledge text directly at the beginning of the prompt
         new_body["prompt"] = retrieved_context + "\n" + prompt
     else:
         rag_prefix = (
@@ -108,16 +117,22 @@ def classify_kdn_items(
     items: List[Dict[str, Any]],
     miss: List[str],
 ) -> Dict[str, Any]:
-    """Provides KDN knowledge fetch, classification, and request-body injection helpers used by the proxy queue."""
+    """
+    Classify knowledge chunks based on the KDN response:
+      - kv_ready_items: KV already exists and can be used for subsequent KV injection
+      - text_only_items: text exists but no ready KV is available
+      - miss_ids: kids missed by the KDN
+    Keep the input order stable.
+    """
     miss_set = {str(x) for x in (miss or [])}
 
-    # Knowledge/KDN-related state used by scheduling and injection.
+    # KDN returned items are not guaranteed to be in the requested order, so build an index first
     item_map: Dict[str, Dict[str, Any]] = {}
     for it in items or []:
         kid = str(it.get("knowledge_id") or it.get("kid") or it.get("id") or "")
         rel_path = it.get("rel_path")
         if not kid and rel_path:
-            # Maintains the existing proxy/scheduler experiment flow.
+            # Fallback: infer kid from rel_path (for example, knowledge/a.txt -> a)
             try:
                 kid = str(rel_path).split("/")[-1].split(".")[0]
             except Exception:
@@ -136,7 +151,7 @@ def classify_kdn_items(
 
         it = item_map.get(kid)
         if not it:
-            # Knowledge/KDN-related state used by scheduling and injection.
+            # If the KDN did not explicitly include it in miss but also returned no item, treat it as a miss
             miss_ids.append(kid)
             continue
 
@@ -156,6 +171,9 @@ def build_ordered_context(
     kv_ready_items: List[Dict[str, Any]],
     text_only_items: List[Dict[str, Any]],
 ) -> str:
-    """Provides KDN knowledge fetch, classification, and request-body injection helpers used by the proxy queue."""
+    """
+    Build the injection text:
+    Place kv_ready text first, then text_only text.
+    """
     ordered = list(kv_ready_items) + list(text_only_items)
     return format_retrieved_context(ordered)

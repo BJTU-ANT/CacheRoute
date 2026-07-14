@@ -1,7 +1,6 @@
 # scheduler/resource/kdn_pool.py
+"""Maintains Scheduler-side KDN resource state and load information."""
 from __future__ import annotations
-
-"""Maintains the in-memory Scheduler view of registered KDN resources and their dynamic load state."""
 
 import time
 import asyncio
@@ -11,10 +10,10 @@ from typing import Any, Dict, List, Optional
 
 @dataclass
 class KDNLoad:
-    # Load-related state used by scheduling decisions.
+    # Basic load
     items: int = 0
     qps_1m: float = 0.0
-    # Load-related state used by scheduling decisions.
+    # v0.1.7: KDN network/injection-side load used for CacheRoute overload checks
     pending_transfers: int = 0
     active_transfers: int = 0
     network_queue_ms_ema: float = 0.0

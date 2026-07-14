@@ -1,6 +1,17 @@
 # scheduler/resource/proxy_pool.py
 # -*- coding: utf-8 -*-
-"""Maintains the in-memory Scheduler view of registered proxy resources and their dynamic load state."""
+"""
+Proxy resource pool: the state-model layer of the Scheduler control plane.
+
+Design goals:
+- control_plane.py only handles HTTP entry, parameter validation, and writing state into the pool
+- Scheduling strategies (future CacheRoute policies) only read this pool to choose proxies
+- Decouple the state model from the HTTP/protocol layer to prevent later strategy changes from affecting everything
+
+The current implementation is in-memory (single process, single worker), which is enough for validation.
+If distributed mode is needed later (multiple scheduler instances sharing proxy state), this file can be replaced with
+Redis/etcd/SQL or similar storage without changing the control_plane API or scheduling code.
+"""
 
 from __future__ import annotations
 
@@ -12,23 +23,42 @@ from typing import Any, Dict, List, Optional
 
 @dataclass
 class ProxyLoad:
-    """Maintains the in-memory Scheduler view of registered proxy resources and their dynamic load state."""
-    # ---- static capability (register-time) ----
-    max_capacity: int = 0      # Registration-related bookkeeping.
+    """
+    Proxy load-information structure, extensible later.
 
-    instance_count: int = 0     # Registration-related bookkeeping.
-    kv_mem_per_instance_gb: float = 0.0  # Registration-related bookkeeping.
-    kv_cache_pool_gb: float = 0.0  # Maintains the existing proxy/scheduler experiment flow.
+    Notes:
+    - Avoid inventing too many load fields prematurely; start with the most general placeholder fields.
+    - If proxies can periodically report statistics later (such as inflight/qps/gpu_util/kv_hit),
+      only add fields here and update them in the control_plane heartbeat.
+    """
+    # ---- static capability (register-time) ----
+    max_capacity: int = 0      # maximum processing capacity, reported at registration and unchanged during the lifecycle
+
+    instance_count: int = 0     # number of instances managed by the proxy, reported at registration
+    kv_mem_per_instance_gb: float = 0.0  # per-instance KV memory size in GB, reported at registration
+    kv_cache_pool_gb: float = 0.0  # instance_count * kv_mem_per_instance_gb, computed by the scheduler
 
     # ---- dynamic load (heartbeat) ----
-    inflight: int = 0          # Maintains the existing proxy/scheduler experiment flow.
-    qps_1m: float = 0.0        # Maintains the existing proxy/scheduler experiment flow.
-    gpu_util: float = 0.0      # Maintains the existing proxy/scheduler experiment flow.
+    inflight: int = 0          # number of requests currently being processed, or decode sessions
+    qps_1m: float = 0.0        # QPS over the last minute, reported by the proxy
+    gpu_util: float = 0.0      # GPU utilization, either 0-100 or 0-1 depending on the chosen convention
 
 
 @dataclass
 class ProxyInfo:
-    """Maintains the in-memory Scheduler view of registered proxy resources and their dynamic load state."""
+    """
+    Proxy static + dynamic information structure.
+
+    Static information, supplied at registration:
+    - proxy_id/host/port/endpoints/tags/weight/meta
+
+    Dynamic information, updated by heartbeat/monitoring:
+    - load/last_seen_at
+
+    Notes:
+    - endpoints use OpenAI-style path fragments, for example ["chat/completions", "completions"]
+    - meta stores extension fields that are inconvenient to structure, such as version, machine type, TP size, etc.
+    """
     proxy_id: str
     host: str
     port: int
@@ -39,39 +69,60 @@ class ProxyInfo:
     meta: Dict[str, Any] = field(default_factory=dict)
     kv_cache_update_policy: str = "lru"
 
-    # Load-related state used by scheduling decisions.
+    # Load information used by future scheduling strategies
     load: ProxyLoad = field(default_factory=ProxyLoad)
 
-    # Heartbeat-related bookkeeping.
+    # Timestamps: registration time and last heartbeat time
     registered_at: float = field(default_factory=lambda: time.time())
     last_seen_at: float = field(default_factory=lambda: time.time())
 
     def touch(self) -> None:
-        """Maintains the in-memory Scheduler view of registered proxy resources and their dynamic load state."""
+        """Refresh last_seen_at when a heartbeat/update is received."""
         self.last_seen_at = time.time()
 
     def is_alive(self, ttl_s: int, now: Optional[float] = None) -> bool:
-        """Maintains the in-memory Scheduler view of registered proxy resources and their dynamic load state."""
+        """
+        Determine whether the proxy is alive based on TTL.
+        - ttl_s: mark inactive after no heartbeat for ttl_s
+        - now: optional, used to reduce repeated time.time() calls during batch checks
+        """
         now = now or time.time()
         return (now - self.last_seen_at) <= ttl_s
 
 
 class ProxyPool:
-    """Maintains the in-memory Scheduler view of registered proxy resources and their dynamic load state."""
+    """
+    Proxy resource pool (in-memory version).
+
+    Concurrency model:
+    - control_plane register/heartbeat/unregister can access it concurrently
+    - the scheduler data plane (scheduling logic) can concurrently list/get
+    - all reads and writes are serialized through asyncio.Lock to avoid state races
+
+    Note:
+    - This is a single-process in-memory structure. With multiple workers, each process gets its own pool.
+      The current design (7002 embedded server) also requires a single process and single worker to avoid port conflicts.
+    """
     def __init__(self, ttl_s: int = 30):
         self.ttl_s = ttl_s
         self._lock = asyncio.Lock()
         self._data: Dict[str, ProxyInfo] = {}
 
     async def upsert(self, info: ProxyInfo) -> None:
-        """Maintains the in-memory Scheduler view of registered proxy resources and their dynamic load state."""
+        """
+        Register/update a proxy with idempotent upsert semantics.
+
+        Behavior contract:
+        - if proxy_id appears for the first time, insert directly
+        - if the same proxy_id already exists, update all fields but keep the original registered_at as the first registration time
+        """
         async with self._lock:
             old = self._data.get(info.proxy_id)
             if old is None:
                 self._data[info.proxy_id] = info
                 return
 
-            # Registration-related bookkeeping.
+            # Keep the first registration time; use the newest values for other fields
             info.registered_at = old.registered_at
             self._data[info.proxy_id] = info
 
@@ -81,7 +132,11 @@ class ProxyPool:
         load: Optional[ProxyLoad] = None,
         meta_patch: Optional[Dict[str, Any]] = None,
     ) -> bool:
-        """Maintains the in-memory Scheduler view of registered proxy resources and their dynamic load state."""
+        """
+        Proxy heartbeat.
+        - Success: refresh last_seen_at and also update load if provided
+        - Failure: proxy_id does not exist, return False
+        """
         async with self._lock:
             p = self._data.get(proxy_id)
             if not p:
@@ -97,17 +152,21 @@ class ProxyPool:
             return True
 
     async def remove(self, proxy_id: str) -> None:
-        """Maintains the in-memory Scheduler view of registered proxy resources and their dynamic load state."""
+        """Unregister a proxy; do not error if it does not exist."""
         async with self._lock:
             self._data.pop(proxy_id, None)
 
     async def get(self, proxy_id: str) -> Optional[ProxyInfo]:
-        """Maintains the in-memory Scheduler view of registered proxy resources and their dynamic load state."""
+        """Get one proxy info object, possibly returning None."""
         async with self._lock:
             return self._data.get(proxy_id)
 
     async def list(self, include_dead: bool = False) -> List[ProxyInfo]:
-        """Maintains the in-memory Scheduler view of registered proxy resources and their dynamic load state."""
+        """
+        List proxies.
+        - include_dead=False: return only live proxies
+        - include_dead=True：return all proxies, including inactive ones
+        """
         async with self._lock:
             now = time.time()
             out: List[ProxyInfo] = []
@@ -117,7 +176,7 @@ class ProxyPool:
                     continue
                 out.append(p)
 
-            # Heartbeat-related bookkeeping.
+            # Stable output order: sort by most recent heartbeat first
             out.sort(key=lambda x: x.last_seen_at, reverse=True)
             return out
 

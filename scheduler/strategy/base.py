@@ -1,15 +1,20 @@
-"""Defines strategy interfaces for resource selection."""
 # scheduler/strategy/base.py
+"""Defines Scheduler-side KDN/proxy selection strategy interfaces."""
 from __future__ import annotations
-
-"""Defines the base strategy interfaces used by Scheduler or proxy selection policies."""
 
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple
 
 
 class ProxySelectionStrategy(ABC):
-    """Defines the base strategy interfaces used by Scheduler or proxy selection policies."""
+    """
+    Unified routing strategy interface: given candidate KDNs, proxies, and the current request,
+    return (chosen_kdn, chosen_proxy).
+
+    request_ctx is a lightweight context used to pass information that the scheduler has already computed
+    such as Knowledge_List, knowledge length, and each KDN knowledge metadata index,
+    so the strategy layer does not repeat embedding retrieval.
+    """
 
     name: str = "base"
 

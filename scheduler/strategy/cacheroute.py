@@ -1,4 +1,3 @@
-"""Implements CacheRoute scheduling strategy helpers for KDN and proxy selection."""
 # scheduler/strategy/cacheroute.py
 from __future__ import annotations
 
@@ -14,36 +13,58 @@ logger = logging.getLogger("scheduler.strategy.cacheroute")
 
 
 class CacheRouteStrategy(ProxySelectionStrategy):
-    """Implements the CacheRoute scheduling strategy for KDN and proxy selection using coverage, load, topology, and affinity signals."""
+    """
+    First-stage implementation of the CacheRoute scheduling strategy.
+
+    The current version implements only the minimum usable capabilities:
+    1) Based on the request Knowledge_List, check each KDN knowledge metadata index for
+       - whether it can fully provide the knowledge text required by the request;
+       - the total length covered by kv_ready on that KDN.
+    2) KDN selection uses lexicographic rules to avoid introducing weighted scoring:
+       - prefer complete text coverage;
+       - prefer non-overloaded KDNs;
+       - then compare kv_ready coverage length;
+       - finally compare lighter load and stable order.
+    3) Proxy selection (stage 2) is upgraded to non-weighted lexicographic ordering:
+       - first select the topology-best group anchored at chosen_kdn (bandwidth tier first, latency tier second);
+       - then apply load safety-window filtering to avoid single-node overload;
+       - then compare knowledge history preference, favoring the same LLM for consecutive similar knowledge;
+       - finally break ties by current load plus stable rotation.
+
+    Notes:
+    - This does not branch on Injection_type; the formal strategy first satisfies text serviceability by default,
+      then prefers KDNs with higher KVCache coverage among serviceable candidates.
+    - request_ctx / kdn_knowledge_index are prepared inside the scheduler.
+    """
 
     name: str = "cacheroute"
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._proxy_cursor = 0
-        # Knowledge/KDN-related state used by scheduling and injection.
-        # Maintains the existing proxy/scheduler experiment flow.
+        # Stage-1 parameters: use threshold rules (non-weighted) to determine KDN overload.
+        # A value of 0 means the corresponding threshold is disabled.
         self._kdn_qps_overload_th = float(os.environ.get("SCHEDULER_CACHEROUTE_KDN_QPS_OVERLOAD_TH", str(config.SCHEDULER_CACHEROUTE_KDN_QPS_OVERLOAD_TH)).strip() or 0)
         self._kdn_items_overload_th = int(os.environ.get("SCHEDULER_CACHEROUTE_KDN_ITEMS_OVERLOAD_TH", str(config.SCHEDULER_CACHEROUTE_KDN_ITEMS_OVERLOAD_TH)).strip() or 0)
         self._kdn_pending_overload_th = int(os.environ.get("SCHEDULER_CACHEROUTE_KDN_PENDING_OVERLOAD_TH", str(config.SCHEDULER_CACHEROUTE_KDN_PENDING_OVERLOAD_TH)).strip() or 0)
         self._kdn_active_overload_th = int(os.environ.get("SCHEDULER_CACHEROUTE_KDN_ACTIVE_OVERLOAD_TH", str(config.SCHEDULER_CACHEROUTE_KDN_ACTIVE_OVERLOAD_TH)).strip() or 0)
         self._kdn_queue_ms_overload_th = float(os.environ.get("SCHEDULER_CACHEROUTE_KDN_QUEUE_MS_OVERLOAD_TH", str(config.SCHEDULER_CACHEROUTE_KDN_QUEUE_MS_OVERLOAD_TH)).strip() or 0.0)
-        # Load-related state used by scheduling decisions.
+        # Proxy-side stage-2 parameters: load safety window (non-weighted filtering)
         self._proxy_inflight_delta = int(os.environ.get("SCHEDULER_CACHEROUTE_PROXY_INFLIGHT_DELTA", str(config.SCHEDULER_CACHEROUTE_PROXY_INFLIGHT_DELTA)).strip() or 0)
         self._proxy_gpu_delta = float(os.environ.get("SCHEDULER_CACHEROUTE_PROXY_GPU_DELTA", str(config.SCHEDULER_CACHEROUTE_PROXY_GPU_DELTA)).strip() or 0.0)
-        # Load-related state used by scheduling decisions.
+        # Step 2 addition: safety window based on load ratio (real_time_inflight/max_inflight); recommended delta range is [0,1]
         self._proxy_load_ratio_delta = float(os.environ.get("SCHEDULER_CACHEROUTE_PROXY_LOAD_RATIO_DELTA", str(config.SCHEDULER_CACHEROUTE_PROXY_LOAD_RATIO_DELTA)).strip() or 0.0)
-        # Maintains the existing proxy/scheduler experiment flow.
+        # History-preference decay applied after each selection; default is 0.9
         self._affinity_decay = float(os.environ.get("SCHEDULER_CACHEROUTE_AFFINITY_DECAY", str(config.SCHEDULER_CACHEROUTE_AFFINITY_DECAY)).strip() or 0.9)
-        # Keep logs and state updates bounded for experiments.
+        # Keep only the most valuable recent top-k kids per proxy to avoid unbounded state growth
         self._affinity_topk = int(os.environ.get("SCHEDULER_CACHEROUTE_AFFINITY_TOPK", str(config.SCHEDULER_CACHEROUTE_AFFINITY_TOPK)).strip() or 256)
-        # Maintains the existing proxy/scheduler experiment flow.
+        # Output a concise one-line decision log; enabled by default and disabled by setting 0.
         self._log_decision = bool(int(os.environ.get("SCHEDULER_CACHEROUTE_LOG_DECISION", str(config.SCHEDULER_CACHEROUTE_LOG_DECISION)).strip() or 0))
-        # Maintains the existing proxy/scheduler experiment flow.
+        # Record the latest decision snapshot for /debug/strategy.
         self._last_decision: Dict[str, Any] = {}
-        # Knowledge/KDN-related state used by scheduling and injection.
+        # Coarse-grained knowledge history preference: proxy_id -> kid -> decayed_score
         self._proxy_kid_affinity: Dict[str, Dict[str, float]] = {}
-        # Strategy-related configuration and state.
+        # v0.1.7: Strategy counters for experiment comparison; not used in scheduling
         self._counters: Dict[str, int] = {
             "requests_total": 0,
             "kdn_overload_filtered": 0,
@@ -73,7 +94,13 @@ class CacheRouteStrategy(ProxySelectionStrategy):
         return int(proxy.get('max_inflight', 0) or 0)
 
     def _proxy_load_ratio(self, proxy: Dict[str, Any]) -> float:
-        """Implements the CacheRoute scheduling strategy for KDN and proxy selection using coverage, load, topology, and affinity signals."""
+        """
+        Real-time load ratio:
+          load_ratio = real_time_inflight / max_inflight
+        Notes:
+        - When max_inflight <= 0, treat it as non-normalizable and return 1.0 conservatively
+        - The result is limited to [0, +inf); upper-layer comparison only uses relative size
+        """
         max_inflight = self._proxy_max_inflight(proxy)
         if max_inflight <= 0:
             return 1.0
@@ -89,13 +116,18 @@ class CacheRouteStrategy(ProxySelectionStrategy):
 
     @staticmethod
     def _is_overloaded(kdn: Dict[str, Any]) -> bool:
-        """Implements the CacheRoute scheduling strategy for KDN and proxy selection using coverage, load, topology, and affinity signals."""
+        """Backward compatibility: keep explicit meta.overloaded override."""
         meta = kdn.get('meta') or {}
         return bool(meta.get('overloaded', False))
 
     @staticmethod
     def _topology_link_for_proxy(proxy: Dict[str, Any], chosen_kdn: Dict[str, Any]) -> Tuple[float, float]:
-        """Implements the CacheRoute scheduling strategy for KDN and proxy selection using coverage, load, topology, and affinity signals."""
+        """
+        Read chosen_kdn link information from proxy.meta.kdn_links:
+        - bandwidth_mbps: larger is better (default 0.0)
+        - latency_ms: smaller is better (default +inf)
+        Supports keys as either kdn_id or kdn://host:port.
+        """
         meta = proxy.get("meta") or {}
         links = meta.get("kdn_links") or {}
         if not isinstance(links, dict):
@@ -112,7 +144,11 @@ class CacheRouteStrategy(ProxySelectionStrategy):
         return bw_mbps, lat_ms
 
     def _is_overloaded_by_threshold(self, kdn: Dict[str, Any]) -> bool:
-        """Implements the CacheRoute scheduling strategy for KDN and proxy selection using coverage, load, topology, and affinity signals."""
+        """
+        Stage-1 overload check (non-weighted):
+        1) meta.overloaded explicitly True -> overloaded;
+        2) if thresholds are configured, check qps/items/meta.pending_transfers one by one.
+        """
         if self._is_overloaded(kdn):
             return True
 
@@ -144,7 +180,7 @@ class CacheRouteStrategy(ProxySelectionStrategy):
         if not kdns:
             return None
 
-        # Load-related state used by scheduling decisions.
+        # When there is no knowledge requirement, fall back to the lightest-load KDN so complex logic does not interfere with the existing flow.
         if not knowledge_list:
             ranked = sorted(
                 kdns,
@@ -164,7 +200,7 @@ class CacheRouteStrategy(ProxySelectionStrategy):
             kdn_id = str(kdn.get('kdn_id') or '')
             kdn_addr = self._kdn_addr(kdn)
 
-            # Maintains the existing proxy/scheduler experiment flow.
+            # Support two index keys: kdn_id first, then kdn://host:port, enabling a smooth future transition.
             meta_by_kid = knowledge_index.get(kdn_id) or knowledge_index.get(kdn_addr) or {}
 
             text_full = True
@@ -179,13 +215,13 @@ class CacheRouteStrategy(ProxySelectionStrategy):
                 if int(item.get('kv_ready', 0) or 0) == 1:
                     kv_cover_len += int(item.get('length', 0) or 0)
 
-            # Maintains the existing proxy/scheduler experiment flow.
-            # Maintains the existing proxy/scheduler experiment flow.
-            # Maintains the existing proxy/scheduler experiment flow.
-            # Maintains the existing proxy/scheduler experiment flow.
-            # Knowledge/KDN-related state used by scheduling and injection.
-            # Maintains the existing proxy/scheduler experiment flow.
-            # Maintains the existing proxy/scheduler experiment flow.
+            # Lexicographic order:
+            # 1. prefer complete text coverage
+            # 2. prefer non-overloaded resources
+            # 3. larger KVCache coverage length is better
+            # 4. fewer missing knowledge items is better, as a fallback when coverage is incomplete
+            # 5. lower QPS / item count is better
+            # 6. use kdn_id for stable tie-breaking
             key = (
                 0 if text_full else 1,
                 0 if not self._is_overloaded_by_threshold(kdn) else 1,
@@ -207,17 +243,17 @@ class CacheRouteStrategy(ProxySelectionStrategy):
                     "items": self._kdn_items(kdn),
                 }
             )
-            # Knowledge/KDN-related state used by scheduling and injection.
+            # Step 1 target semantics: usable KDN = complete text coverage + not overloaded
             if text_full and (not self._is_overloaded_by_threshold(kdn)):
                 usable_key = (
-                    -kv_cover_len,           # Maintains the existing proxy/scheduler experiment flow.
-                    self._kdn_qps(kdn),      # Load-related state used by scheduling decisions.
+                    -kv_cover_len,           # larger reusable KV coverage length is better
+                    self._kdn_qps(kdn),      # prefer lower load on ties
                     self._kdn_items(kdn),
                     kdn_id,
                 )
                 usable_rows.append((usable_key, kdn))
 
-        # Maintains the existing proxy/scheduler experiment flow.
+        # Step 1: prefer selecting from the usable set; if empty, fall back to the original ordering rule
         if usable_rows:
             usable_rows.sort(key=lambda x: x[0])
             chosen = usable_rows[0][1]
@@ -256,12 +292,12 @@ class CacheRouteStrategy(ProxySelectionStrategy):
     ) -> Optional[Dict[str, Any]]:
         if not proxies:
             return None
-        # Maintains the existing proxy/scheduler experiment flow.
-        # Maintains the existing proxy/scheduler experiment flow.
-        # Load-related state used by scheduling decisions.
-        # Knowledge/KDN-related state used by scheduling and injection.
-        # Maintains the existing proxy/scheduler experiment flow.
-        # Load-related state used by scheduling decisions.
+        # Step 2 semantic alignment:
+        #  0) select only among LLM systems reachable from chosen_kdn
+        #  1) load safety window (minimum load_ratio + delta)
+        #  2) historical knowledge preference
+        #  3) better link bandwidth
+        #  4) lower load
         if chosen_kdn:
             connectable = [
                 p for p in proxies
@@ -271,7 +307,7 @@ class CacheRouteStrategy(ProxySelectionStrategy):
         else:
             proxy_pool = proxies
 
-        # Load-related state used by scheduling decisions.
+        # Step1: load safety (prefer load_ratio; fall back to inflight window when max_inflight is unavailable)
         min_ratio = min(self._proxy_load_ratio(p) for p in proxy_pool)
         safe_group = [
             p for p in proxy_pool
@@ -293,7 +329,7 @@ class CacheRouteStrategy(ProxySelectionStrategy):
                 if self._proxy_gpu(p) <= (min_gpu + self._proxy_gpu_delta)
             ] or safe_group
 
-        # Maintains the existing proxy/scheduler experiment flow.
+        # Step2: history preference (accumulated kids + decay)
         affinity_rows: List[Tuple[float, Dict[str, Any]]] = []
         for p in safe_group:
             pid = str(p.get("proxy_id", ""))
@@ -304,7 +340,7 @@ class CacheRouteStrategy(ProxySelectionStrategy):
             with self._lock:
                 self._counters["proxy_affinity_hits"] += 1
 
-        # Load-related state used by scheduling decisions.
+        # Step3+Step4: better bandwidth -> lower load
         ranked = sorted(
             aff_group,
             key=lambda p: (
@@ -341,7 +377,7 @@ class CacheRouteStrategy(ProxySelectionStrategy):
             ) == best_key
         ]
 
-        # Knowledge/KDN-related state used by scheduling and injection.
+        # Update affinity: boost the selected proxy for this knowledge set and decay other proxies
         chosen = best
         with self._lock:
             if len(tied) > 1:
@@ -363,7 +399,7 @@ class CacheRouteStrategy(ProxySelectionStrategy):
             chosen_table = self._proxy_kid_affinity.setdefault(chosen_pid, {})
             for kid in knowledge_list:
                 chosen_table[kid] = float(chosen_table.get(kid, 0.0)) + 1.0
-            # Keep logs and state updates bounded for experiments.
+            # Keep only top-k to avoid state growth in long-running experiments
             if self._affinity_topk > 0 and len(chosen_table) > self._affinity_topk:
                 kept = sorted(chosen_table.items(), key=lambda kv: kv[1], reverse=True)[: self._affinity_topk]
                 self._proxy_kid_affinity[chosen_pid] = dict(kept)
@@ -406,7 +442,7 @@ class CacheRouteStrategy(ProxySelectionStrategy):
         ctx = request_ctx or {}
         knowledge_list = [str(x).strip().lower() for x in (ctx.get('knowledge_list') or []) if str(x).strip()]
         knowledge_index = ctx.get('kdn_knowledge_index') or {}
-        # Knowledge/KDN-related state used by scheduling and injection.
+        # Consistently use length from the knowledge index as the length-weight source for affinity scoring
         length_by_kid: Dict[str, int] = {}
         for _kdn_id, by_kid in (knowledge_index or {}).items():
             if not isinstance(by_kid, dict):
@@ -438,6 +474,6 @@ class CacheRouteStrategy(ProxySelectionStrategy):
                     len(self._last_decision.get("proxy_candidates", []) or []),
                 )
             except Exception:
-                # Maintains the existing proxy/scheduler experiment flow.
+                # Logging failures must not affect the scheduling path
                 pass
         return chosen_kdn, chosen_proxy

@@ -26,12 +26,12 @@ from .kdn_pool import KDNInfo
 
 @dataclass
 class _HBEntry:
-    """Aggregates heartbeat and refresh outcomes into compact periodic status logs."""
+    """Statistics for one entity (proxy or KDN) within one reporting window."""
     total: int = 0
     ok: int = 0
     err: int = 0
 
-    # Heartbeat-related bookkeeping.
+    # Additional information from the latest heartbeat report (optional)
     last_inflight: Optional[int] = None
     last_qps_1m: Optional[float] = None
     last_gpu_util: Optional[float] = None
@@ -47,7 +47,11 @@ class _RefreshEntry:
 
 
 class HeartbeatLogAggregator:
-    """Aggregates heartbeat and refresh outcomes into compact periodic status logs."""
+    """
+    Used only for log aggregation:
+    - record_proxy / record_kdn: called on request success/failure to update counts in the current window
+    - snapshot_and_reset: take the window statistics and clear them for periodic summaries
+    """
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
         self._window_start = time.time()
@@ -111,7 +115,10 @@ class HeartbeatLogAggregator:
             return dur, proxy, kdn, refresh
 
     async def record_kdn_refresh(self, r: Dict[str, Any]) -> None:
-        """Aggregates heartbeat and refresh outcomes into compact periodic status logs."""
+        """
+        Record one knowledge refresh result from the dict returned by kdn_refresh_once.
+        Only records statistics and never affects refresh logic.
+        """
         ok = bool(r.get("ok"))
         async with self._lock:
             if ok:
@@ -130,7 +137,11 @@ async def hb_report_loop(
     get_proxies: Optional[Callable[[], Awaitable[List[ProxyInfo]]]] = None,
     get_kdns: Optional[Callable[[], Awaitable[List[KDNInfo]]]] = None,
 ) -> None:
-    """Aggregates heartbeat and refresh outcomes into compact periodic status logs."""
+    """
+    Periodically output heartbeat summaries:
+    - Take one snapshot every interval_s seconds and output it
+    - Do not output anything if the window has no data
+    """
     interval_s = int(interval_s)
     while True:
         await asyncio.sleep(interval_s)
@@ -138,7 +149,7 @@ async def hb_report_loop(
         try:
             dur, proxy, kdn, refresh = await agg.snapshot_and_reset()
 
-            # Load-related state used by scheduling decisions.
+            # ---- pool snapshot：used to output current load/alive state ----
             proxy_pool_map: Dict[str, ProxyInfo] = {}
             kdn_pool_map: Dict[str, KDNInfo] = {}
 
@@ -176,9 +187,9 @@ async def hb_report_loop(
                 if p is None:
                     lines.append(f"  - proxy_id={pid} ok/total={e.ok}/{e.total} err={e.err} load=n/a")
                 else:
-                    # Maintains the existing proxy/scheduler experiment flow.
-                    # Maintains the existing proxy/scheduler experiment flow.
-                    # Maintains the existing proxy/scheduler experiment flow.
+                    # Note: ttl_s lives in ProxyPool and is used by is_alive checks
+                    # p.is_alive(pool.ttl_s) needs ttl_s, but here we only have ProxyInfo and not the pool object
+                    # Therefore this outputs last_seen_at plus "alive unknown"; if alive is needed, compute it when get_proxies returns.
                     lines.append(
                         f"  - proxy_id={pid} ok/total={e.ok}/{e.total} err={e.err} "
                         f"load(inflight={int(p.load.inflight)} qps_1m={float(p.load.qps_1m)} gpu_util={float(p.load.gpu_util)}) "

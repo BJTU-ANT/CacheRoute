@@ -1,4 +1,18 @@
-"""Implements the proxy data-plane service that receives Scheduler requests and forwards them to selected instances."""
+"""
+Proxy_v1.py
+---------
+Example downstream proxy for the Scheduler:
+
+- Asynchronously receives Request payloads (JSON) forwarded by the Scheduler
+- Parses key fields (Request_ID, Prompt, Service, Task, etc.) and restores the internal Request structure
+- Builds an OpenAI-style HTTP request body from the Request data
+- Calls the downstream Instance
+    * /v1/chat/completions  -> streaming text/event-stream
+    * /v1/completions       -> non-streaming JSON
+- Passes Instance responses through to the Scheduler (chat is streaming, completions is one-shot JSON)
+
+Real vLLM / OpenAI / other backend services can be integrated here later.
+"""
 from __future__ import annotations
 
 import os
@@ -85,36 +99,41 @@ def _squelch_noisy_loggers():
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-    # Keep logs and state updates bounded for experiments.
+    # uvicorn access log (optional, avoids one line per request)
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # If asyncio/anyio is also noisy, add:
     # logging.getLogger("asyncio").setLevel(logging.WARNING)
     # logging.getLogger("anyio").setLevel(logging.WARNING)
 
-# Maintains the existing proxy/scheduler experiment flow.
+# ======================= Proxy initialization =======================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Implements the proxy data-plane service that receives Scheduler requests and forwards them to selected instances."""
+    """
+    Proxy lifecycle:
+      - startup: register with the scheduler control plane
+      - running: send periodic heartbeats so proxy_pool does not expire
+      - shutdown: unregister gracefully (not required; TTL handles kill -9 cases)
+    """
     _squelch_noisy_loggers()
     app.state.injection_strategy_name = PROXY_INJECTION_STRATEGY  # type: ignore
     logger.info("[Proxy] injection strategy=%s", app.state.injection_strategy_name)
-    # Maintains the existing proxy/scheduler experiment flow.
+    # --- Initialize the instance pool and inject it into the proxy control plane ---
     ttl_s = int(os.environ.get("PROXY_INSTANCE_TTL_S", config.INSTANCE_ALIVE_TTL_S))
     app.state.instance_pool = InstancePool(ttl_s=ttl_s)  # type: ignore
     p_control_plane.set_pool(app.state.instance_pool)  # type: ignore
 
-    # Strategy-related configuration and state.
+    # --- Load the proxy scheduling strategy for the data plane ---
     strategy_name = os.environ.get("PROXY_INSTANCE_STRATEGY", "round_robin")
     try:
         app.state.instance_strategy = build_instance_strategy(strategy_name)  # type: ignore
         logger.info("[Proxy] instance strategy=%s", strategy_name)
     except Exception as e:
-        # Strategy-related configuration and state.
+        # Strategy initialization failure is fatal because the data plane cannot select an instance
         logger.error("[Proxy] invalid instance strategy=%s err=%s", strategy_name, str(e))
         raise
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # ---Try to start the proxy control plane for interacting with Instances and dynamically refreshing the InstancePool ---
     cp_host = os.environ.get("PROXY_CP_HOST", config.PROXY_CP_HOST)
     cp_port = int(os.environ.get("PROXY_CP_PORT", config.PROXY_CP_PORT))
 
@@ -124,7 +143,7 @@ async def lifespan(app: FastAPI):
         port=cp_port,
         log_level="info",
         access_log=False,
-        # Maintains the existing proxy/scheduler experiment flow.
+        # Important: do not enable reload/workers; keep embedded mode single-process and single-instance
     )
     cp_server = uvicorn.Server(cp_config)
     app.state._cp_server = cp_server  # type: ignore
@@ -135,13 +154,13 @@ async def lifespan(app: FastAPI):
     app.state._cp_task = asyncio.create_task(_run_cp())  # type: ignore
     logger.info("[Proxy] control plane started: http://%s:%s", cp_host, cp_port)
 
-    # Registration-related bookkeeping.
+    # --- Enable the scheduler client to register with the scheduler and keep the scheduler heartbeat alive ---
     client = SchedulerControlClient(SCHEDULER_CP_URL, timeout_s=5.0)
     app.state._sched_client = client  # type: ignore
     app.state._proxy_id = PROXY_ID    # type: ignore
     app.state._hb_stop = asyncio.Event()  # type: ignore
 
-    # Heartbeat-related bookkeeping.
+    # --- Heartbeat log aggregation (output layer)---
     app.state._hb_reporter = HeartbeatReporter(interval_s=30.0)  # type: ignore
     app.state._hb_report_task = asyncio.create_task(  # type: ignore
         hb_report_loop(
@@ -152,11 +171,11 @@ async def lifespan(app: FastAPI):
         )
     )
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # 1) register（failure should not block data-plane startup; allow the proxy to run standalone）
     try:
-        # Maintains the existing proxy/scheduler experiment flow.
-        # Strategy-related configuration and state.
-        # Maintains the existing proxy/scheduler experiment flow.
+        # CacheRoute stage 2:
+        # Optionally inject static KDN->Proxy topology information for the Scheduler lexicographic strategy.
+        # Environment variable example:
         # PROXY_KDN_LINKS_JSON='{"kdn_a":{"bandwidth_tier":3,"latency_tier":1}}'
         proxy_meta: Dict[str, Any] = {"version": "proxy_v1"}
         proxy_meta.update(await _build_proxy_topology_meta())
@@ -172,13 +191,13 @@ async def lifespan(app: FastAPI):
             kv_mem_per_instance_gb=PROXY_KV_MEM_PER_INSTANCE_GB,
             kv_cache_update_policy=PROXY_KV_CACHE_UPDATE_POLICY,
         )
-        # Heartbeat-related bookkeeping.
+        # Override the local default heartbeat interval with the interval suggested by the scheduler
         interval = float(reg.heartbeat_interval_s) if reg.heartbeat_interval_s else PROXY_HEARTBEAT_S
         app.state._hb_interval = interval  # type: ignore
         logger.info("[Proxy] registered to scheduler: cp=%s proxy_id=%s advertise=%s:%s hb=%ss",
                     SCHEDULER_CP_URL, reg.proxy_id, PROXY_ADVERTISE_HOST, PROXY_ADVERTISE_PORT, interval)
     except Exception as e:
-        # Registration-related bookkeeping.
+        # Do not block the data plane: if registration fails, the proxy can still forward locally, but the scheduler cannot see it
         app.state._hb_interval = PROXY_HEARTBEAT_S  # type: ignore
         logger.warning("[Proxy] register failed (non-fatal): cp=%s err=%s", SCHEDULER_CP_URL, str(e))
 
@@ -193,9 +212,9 @@ async def lifespan(app: FastAPI):
                 )
                 await reporter.record(ok=True)
             except Exception as e:
-                # Keep logs and state updates bounded for experiments.
+                # Do not emit a warning for each event to avoid log spam; only record window statistics
                 await reporter.record(ok=False, err=str(e))
-                # Maintains the existing proxy/scheduler experiment flow.
+                # If immediate stack traces are needed, change this to logger.debug(..., exc_info=True)
                 logger.debug("[Proxy] heartbeat failed", exc_info=True)
 
             await asyncio.sleep(float(getattr(app.state, "_hb_interval", PROXY_HEARTBEAT_S)))  # type: ignore
@@ -205,7 +224,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        # Maintains the existing proxy/scheduler experiment flow.
+        # Stop the control plane
         try:
             srv = getattr(app.state, "_cp_server", None)  # type: ignore
             t = getattr(app.state, "_cp_task", None)  # type: ignore
@@ -213,7 +232,7 @@ async def lifespan(app: FastAPI):
                 srv.should_exit = True
                 srv.force_exit = True
             if t is not None:
-                # Timing data used by experiment analysis.
+                # Do not await for long; only give it a short chance to exit
                 try:
                     await asyncio.wait_for(t, timeout=2.0)
                 except Exception:
@@ -221,7 +240,7 @@ async def lifespan(app: FastAPI):
         except Exception:
             pass
 
-        # Maintains the existing proxy/scheduler experiment flow.
+        # Report to the scheduler
         try:
             app.state._hb_stop.set()  # type: ignore
             task = getattr(app.state, "_hb_task", None)  # type: ignore
@@ -245,15 +264,19 @@ async def lifespan(app: FastAPI):
             pass
 
 proxy = FastAPI(title="CacheRoute Proxy v1", lifespan=lifespan)
-queue_mgr = QueueManager()              # Queue-related control flow.
+queue_mgr = QueueManager()              #create the task queue manager
 
 
 #--------------------------------------------------------------
-# Maintains the existing proxy/scheduler experiment flow.
+# ======================= Common internal helper functions =======================
 #--------------------------------------------------------------
 
 def _dataclass_from_dict(dc_cls, data: Dict[str, Any]):
-    """Implements the proxy data-plane service that receives Scheduler requests and forwards them to selected instances."""
+    """
+    Safely construct a dataclass from a dict:
+      - Only take fields defined by the dataclass to avoid errors from extra fields
+      - Missing required fields raise TypeError, which indicates an invalid upstream structure
+    """
     if data is None:
         data = {}
     field_names = {f.name for f in fields(dc_cls)}
@@ -262,7 +285,9 @@ def _dataclass_from_dict(dc_cls, data: Dict[str, Any]):
 
 
 def recover_request_from_payload(payload: Dict[str, Any]) -> SchedulerRequest:
-    """Implements the proxy data-plane service that receives Scheduler requests and forwards them to selected instances."""
+    """
+        Restore the JSON payload sent by the Scheduler into Request, Prompt, Service, and Task dataclasses.
+    """
     req_id = payload.get("Request_ID", 0)
     req_type = payload.get("Request_type", "request")
 
@@ -291,7 +316,11 @@ def recover_request_from_payload(payload: Dict[str, Any]) -> SchedulerRequest:
 
 
 def build_body_for_instance(req_obj: SchedulerRequest, mode: str) -> Dict[str, Any]:
-    """Implements the proxy data-plane service that receives Scheduler requests and forwards them to selected instances."""
+    """
+        Build the OpenAI-style body sent to the Instance from the Request:
+          - mode="chat"        -> /v1/chat/completions
+          - mode="completions" -> /v1/completions
+    """
     prompt = req_obj.Prompt
     model = prompt.model
     user_prompt = prompt.user_prompt
@@ -302,7 +331,7 @@ def build_body_for_instance(req_obj: SchedulerRequest, mode: str) -> Dict[str, A
     # print(f"[Proxy]stream={stream}")
 
     if mode == "chat":
-        # Maintains the existing proxy/scheduler experiment flow.
+        # The Instance chat endpoint follows the OpenAI chat/completions style:
         # messages = [{role: "user", content: "..."}]
         body: Dict[str, Any] = {
             "model": model,
@@ -312,14 +341,14 @@ def build_body_for_instance(req_obj: SchedulerRequest, mode: str) -> Dict[str, A
             "stream": stream,
         }
     else:
-        # Streaming response handling.
+        # completions: prompt plus non-streaming response
         body = {
             "model": model,
             "prompt": user_prompt,
             "stream": False,
         }
 
-        # Maintains the existing proxy/scheduler experiment flow.
+        # Add optional parameters when present; omit them otherwise
     if max_tokens is not None:
         body["max_tokens"] = max_tokens
     if temperature is not None:
@@ -350,7 +379,9 @@ def _sse_meta_event(task: ProxyTask) -> bytes:
 
 
 async def _wrap_chat_stream_with_meta(task: ProxyTask, queue_mgr: QueueManager) -> AsyncGenerator[bytes, None]:
-    """Implements the proxy data-plane service that receives Scheduler requests and forwards them to selected instances."""
+    """
+    Forward downstream chat SSE, but delay [DONE] and insert one cacheroute_meta event first.
+    """
     pending = b""
     done_seen = False
 
@@ -385,7 +416,11 @@ async def _wrap_chat_stream_with_meta(task: ProxyTask, queue_mgr: QueueManager) 
 
 
 def select_instance(app: FastAPI, req_obj: SchedulerRequest):
-    """Implements the proxy data-plane service that receives Scheduler requests and forwards them to selected instances."""
+    """
+    Select one instance for the data plane.
+    - Input: the current live instance list provided by InstancePool
+    - Output: an InstanceInfo with at least host/port/instance_id
+    """
     pool = app.state.instance_pool  # type: ignore
     strategy = app.state.instance_strategy  # type: ignore
 
@@ -402,12 +437,15 @@ def select_instance(app: FastAPI, req_obj: SchedulerRequest):
 
 
 #--------------------------------------------------------------
-# Maintains the existing proxy/scheduler experiment flow.
+# ======================= Local proxy route handlers =======================
 #--------------------------------------------------------------
 
 @proxy.post("/v1/chat/completions")
 async def proxy_chat_completions(request: FastAPIRequest):
-    """Implements the proxy data-plane service that receives Scheduler requests and forwards them to selected instances."""
+    """
+    Receive /v1/chat/completions requests from the Scheduler (payload is Request JSON).
+    Forward an OpenAI chat/completions body to the worker (streaming).
+    """
     proxy_recv_ms = int(time.time() * 1000)
     try:
         payload: Dict[str, Any] = await request.json()
@@ -418,7 +456,7 @@ async def proxy_chat_completions(request: FastAPIRequest):
             content={"error": "invalid_json", "detail": str(e)},
         )
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Restore the internal Request
     try:
         req_obj = recover_request_from_payload(payload)
     except Exception as e:
@@ -428,7 +466,7 @@ async def proxy_chat_completions(request: FastAPIRequest):
             content={"error": "invalid_request_payload", "detail": str(e)},
         )
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Build the Instance request body
     instance_body = build_body_for_instance(req_obj, mode="chat")
 
     route_select_start_ms = int(time.time() * 1000)
@@ -538,10 +576,10 @@ async def proxy_chat_completions(request: FastAPIRequest):
             )
 
     # ====================================
-    # Queue-related control flow.
+    # Send into the queue: enqueue -> manager -> forward
     # ====================================
     try:
-        # Maintains the existing proxy/scheduler experiment flow.
+        # 1) Wrap the task (note: chosen comes from RR and has instance_id/host/port fields)
         task = ProxyTask(
             request_id=getattr(req_obj, "Request_ID", None),
             req_obj=req_obj,
@@ -572,7 +610,10 @@ async def proxy_chat_completions(request: FastAPIRequest):
 
 @proxy.post("/v1/completions")
 async def proxy_completions(request: FastAPIRequest):
-    """Implements the proxy data-plane service that receives Scheduler requests and forwards them to selected instances."""
+    """
+    Receive /v1/completions requests from the Scheduler.
+    The demo logic is the same as chat/completions, but leaves room for extension.
+    """
     proxy_recv_ms = int(time.time() * 1000)
     try:
         payload: Dict[str, Any] = await request.json()
@@ -583,7 +624,7 @@ async def proxy_completions(request: FastAPIRequest):
             content={"error": "invalid_json", "detail": str(e)},
         )
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Restore the internal Request
     try:
         req_obj = recover_request_from_payload(payload)
     except Exception as e:
@@ -593,7 +634,7 @@ async def proxy_completions(request: FastAPIRequest):
             content={"error": "invalid_request_payload", "detail": str(e)},
         )
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Build the Instance request body
     instance_body = build_body_for_instance(req_obj, mode="completions")
 
     route_select_start_ms = int(time.time() * 1000)
@@ -704,7 +745,7 @@ async def proxy_completions(request: FastAPIRequest):
             )
 
     # ==================================
-    # Queue-related control flow.
+    # Send into the queue: enqueue -> drain -> forward
     # ==================================
     try:
         task = ProxyTask(
@@ -728,14 +769,14 @@ async def proxy_completions(request: FastAPIRequest):
             if chunk:
                 content_bytes += chunk
 
-        # Streaming response handling.
+        # completions is non-streaming: the worker should return a one-shot JSON response
         if not content_bytes:
             return JSONResponse(
                 status_code=502,
                 content={"error": "empty_worker_response", "detail": "instance returned empty body"},
             )
 
-        # Maintains the existing proxy/scheduler experiment flow.
+        # Try to parse as JSON; if parsing fails, return the raw text for debugging
         try:
             obj = json.loads(content_bytes.decode("utf-8", errors="replace"))
             obj["_cacheroute_meta"] = build_cacheroute_meta(task)

@@ -1,8 +1,6 @@
-"""Defines per-instance proxy queues and concurrency controls."""
 # proxy/queue/instance_queues.py
+"""Defines per-instance proxy queues and concurrency limits for prepare and ready phases."""
 from __future__ import annotations
-
-"""Defines per-instance proxy queues and concurrency controls."""
 
 import asyncio
 from dataclasses import dataclass, field
@@ -13,14 +11,19 @@ from .task import ProxyTask
 
 @dataclass
 class InstanceQueues:
-    """Defines per-instance proxy queues and concurrency controls."""
+    """
+    Per-instance local queues and concurrency controls:
+    - prepare_q: knowledge preparation phase
+    - ready_q: knowledge is ready and the task is waiting for inference forwarding
+    - prepare_sem: limits prepare/inject concurrency on the same instance
+    """
     prepare_q: "asyncio.Queue[ProxyTask]" = field(default_factory=lambda: asyncio.Queue(maxsize=256))
     ready_q: "asyncio.Queue[ProxyTask]" = field(default_factory=lambda: asyncio.Queue(maxsize=256))
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # PerInstanceQueueMap injects the concrete concurrency at runtime
     prepare_sem: asyncio.Semaphore = field(default_factory=lambda: asyncio.Semaphore(1))
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Only used for observability
     active_prepare: int = 0
     active_ready: int = 0
 

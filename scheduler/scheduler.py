@@ -1,4 +1,28 @@
-"""Implements the Scheduler FastAPI entry point, control-plane startup, request construction, routing, and proxy forwarding."""
+"""
+Simple FastAPI-based Scheduler HTTP entry point.
+Compared with v0 scheduler.py, this uses the HTTP integration library for sending requests instead of protocol/interface.
+
+Scheduler core:
+  - Provide HTTP APIs based on FastAPI
+  - Start the control plane at startup and build proxy/KDN pools
+  - The control plane receives registrations from proxy and KDN servers and maintains resource pools
+  - Receive POST requests for /v1/chat/completions and /v1/completions
+  - Parse URL / payload / client IP
+  - Assign request_id in a 1-65535 cycle
+  - Call Request.build_request(...) to build the internal Request object; during construction the strategy selects the best KDN and proxy
+
+Scheduler workflow:
+  Scheduling layer:
+  - Scheduler receives an OpenAI-style HTTP request;
+  - Build the request, including assigning an ID and deciding services plus next-level routing
+  - Decide the concrete downstream URL to call.
+  Forwarding layer:
+  - Take the downstream URL plus outgoing data and headers,
+  - use forward_request to send the request to the Proxy,
+  - pull the stream from downstream while pushing it back unchanged to the user (StreamingResponse).
+
+Proxy / streaming-transfer logic can be connected here later.
+"""
 
 from __future__ import annotations
 import sys
@@ -45,14 +69,18 @@ from .strategy import create_strategy
 
 from util import timing
 
-# Maintains the existing proxy/scheduler experiment flow.
+# Use a fallback default when no external value is provided, making local runs easier
 from core.config import DEFAULT_MODEL, DEFAULT_EMBED_MODEL, SCHEDULER_CP_PORT
 
 
-# Maintains the existing proxy/scheduler experiment flow.
+# ======================= Request ID allocator and other basic functions=======================
 
 class RequestIdAllocator:
-    """Implements the Scheduler FastAPI entry point, control-plane startup, request construction, routing, and proxy forwarding."""
+    """
+    Simple 16-bit request ID allocator:
+      - valid range: 1 to max_id, default 65535
+      - restart from 1 after exceeding the range
+    """
     def __init__(self, max_id: int = 65535) -> None:
         self._max_id = max_id
         self._current = 0
@@ -75,26 +103,34 @@ class PeekPayload(BaseModel):
 
 
 def init_logging() -> str:
-    """Implements the Scheduler FastAPI entry point, control-plane startup, request construction, routing, and proxy forwarding."""
-    # Maintains the existing proxy/scheduler experiment flow.
+    """
+    Goals:
+    1) SCHEDULER_LOG_FILE may be configured as either a directory path or a file path
+       - directory: /logs/scheduler -> /logs/scheduler/scheduler-YYYYMMDD-HHMMSS.log
+       - file: /logs/scheduler/scheduler.log -> /logs/scheduler/scheduler-YYYYMMDD-HHMMSS.log
+    2) Fix repeated handler creation by reusing an existing RotatingFileHandler first and creating one only if none exists
+    3) Isolate uvicorn impact on the root logger: write business logs to an independent logger with propagate=False
+    4) Only output ERROR to the console so errors are immediately visible
+    """
+    # ---------- 1) Parse user configuration: directory or file ----------
     cfg_path = os.environ.get("SCHEDULER_LOG_FILE", getattr(config, "SCHEDULER_LOG_FILE", "scheduler.log"))
     p = Path(str(cfg_path)).expanduser()
 
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
 
     if p.suffix.lower() == ".log":
-        # Maintains the existing proxy/scheduler experiment flow.
+        # The user provided a file path
         base_dir = p.parent
         stem = p.stem or "scheduler"
     else:
-        # Maintains the existing proxy/scheduler experiment flow.
+        # The user provided a directory path
         base_dir = p
         stem = "scheduler"
 
     base_dir.mkdir(parents=True, exist_ok=True)
     log_path = str(base_dir / f"{stem}-{ts}.log")
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # ---------- 2) Business logger, not through root ----------
     biz = logging.getLogger("scheduler")
     cp = logging.getLogger("scheduler.control_plane")
     hb = logging.getLogger("scheduler.hbreport")
@@ -103,7 +139,7 @@ def init_logging() -> str:
         lg.setLevel(logging.INFO)
         lg.propagate = False
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # ---------- 3) Reuse an existing file handler first (required fix 1) ----------
     def _find_same_file_handler(lg: logging.Logger, target: str) -> RotatingFileHandler | None:
         for h in lg.handlers:
             if isinstance(h, RotatingFileHandler) and getattr(h, "baseFilename", None) == target:
@@ -130,12 +166,12 @@ def init_logging() -> str:
         fh.setLevel(logging.INFO)
         fh.setFormatter(file_fmt)
 
-    # Keep logs and state updates bounded for experiments.
+    # Attach to three loggers, avoiding duplicate adds
     for lg in (biz, cp, hb):
         if fh not in lg.handlers:
             lg.addHandler(fh)
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # ---------- 4) root console: ERROR only ----------
     root = logging.getLogger()
     root.setLevel(logging.INFO)
 
@@ -149,14 +185,14 @@ def init_logging() -> str:
         for h in stream_handlers:
             h.setLevel(logging.ERROR)
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # ---------- 5) Noise reduction, optional ----------
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("uvicorn").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.error").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # ---------- 6) Self-check: write one record and flush immediately ----------
     biz.info("[Scheduler] logging initialized, log_path=%s", log_path)
     for h in biz.handlers:
         try:
@@ -167,25 +203,29 @@ def init_logging() -> str:
     return log_path
 
 
-# Maintains the existing proxy/scheduler experiment flow.
+# ======================= Scheduler initialization =======================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Implements the Scheduler FastAPI entry point, control-plane startup, request construction, routing, and proxy forwarding."""
+    """
+    FastAPI lifecycle management:
+      - startup: warm up the tokenizer
+      - shutdown: no resources to clean up currently; interface reserved
+    """
     log_path = init_logging()
     print(f"[Scheduler] started. log_file={log_path}")
     # ------------------------------------------
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Try to warm up the tokenizer
     # ------------------------------------------
     model_path = os.getenv("SCHEDULER_MODEL_PATH", DEFAULT_MODEL)
     try:
-        # Maintains the existing proxy/scheduler experiment flow.
+        # print("[Scheduler] startup: start warming up tokenizer")
         TokenizerRegistry.warmup_tokenizers(model_path)
         logger.info(f"[Scheduler] Warmup tokenizers, model_path={model_path!r}")
     except Exception as e:
-        logger.info(f"[Scheduler] tokenizer warmup failed: {e}")
+        logger.info(f"[Scheduler] tokenizer warmup failed:{e}")
 
     # ------------------------------------------
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Try to warm up the embedding model
     # ------------------------------------------
     embedding_model_name = os.getenv("SCHEDULER_EMBEDDING_MODEL", DEFAULT_EMBED_MODEL)
     if os.path.isabs(embedding_model_name) and not os.path.isdir(embedding_model_name):
@@ -208,16 +248,16 @@ async def lifespan(app: FastAPI):
             logger.warning(f"[Scheduler] Warmup embedding model failed: {e}")
 
     except Exception as e:
-        logger.exception(f"[Scheduler] embedding model warmup failed:  {e}")
+        logger.exception(f"[Scheduler] embedding model warmup failed: {e}")
         app.state.embedding_engine = None  # type: ignore
 
     # -------------------------------------------------------------
-    # Knowledge/KDN-related state used by scheduling and injection.
+    # Try to start the control plane, enable proxy/KDN pools, and pull the knowledge list from the KDN pool to initialize the knowledge base
     # -------------------------------------------------------------
-    # Maintains the existing proxy/scheduler experiment flow.
+    #Build the ProxyPool instance first
     ttl = int(os.environ.get("SCHEDULER_PROXY_TTL_S", config.CONTROL_PLANE_TTL_S))
     app.state.proxy_pool = ProxyPool(ttl_s=ttl)  # type: ignore
-    set_pool(app.state.proxy_pool)  # Maintains the existing proxy/scheduler experiment flow.
+    set_pool(app.state.proxy_pool)  # type: ignore let 7002 reuse this pool
 
     kdn_ttl = int(os.environ.get("SCHEDULER_KDN_TTL_S", config.CONTROL_PLANE_TTL_S))
     app.state.kdn_pool = KDNPool(ttl_s=kdn_ttl)  # type: ignore
@@ -236,7 +276,7 @@ async def lifespan(app: FastAPI):
     logger.info("[Scheduler] KDN refresh loop started (pool-based).")
 
     async def _trigger_refresh_once() -> None:
-        # Maintains the existing proxy/scheduler experiment flow.
+        # If refresh is already running, skip directly and reuse the existing lock
         lock = getattr(app.state, "_kdn_refresh_lock", None) # type: ignore
         if lock is None:
             return
@@ -270,14 +310,14 @@ async def lifespan(app: FastAPI):
     app.state._cp_task = asyncio.create_task(_run_control_plane(app)) # type: ignore
 
     # ------------------------------------------
-    # Strategy-related configuration and state.
+    # Call the concrete scheduler strategy
     # ------------------------------------------
     strategy_name = os.environ.get("SCHEDULER_STRATEGY", config.SCHEDULER_DEFAULT_STRATEGY)
     app.state.proxy_strategy = create_strategy(strategy_name)  # type: ignore
     loaded_name = getattr(app.state.proxy_strategy, "name", strategy_name)
     logger.info("[Scheduler] strategy loaded: %s", loaded_name)
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # After this yield, the service is in normal serving period
     logger.info("[Scheduler] startup: initialization complete; service is listening")
     try:
         yield
@@ -302,7 +342,7 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # During shutdown, add resource cleanup here if needed later
     logger.info("[Scheduler] shutdown: service stopped")
 
 
@@ -315,7 +355,7 @@ scheduler = FastAPI(
 
 
 
-# Maintains the existing proxy/scheduler experiment flow.
+# ======================= Common internal helper functions =======================
 @timing
 def _handle_client(
     app: FastAPI,
@@ -327,11 +367,17 @@ def _handle_client(
     strategy: Any | None = None,
     kdn_knowledge_index: Dict[str, Dict[str, Dict[str, Any]]] | None = None,
 ) -> SchedulerRequest:
-    """Implements the Scheduler FastAPI entry point, control-plane startup, request construction, routing, and proxy forwarding."""
-    # Maintains the existing proxy/scheduler experiment flow.
+    """
+    Based on HTTP request information
+    build the internal Request object and assign request_id
+      - url_path: for example "/v1/chat/completions"
+      - payload: parsed JSON dict
+      - client_ip: client IP string
+    """
+    # Assign request_id in a 1-65535 cycle
     request_id = id_alloc.next_id()
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Print debug information
     if os.environ.get("SCHEDULER_VERBOSE_REQUEST_LOG", config.SCHEDULER_VERBOSE_REQUEST_LOG) == 1:
         print("+" * 80)
         print(f"[Scheduler] received HTTP request: path={url_path}, client_ip={client_ip},\n"
@@ -339,7 +385,7 @@ def _handle_client(
               f"payload={payload}")
         print("+" * 80)
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Directly reuse the updated build_request
     req_obj = SchedulerRequest.build_request(
         url_path=url_path,
         payload=payload,
@@ -362,11 +408,24 @@ def _handle_client(
     return req_obj
 
 
-# Maintains the existing proxy/scheduler experiment flow.
+# ======================= Scheduler route handlers =======================
 @scheduler.post("/v1/chat/completions")
 async def create_chat_completions(request: FastAPIRequest):
-    """Implements the Scheduler FastAPI entry point, control-plane startup, request construction, routing, and proxy forwarding."""
-    # Maintains the existing proxy/scheduler experiment flow.
+    """
+    Corresponds to:
+        curl http://HOST:PORT/v1/chat/completions -H "Content-Type: application/json" -d '{...}'
+        payload structure follows the OpenAI chat API:
+          {
+            "model": "...",
+            "messages": [ ... ],
+            "max_tokens": ...,
+            "temperature": ...,
+            "top_p": ...,
+            "stream": true/false,
+            ...
+          }
+    """
+    # Parse the user raw request body
     try:
         payload = await request.json()
     except Exception as e:
@@ -375,14 +434,14 @@ async def create_chat_completions(request: FastAPIRequest):
             content={"error": "invalid_json", "detail": str(e)},
         )
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Get client IP and path for building the internal Request
     client_ip = request.client.host if request.client else "unknown"
     url_path = request.url.path
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Convert user request headers to dict[str, str]
     raw_headers = {k.lower(): v for k, v in request.headers.items()}
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Build the internal Request, including Prompt/Service/Task, etc.
     pool = get_pool()
     proxy_infos = await pool.list(include_dead=False)
     proxies = [
@@ -431,7 +490,7 @@ async def create_chat_completions(request: FastAPIRequest):
     if not req_obj.Task.KDN_server_addr or not req_obj.Task.P_proxy_addr or req_obj.Task.P_proxy_port <= 0:
         raise RuntimeError("Routing failed: missing KDN or Proxy selection")
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Select downstream URL from the scheduling result and update inflight for the corresponding proxy_id
     host = req_obj.Task.P_proxy_addr
     port = req_obj.Task.P_proxy_port
     endpoint = getattr(req_obj.Service, "Endpoint_type", "chat/completions")
@@ -443,41 +502,54 @@ async def create_chat_completions(request: FastAPIRequest):
     if not ok:
         raise RuntimeError(f"Proxy not found in pool: {proxy_id}")
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Transform payload
     data_for_downstream = req_obj.to_payload()
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Handle headers that need to be passed through downstream, optionally filtering them
     extra_headers = {}
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Pass the user Authorization downstream unchanged if Proxy should perform authentication
     if "authorization" in raw_headers:
         extra_headers["authorization"] = raw_headers["authorization"]
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Carry a Scheduler-assigned Request ID for traceability
     extra_headers["scheduler-request-id"] = str(req_obj.Request_ID)
 
-    # Streaming response handling.
+    # Define an async generator that reads streaming data from downstream and returns it upstream
     async def iter_upstream():
         try:
-            # Maintains the existing proxy/scheduler experiment flow.
+            # forward_request itself is an async generator
             async for chunk in forward_request(
                 url=downstream_url,
                 data=data_for_downstream,
-                use_chunked=True,            # Streaming response handling.
-                extra_headers=extra_headers, # Maintains the existing proxy/scheduler experiment flow.
+                use_chunked=True,            # chat/completions is usually streaming
+                extra_headers=extra_headers, # pass through required headers
             ):
-                # Maintains the existing proxy/scheduler experiment flow.
+                # chunk is already bytes here, so yield it directly
                 yield chunk
         finally:
             await pool.inflight_delta(proxy_id, -1)
 
-    # Streaming response handling.
+    # Wrap with StreamingResponse to provide the user-side streaming response
     return StreamingResponse(iter_upstream(), media_type="application/json")
 
 
 @scheduler.post("/v1/completions")
 async def create_completions(request: FastAPIRequest):
-    """Implements the Scheduler FastAPI entry point, control-plane startup, request construction, routing, and proxy forwarding."""
+    """
+    Corresponds to:
+      curl http://HOST:PORT/v1/completions -H "Content-Type: application/json" -d '{...}'
+    payload structure is similar to the OpenAI completions API:
+      {
+        "model": "...",
+        "prompt": "...." or ["..."],
+        "max_tokens": ...,
+        "temperature": ...,
+        "top_p": ...,
+        "stream": true/false,
+        ...
+      }
+    """
     try:
         payload = await request.json()
     except Exception as e:
@@ -486,14 +558,14 @@ async def create_completions(request: FastAPIRequest):
             content={"error": "invalid_json", "detail": str(e)},
         )
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Get client IP and path for building the internal Request
     client_ip = request.client.host if request.client else "unknown"
     url_path = request.url.path
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Convert user request headers to dict[str, str]
     raw_headers = {k.lower(): v for k, v in request.headers.items()}
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Build the internal Request, including Prompt/Service/Task, etc.
     pool = get_pool()
     proxy_infos = await pool.list(include_dead=False)
     proxies = [
@@ -542,7 +614,7 @@ async def create_completions(request: FastAPIRequest):
     if not req_obj.Task.KDN_server_addr or not req_obj.Task.P_proxy_addr or req_obj.Task.P_proxy_port <= 0:
         raise RuntimeError("Routing failed: missing KDN or Proxy selection")
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Select downstream URL from the scheduling result and update inflight for the corresponding proxy_id
     host = req_obj.Task.P_proxy_addr
     port = req_obj.Task.P_proxy_port
     endpoint = getattr(req_obj.Service, "Endpoint_type", "completions")
@@ -554,35 +626,35 @@ async def create_completions(request: FastAPIRequest):
     if not ok:
         raise RuntimeError(f"Proxy not found in pool: {proxy_id}")
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Transform payload
     data_for_downstream = req_obj.to_payload()
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Handle headers that need to be passed through downstream, optionally filtering them
     extra_headers = {}
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Pass the user Authorization downstream unchanged if Proxy should perform authentication
     if "authorization" in raw_headers:
         extra_headers["authorization"] = raw_headers["authorization"]
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Carry a Scheduler-assigned Request ID for traceability
     extra_headers["scheduler-request-id"] = str(req_obj.Request_ID)
 
-    # Streaming response handling.
+    # Define an async generator that reads streaming data from downstream and returns it upstream
     async def iter_upstream():
         try:
-            # Maintains the existing proxy/scheduler experiment flow.
+            # forward_request itself is an async generator
             async for content in forward_request(
                     url=downstream_url,
                     data=data_for_downstream,
-                    use_chunked=False,  # Streaming response handling.
-                    extra_headers=extra_headers,  # Maintains the existing proxy/scheduler experiment flow.
+                    use_chunked=False,  # chat/completions is usually streaming
+                    extra_headers=extra_headers,  # pass through required headers
             ):
-                # Maintains the existing proxy/scheduler experiment flow.
+                # chunk is already bytes here, so yield it directly
                 yield content
         finally:
             await pool.inflight_delta(proxy_id, -1)
 
-    # Streaming response handling.
+    # Wrap with StreamingResponse to provide the user-side streaming response
     return StreamingResponse(iter_upstream(), media_type="application/json")
 
 
@@ -674,7 +746,7 @@ async def debug_status() -> Dict[str, Any]:
     kids = list(units.keys())
     kids_sorted = sorted(kids)[:10]
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # Try to get dim from the table
     dim = getattr(table, "dim", None)
 
     # FAISS
@@ -686,15 +758,15 @@ async def debug_status() -> Dict[str, Any]:
         except Exception:
             faiss_total = None
 
-    # Maintains the existing proxy/scheduler experiment flow.
+    # KnowledgeUnit field probing, to help inspect what is actually stored after snapshot
     unit_fields: List[str] = []
     if kids_sorted:
         u0 = units[kids_sorted[0]]
-        # Maintains the existing proxy/scheduler experiment flow.
+        # dataclasses generally have __dict__
         if hasattr(u0, "__dict__"):
             unit_fields = sorted(list(u0.__dict__.keys()))
         else:
-            # Maintains the existing proxy/scheduler experiment flow.
+            # fallback：dir filtering
             unit_fields = [x for x in dir(u0) if not x.startswith("_")]
 
     return {
@@ -750,7 +822,7 @@ async def debug_peek_knowledge(payload: PeekPayload) -> Dict[str, Any]:
         if "text_abstract" in allow:
             it["text_abstract"] = getattr(u, "text_abstract", None)
 
-        # Maintains the existing proxy/scheduler experiment flow.
+        # Optional: if kv_ready or similar fields are stored in KnowledgeUnit/metadata, they can also be output here
         if "meta" in allow and hasattr(u, "meta"):
             it["meta"] = getattr(u, "meta")
         if "kv_ready" in allow:
@@ -783,12 +855,12 @@ async def debug_strategy() -> Dict[str, Any]:
     pool = get_pool()
     proxy_infos = await pool.list(include_dead=False)
 
-    # Keep logs and state updates bounded for experiments.
+    # Return only concise information to avoid overly large output
     sample = [{
         "proxy_id": p.proxy_id,
         "host": p.host,
         "port": p.port,
-        "is_alive": True,  # Maintains the existing proxy/scheduler experiment flow.
+        "is_alive": True,  # list(include_dead=False) already guarantees alive
     } for p in proxy_infos[:10]]
 
     out = {
@@ -803,7 +875,7 @@ async def debug_strategy() -> Dict[str, Any]:
             out["strategy_debug"] = {"error": "strategy debug snapshot unavailable"}
     return out
 
-# Reserved for future extension.
+# Reserved: add routes such as /knowledge/update later
 # @api.post("/knowledge/update")
 # async def knowledge_update(request: FastAPIRequest):
 #     payload = await request.json()

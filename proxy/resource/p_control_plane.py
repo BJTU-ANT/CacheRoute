@@ -1,8 +1,7 @@
 # proxy/resource/p_control_plane.py
 
+"""Exposes the proxy control plane for instance registration, heartbeat, and topology metadata."""
 from __future__ import annotations
-
-"""Implements the Scheduler control-plane API for proxy and KDN registration, heartbeat, and resource-pool queries."""
 
 import asyncio
 import time
@@ -75,7 +74,10 @@ async def get_kdn_links_snapshot() -> Dict[str, Dict[str, Any]]:
 
 
 def _is_better_link(new_item: Dict[str, Any], old_item: Dict[str, Any]) -> bool:
-    """Implements the Scheduler control-plane API for proxy and KDN registration, heartbeat, and resource-pool queries."""
+    """
+    Compare two Instance->KDN links and return whether new_item is better.
+    Rule: prefer higher bandwidth; when bandwidth ties, prefer lower latency.
+    """
     new_bw = float(new_item.get("bandwidth_mbps", 0.0) or 0.0)
     old_bw = float(old_item.get("bandwidth_mbps", 0.0) or 0.0)
     if new_bw != old_bw:
@@ -143,7 +145,7 @@ async def register(req: InstanceRegisterReq) -> Dict[str, Any]:
         it.instance_id, it.host, it.port, it.endpoints, it.tags, it.weight, it.meta
     )
 
-    # Heartbeat-related bookkeeping.
+    # Suggest an instance heartbeat interval: fixed 10s or ttl/3, whichever is smaller
     hb = min(10, max(1, pool.ttl_s // 3))
     return {
         "instance_id": it.instance_id,
@@ -304,5 +306,5 @@ async def list_topology_links() -> Dict[str, Any]:
     return {"kdn_links": await get_kdn_links_snapshot()}
 
 
-# Maintains the existing proxy/scheduler experiment flow.
+# Export app publicly
 control_plane = _control_plane

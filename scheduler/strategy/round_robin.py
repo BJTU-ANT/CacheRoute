@@ -1,8 +1,6 @@
-"""Implements round-robin resource selection."""
 # scheduler/strategy/round_robin.py
+"""Implements round-robin proxy selection for the Scheduler."""
 from __future__ import annotations
-
-"""Implements a round-robin selection strategy over currently available resources."""
 
 import threading
 
@@ -11,7 +9,12 @@ from .base import ProxySelectionStrategy
 
 
 class RoundRobinStrategy(ProxySelectionStrategy):
-    """Implements a round-robin selection strategy over currently available resources."""
+    """
+    The simplest round-robin:
+    - perform modulo rotation over the current live proxy list
+    - protect the index with threading.Lock to avoid concurrent requests disrupting order
+    - request_ctx is unused by this strategy but kept for a unified interface so the scheduler can call all strategies uniformly
+    """
 
     name: str = "round_robin"
 
