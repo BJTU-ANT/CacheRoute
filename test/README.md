@@ -8,19 +8,32 @@ The default single-machine demo ports are:
 |---|---:|---:|
 | Scheduler | `7001` | `7002` |
 | Proxy | `8001` | `8002` |
+| Proxy UI | - | `8202` |
+| Client UI | - | `7071` |
 | Instance | `9001` | `9002` |
 | KDN Server | `9101` | - |
 | Resource Agent | `9201` | - |
+| Instance Resource Dashboard | - | `9202` |
+
+## Browser frontend URLs
+
+| Component | Default URL | Started by | Notes |
+|---|---|---|---|
+| Proxy UI | `http://127.0.0.1:8202` | `demo_proxy.py` | Enabled by default. Use `--no-proxy-ui` to disable. |
+| Client UI | `http://127.0.0.1:7071/ui/client` | `demo_client.py --with-ui` | Sends OpenAI-compatible requests to Scheduler. |
+| Instance Resource Dashboard | `http://127.0.0.1:9202` | `instance/resource_dashboard/dashboard_server.py` | Browser fallback for the Rust Resource Agent. |
+| Scheduler UI | TBD | TBD | Planned. |
+| KDN Server UI | TBD | TBD | Planned. |
 
 ## Main demo files
 
 | File | Purpose | Typical usage |
 |---|---|---|
 | `demo_scheduler.py` | Starts Scheduler service plane and control plane. Use it when validating full Client -> Scheduler -> Proxy routing. | `python3 demo_scheduler.py --cacheroute` |
-| `demo_proxy.py` | Starts Proxy service plane and Proxy control plane. It registers to Scheduler if available, and accepts Instance registration/resource reports on `8002`. | `python3 demo_proxy.py --strategy round_robin --injection-strategy iws` |
+| `demo_proxy.py` | Starts Proxy service plane, Proxy control plane, and the browser Proxy UI by default. It registers to Scheduler if available, and accepts Instance registration/resource reports on `8002`. | `python3 demo_proxy.py --strategy round_robin --injection-strategy iws` |
 | `demo_instance.py` | Starts an Instance service. By default it registers to Proxy, starts or reuses the Rust Resource Agent, reports resource snapshots after registration, and cleans up demo-owned agent processes on shutdown. | `python3 demo_instance.py --host 127.0.0.1 --port 9001 --proxy-cp-url http://127.0.0.1:8002` |
 | `demo_kdn.py` | Starts the KDN Server for text/KVCache metadata query and registration. | `python3 demo_kdn.py` |
-| `demo_client.py` | Sends demo requests through CacheRoute. Can be used with or without UI depending on flags. | `python3 demo_client.py --with-ui` |
+| `demo_client.py` | Sends demo requests through CacheRoute. Can be used with or without browser UI. | `python3 demo_client.py --with-ui` |
 | `demo_run.py` | Historical helper for running a demo flow. Check the script body before relying on it for new experiments. | `python3 demo_run.py` |
 | `demo_embedding.py` | Local embedding / retrieval validation helper. | `python3 demo_embedding.py` |
 | `demo_request_handle.py` | Request parsing and request-handle validation helper. | `python3 demo_request_handle.py` |
@@ -52,6 +65,12 @@ python3 demo_proxy.py \
   --injection-strategy iws
 ```
 
+`demo_proxy.py` prints the Proxy UI URL when the UI starts successfully:
+
+```text
+[demo_proxy] Proxy UI available at: http://127.0.0.1:8202
+```
+
 Terminal 2:
 
 ```bash
@@ -70,11 +89,17 @@ python3 demo_instance.py \
 4. periodically report snapshots to `http://127.0.0.1:8002/v1/instance/resource_snapshot`;
 5. kill only the Resource Agent process group it started when Instance exits.
 
-Inspect resource status:
+Inspect resource status with curl:
 
 ```bash
 curl -sS "http://127.0.0.1:8002/debug/instance_resources" | python3 -m json.tool
 curl -sS "http://127.0.0.1:8002/v1/instance/list?include_dead=true" | python3 -m json.tool
+```
+
+Or open the Proxy UI:
+
+```text
+http://127.0.0.1:8202
 ```
 
 Disable resource monitoring:
@@ -89,6 +114,30 @@ Use a non-default Resource Agent port:
 python3 demo_instance.py \
   --resource-agent-listen 127.0.0.1:19201 \
   --resource-agent-url http://127.0.0.1:19201
+```
+
+## Client browser UI
+
+Start the Client UI:
+
+```bash
+cd test
+python3 demo_client.py --with-ui
+```
+
+Open:
+
+```text
+http://127.0.0.1:7071/ui/client
+```
+
+Override the listen address or Scheduler URL when needed:
+
+```bash
+python3 demo_client.py --with-ui \
+  --ui-host 0.0.0.0 \
+  --ui-port 7071 \
+  --scheduler-url http://127.0.0.1:7001/v1/chat/completions
 ```
 
 ## Resource-monitor e2e smoke script
@@ -121,6 +170,7 @@ python3 demo_scheduler.py --cacheroute
 # Terminal 3: Proxy
 cd test
 python3 demo_proxy.py --strategy round_robin --injection-strategy iws
+# Open http://127.0.0.1:8202 for the Proxy UI.
 
 # Terminal 4: Instance
 cd test
@@ -129,6 +179,7 @@ python3 demo_instance.py --host 127.0.0.1 --port 9001 --proxy-cp-url http://127.
 # Terminal 5: Client
 cd test
 python3 demo_client.py --with-ui
+# Open http://127.0.0.1:7071/ui/client for the Client UI.
 ```
 
 For focused Proxy/Instance development, Scheduler and KDN are optional unless the specific feature under test requires them.
@@ -138,13 +189,13 @@ For focused Proxy/Instance development, Scheduler and KDN are optional unless th
 Check ports:
 
 ```bash
-ss -ltnp | grep -E "7001|7002|8001|8002|9001|9002|9101|9201" || true
+ss -ltnp | grep -E "7001|7002|7071|8001|8002|8202|9001|9002|9101|9201|9202" || true
 ```
 
 Find stale demo processes:
 
 ```bash
-ps -ef | grep -E "demo_scheduler|demo_proxy|demo_instance|demo_kdn|resource_agent|cargo" | grep -v grep
+ps -ef | grep -E "demo_scheduler|demo_proxy|demo_instance|demo_kdn|demo_client|proxy_ui|resource_agent|cargo" | grep -v grep
 ```
 
 If old external processes are heartbeating to Proxy with unknown IDs, inspect their environment:
