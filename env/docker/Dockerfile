@@ -64,7 +64,7 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
 # install pip
 RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3
 
-# 设置工作目录
+# Set the working directory
 WORKDIR /workspace
 
 CMD ["bash"]
