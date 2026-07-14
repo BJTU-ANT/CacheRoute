@@ -1,3 +1,4 @@
+"""Local TTFT measurement helpers for direct vLLM smoke tests."""
 import time
 import asyncio
 import aiohttp
@@ -5,7 +6,7 @@ from transformers import AutoTokenizer
 from typing import Optional
 
 def generate_prompt_with_tokens(tokenizer, target_token_count: int) -> str:
-    """使用指定的 tokenizer 生成一个包含大致数量 token 的 prompt。"""
+    """Generate a prompt with approximately the requested number of tokens using the specified tokenizer."""
     if target_token_count <= 0: return ""
     base_text = "This is a long context test to measure the performance of the system. "
     base_token_ids = tokenizer.encode(base_text, add_special_tokens=False)
@@ -21,7 +22,7 @@ async def measure_ttft(
     model: str, 
     prompt: str
 ) -> Optional[float]:
-    """向 vLLM 服务器发送单个请求并测量 TTFT。"""
+    """Send one request to the vLLM server and measure TTFT."""
     api_url = f"http://{host}:{port}/v1/chat/completions"
     headers = {"Content-Type": "application/json"}
     payload = {
@@ -36,7 +37,7 @@ async def measure_ttft(
     try:
         async with session.post(api_url, headers=headers, json=payload) as resp:
             if resp.status != 200:
-                # 不打印错误，让调用者决定如何处理
+                # Do not print errors; let the caller decide how to handle them.
                 return None
             async for chunk in resp.content.iter_any():
                 if chunk:

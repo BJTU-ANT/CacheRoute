@@ -1,3 +1,4 @@
+"""Demo script for collecting a continuous TPOT curve for one batch size."""
 import asyncio
 from tpot_predictor import (
     collect_continuous_tpot_curve,
@@ -9,12 +10,12 @@ from tpot_predictor import (
 async def main():
     result = await collect_continuous_tpot_curve(
         batch_size=1,
-        real_input_length=33,   # 固定起点
-        length_start=33,        # 想看的连续 length 起点
-        length_end=1024,         # 想看的连续 length 终点
-        max_tokens=64,          # 单次请求覆盖窗口长度
-        repeats=5,              # 重复次数，建议至少 3
-        overlap_tokens=16,       # 相邻窗口重叠一点，减少缺口
+        real_input_length=33,   # Fixed start point
+        length_start=33,        # Start of the continuous length range to inspect
+        length_end=1024,         # End of the continuous length range to inspect
+        max_tokens=64,          # Window length covered by one request
+        repeats=5,              # Repeat count; at least 3 is recommended
+        overlap_tokens=16,       # Slightly overlap adjacent windows to reduce gaps
         concurrency = 1,
         outlier_method = "mad",
         outlier_threshold = 3.5,
@@ -23,7 +24,7 @@ async def main():
         spike_ratio_threshold = 1.8,
     )
 
-    # 连续区间结果：按 64,65,...,128 排好
+    # Continuous-range results sorted as 64, 65, ..., 128.
     regressor = result["regressor"]
 
     print(result["coverage"])

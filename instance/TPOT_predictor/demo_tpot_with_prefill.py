@@ -1,3 +1,4 @@
+"""Demo script for collecting TPOT curves while background prefill load is active."""
 import asyncio
 from tpot_predictor import (
     collect_continuous_tpot_curve,
@@ -25,10 +26,10 @@ async def main():
         prefill_max_tokens=1,
     )
 
-    # 注意：第二次 collect 会 clear_data，所以比较时用 loaded 这次返回的 regressor 不够
-    # 因此建议分两步运行并分别导出 CSV，再用离线脚本比；或者改成单 regressor 持续累积。
+    # Note: the second collect clears data, so the regressor returned by loaded alone is insufficient for comparison.
+    # Run in two steps and export CSVs separately for offline comparison, or switch to one continuously accumulating regressor.
     reg2 = loaded["regressor"]
-    reg2.export_lengthwise_curve("output\prefill_bs1.csv", rows=loaded["range_curve"])
+    reg2.export_lengthwise_curve("output/prefill_bs1.csv", rows=loaded["range_curve"])
     print("=== WITH PREFILL LOAD ===")
     print(summarize_results(loaded["summary"], full_curve_bs=1, length_range=(33, 128)))
     print("prefill coverage:", loaded["coverage"])

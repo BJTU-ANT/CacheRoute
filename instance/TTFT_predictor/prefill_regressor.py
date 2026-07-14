@@ -1,4 +1,5 @@
 # prefill_regressor.py
+"""Static regression model for estimating prefill time from batch size and prompt length."""
 
 import numpy as np
 import asyncio
@@ -8,18 +9,18 @@ from transformers import AutoTokenizer
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
 from typing import List, Tuple, Dict, Optional
-from collections import defaultdict # 新增
+from collections import defaultdict # Added
 
-# 假设 request_generator.py 在同一目录下或在 Python 路径中
+# Assume request_generator.py is in the same directory or on PYTHONPATH.
 from request_generator import generate_prompt_with_tokens, send_test_request
 
 class PrefillTimeRegressor:
     """
-    静态回归器。
-    流程：
-    1. 调用 trigger_warmup_requests 发送负载。
-    2. 外部通过 add_data 注入收集到的 (batch_size, prompt_len, time)。
-    3. 当收集到的数据量达到预期时，调用 fit() 进行拟合。
+    Static regressor.
+    Workflow:
+    1. Call trigger_warmup_requests to send load.
+    2. Inject collected (batch_size, prompt_len, time) samples externally through add_data.
+    3. Call fit() when the collected data volume reaches the expectation.
     """
 
     def __init__(self):
@@ -28,27 +29,27 @@ class PrefillTimeRegressor:
         self._is_fitted = False
         self._coeffs = {'a': 0.0, 'b': 0.0, 'c': 0.0, 'd': 0.0}
         
-        # 训练数据缓冲区
+        # Training data buffer.
         self._training_data: List[Tuple[int, int, float]] = []
 
     def _transform_features(self, batchsize: int, prompt_length: int) -> np.ndarray:
         return np.array([[batchsize * prompt_length, prompt_length, batchsize]])
 
     def fit(self):
-        """手动触发拟合"""
+        """Manually trigger fitting."""
         if not self._training_data:
             print("[Regressor] Warning: No data to fit.")
             return
 
         data = self._training_data
         
-        # === 新增：打印详细的数据收集统计 ===
+        # Print detailed data-collection statistics.
         print("\n--- 📊 Data Collection Summary ---")
         stats = defaultdict(list)
         for bs, pl, t in data:
             stats[(bs, pl)].append(t)
         
-        # 按 BS 然后 PL 排序输出
+        # Sort output by batch size and then prompt length.
         for (bs, pl), times in sorted(stats.items()):
             avg_t = np.mean(times)
             min_t = np.min(times)
@@ -68,7 +69,7 @@ class PrefillTimeRegressor:
         self.model.fit(X_scaled, y)
         self._is_fitted = True
 
-        # 反归一化系数
+        # De-normalized coefficients.
         raw_coeffs_scaled = self.model.coef_
         intercept_scaled = self.model.intercept_
         mean = self.scaler.mean_
@@ -90,7 +91,7 @@ class PrefillTimeRegressor:
 
     def add_data(self, batch_size: int, prompt_length: int, prefill_time: float):
         """
-        供外部调用的数据注入接口。
+        Data injection interface for external callers.
         """
         self._training_data.append((batch_size, prompt_length, prefill_time))
 
@@ -104,7 +105,7 @@ class PrefillTimeRegressor:
         repeats_per_config: int = 3
     ):
         """
-        只负责发送请求以触发负载。
+        Only sends requests to trigger load.
         """
         print("--- 🚀 Triggering Warmup Requests ---")
         print(f"[INFO] Configs: {len(test_configs)}, Repeats: {repeats_per_config}")
@@ -119,14 +120,14 @@ class PrefillTimeRegressor:
         
         async with aiohttp.ClientSession(timeout=timeout) as session:
             for bs, pl in test_configs:
-                # 打印当前正在触发的配置
+                # Print the configuration currently being triggered.
                 print(f"   >> Firing: BatchSize={bs}, PromptLen={pl} (x{repeats_per_config})")
 
                 for i in range(repeats_per_config):
-                    # 每一轮都重新生成 prompt，避免 repeats 轮次重复发送完全相同上下文导致缓存命中偏高
+                    # Regenerate the prompt each round to avoid repeatedly sending the exact same context and inflating cache hits.
                     prompts = [generate_prompt_with_tokens(tokenizer, pl) for _ in range(bs)]
 
-                    # 并发发送请求
+                    # Send requests concurrently.
                     round_start_ts = time.perf_counter()
                     dispatch_ts = []
                     tasks = []
@@ -142,7 +143,7 @@ class PrefillTimeRegressor:
                             )
                         )
 
-                    # 记录同一轮中 prompt 投递的时间间隔；若超过 10ms 可能影响同批次聚合
+                    # Record prompt dispatch intervals within the same round; intervals over 10ms may affect same-batch aggregation.
                     if len(dispatch_ts) > 1:
                         gaps_ms = [
                             (dispatch_ts[j] - dispatch_ts[j - 1]) * 1000
@@ -168,8 +169,8 @@ class PrefillTimeRegressor:
                                 f"task={task_idx}/{bs}, ttft={ttft*1000:.2f}ms"
                             )
 
-                    # 记录同一轮内每个请求的 TTFT，并转成相对 round_start 的首 token 到达时刻。
-                    # 注意：arrival_offsets 主要用于观测是否出现“伪串行”，训练样本默认用请求 TTFT 的均值。
+                    # Record each request TTFT in the same round and convert it to first-token arrival offset relative to round_start.
+                    # Note: arrival_offsets mainly help observe pseudo-serialization; training samples default to the mean request TTFT.
                     valid_ttfts = []
                     arrival_offsets = []
                     for idx, ttft in enumerate(results):
@@ -189,8 +190,8 @@ class PrefillTimeRegressor:
                             f"arrival_span={arrival_span_ms:.1f}ms"
                         )
 
-                        # 支持不同口径采样。
-                        # 你当前实验口径建议使用 mid_minmax:
+                        # Support different sampling policies.
+                        # The current experiment policy recommends mid_minmax:
                         # batch_time = (min_ttft + max_ttft) / 2
                         sample_policy = str(vllm_config.get("batch_sample_policy", "mid_minmax")).lower()
                         if sample_policy == "max_arrival":
@@ -210,7 +211,7 @@ class PrefillTimeRegressor:
                             f"BS={bs}, PL={pl}, repeat={i+1}"
                         )
                     
-                    # 适当的间隔
+                    # Appropriate interval.
                     await asyncio.sleep(0.5) 
         
         print("\n--- 🏁 All Warmup Requests Sent ---")
