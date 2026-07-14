@@ -32,6 +32,7 @@
   <a href="#why-cacheroute">Why CacheRoute?</a> •
   <a href="#key-features">Features</a> •
   <a href="#architecture">Architecture</a> •
+  <a href="#frontend-urls">Frontend URLs</a> •
   <a href="#quick-start">Quick Start</a> •
   <a href="#api-usage">API</a> •
   <a href="#documentation">Docs</a>
@@ -64,7 +65,7 @@ CacheRoute addresses this problem by using KDN servers to store KVCache blocks f
 | ⚙️ **Compute-network-aware knowledge injection** | CacheRoute dynamically chooses between text recomputation and KVCache reuse. It predicts task cost at the proxy and selects the injection strategy based on current task queues, compute load, and network load. |
 | 🧭 **Knowledge-oriented cross-system routing** | CacheRoute parses the knowledge requirement before resource-pool scheduling. The scheduler jointly considers knowledge availability, system load, and topology information, and routes requests to the LLM system that can serve the required knowledge more efficiently. |
 | 🗂️ **KDN-based KV cache management** | CacheRoute follows Knowledge Delivery Networks' idea, using dedicated KDN servers to register, store, query, and inject KV cache blocks for reusable knowledge. This enables external knowledge to be reused across LLM systems instead of being repeatedly recomputed. |
-| 📊 **Optional Instance resource dashboard** | CacheRoute provides a Rust resource agent and a lightweight dashboard to visualize local Instance CPU, memory, GPU, network, and admission-state snapshots for validation. This dashboard does not drive Scheduler decisions yet. |
+| 📊 **Proxy browser UI and Instance resource dashboard** | CacheRoute provides a browser-based Proxy observability dashboard and an optional Instance resource dashboard. They visualize control-plane status, Instance liveness, resource snapshots, topology information, and short-term resource trends without changing scheduling behavior. |
 
 ---
 
@@ -77,22 +78,36 @@ CacheRoute separates global routing, local injection decision, and KV cache mana
 </p>
 
 - **Scheduler:** performs global resource-pool selection and knowledge-oriented task routing.
-- **Proxy:** manages local task queues and selects the knowledge injection strategy.
+- **Proxy:** manages local task queues, selects knowledge injection strategy, and exposes the main Proxy browser UI.
 - **Instance:** connects CacheRoute with vLLM + LMCache and handles execution signaling.
 - **KDN Server:** stores reusable knowledge and injects KVCache blocks when needed.
 - **Resource Agent/Dashboard:** optionally observes local Instance resource snapshots for validation and future control-plane integration.
 
 ### Default ports
 
-| Component | Service Plane | Control Plane |
+| Component | Service Plane | Control Plane / Auxiliary |
 |---|---:|---:|
 | Scheduler | 7001 | 7002 |
 | Proxy | 8001 | 8002 |
-| Instance | 9001 | - |
+| Proxy UI | - | 8202 |
+| Client UI | - | 7071 |
+| Instance | 9001 | 9002 |
 | vLLM | 8000 | - |
 | KDN Server | 9101 | - |
 | Resource Agent (optional) | 9201 | - |
-| Resource Dashboard (optional) | 9202 | - |
+| Instance Resource Dashboard (optional) | - | 9202 |
+
+### Frontend URLs
+
+| Component | Frontend | Default URL | How to start | Status |
+|---|---|---|---|---|
+| Proxy | Proxy browser observability dashboard | `http://127.0.0.1:8202` | `cd test && python3 demo_proxy.py ...` starts it by default and prints the URL. Use `--no-proxy-ui` to disable it. | Available |
+| Instance | Browser resource dashboard | `http://127.0.0.1:9202` | `python3 instance/resource_dashboard/dashboard_server.py --dashboard-listen 0.0.0.0:9202 --agent-listen 127.0.0.1:9201` | Available |
+| Client | Browser request UI | `http://127.0.0.1:7071/ui/client` | `cd test && python3 demo_client.py --with-ui` | Available |
+| Scheduler | Scheduler browser UI | TBD | TBD | Planned |
+| KDN Server | KDN browser UI | TBD | TBD | Planned |
+
+The frontend URLs above assume a single-machine demo with loopback addresses. In containers without host networking, expose the corresponding UI ports or replace `127.0.0.1` with the host / forwarded address.
 
 ### System Workflow
 
@@ -101,7 +116,7 @@ CacheRoute separates global routing, local injection decision, and KV cache mana
 3. The Proxy predicts the cost of text-based and KVCache-based injection.
 4. The KDN Server injects reusable KVCache blocks when KVCache reuse is selected.
 5. The Instance forwards the request to vLLM + LMCache and returns the response.
-6. Optionally, the Resource Agent and Dashboard visualize local Instance resource snapshots for debugging and validation.
+6. Optionally, the Proxy UI and Instance Resource Dashboard visualize control-plane and resource state for debugging and validation.
 
 ---
 
@@ -148,7 +163,9 @@ python3 demo_instance.py --port 9001 --host 127.0.0.1
 python3 demo_client.py --with-ui
 ```
 
-Then, you can use the client_cli to send requests (see example in `API Usage`) to the scheduler and see the entire CacheRoute workflow.
+`demo_proxy.py` starts the Proxy browser UI by default and prints a URL similar to `http://127.0.0.1:8202`. `demo_client.py --with-ui` starts the Client browser UI at `http://127.0.0.1:7071/ui/client` by default.
+
+Then, you can use the client_cli or Client UI to send requests (see example in `API Usage`) to the scheduler and see the entire CacheRoute workflow.
 
 ### Option 2: Full CacheRoute Deployment
 
@@ -384,6 +401,7 @@ CacheRoute is under active development. The current release supports:
 - Proxy selection based on topology, load safety window, and knowledge history.
 - Proxy-side dynamic injection strategy selection.
 - KDN-based text registration and KVCache registration.
+- Proxy browser UI for control-plane, topology, Instance liveness, and resource-snapshot observability.
 - Optional Instance resource snapshots through a Rust agent and dashboard.
 - Debugging APIs such as `/debug/status` and `/debug/strategy`.
 
@@ -402,7 +420,10 @@ curl -s http://127.0.0.1:7001/debug/strategy
 - [x] Proxy-side dynamic injection strategy selection
 - [x] KDN-based text and KVCache registration
 - [x] OpenAI-compatible request forwarding
+- [x] Proxy browser observability UI
 - [x] Optional Instance resource dashboard
+- [ ] Scheduler browser UI
+- [ ] KDN Server browser UI
 - [ ] More deployment examples
 - [ ] Benchmark scripts and reproducible evaluation
 - [ ] More KV cache placement policies
