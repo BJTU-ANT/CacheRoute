@@ -242,7 +242,7 @@ class DemoResourceMonitor:
 
 
 def main():
-    # ====== 启动 Instance 服务 ======
+    # ====== Start Instance service ======
     parser = argparse.ArgumentParser(description="Run CacheRoute Instance")
     parser.add_argument("--host", type=str, default=None, help="listen host (override config)")
     parser.add_argument("--port", type=int, default=None, help="listen port (override config)")
@@ -336,15 +336,15 @@ def main():
     parser.add_argument("--proxy-cp-url", type=str, default=os.environ.get("PROXY_CP_URL", config.PROXY_CP_URL), help="Proxy control-plane URL for registration/reporting")
     args = parser.parse_args()
 
-    # 默认来自 config / env；若命令行提供则覆盖
+    # Defaults come from config/env; command-line values override them
     cfg_port = int(os.environ.get("INSTANCE_PORT", config.INSTANCE_PORT))
     cfg_host = os.environ.get("INSTANCE_HOST", config.INSTANCE_HOST)
 
     host = args.host if args.host is not None else cfg_host
     port = args.port if args.port is not None else cfg_port
 
-    # 保证 “监听端口 == 注册上报端口”
-    # instance_api.py 的 lifespan 读取 INSTANCE_ADVERTISE_HOST/PORT 与 INSTANCE_PORT
+    # Ensure listening port == registered advertised port
+    # instance_api.py lifespan reads INSTANCE_ADVERTISE_HOST/PORT and INSTANCE_PORT
     os.environ["INSTANCE_ADVERTISE_HOST"] = host
     os.environ["INSTANCE_ADVERTISE_PORT"] = str(port)
     os.environ["INSTANCE_PORT"] = str(port)
@@ -352,7 +352,7 @@ def main():
     if args.kdn_targets:
         os.environ["INSTANCE_TOPOLOGY_KDN_TARGETS"] = args.kdn_targets.strip()
 
-    # （可选但强烈建议）确保每个实例 id 唯一，避免 pool upsert 覆盖
+    # (optional but strongly recommended)ensure each instance ID is unique to avoid pool upsert overwrite
     os.environ.setdefault("INSTANCE_ID", f"hp_{host}:{port}")
 
     monitor_enabled = bool(args.resource_monitor)

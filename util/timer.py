@@ -2,8 +2,8 @@ import time
 
 def timing(func):
     """
-        输出某个函数的执行时间，ms。
-        用法，在@classmethod后一行添加@timing
+        Print the execution time of a function in milliseconds.
+        Usage: add @timing on the line after @classmethod.
     """
     def wrapper(*args, **kwargs):
         t0 = time.perf_counter()

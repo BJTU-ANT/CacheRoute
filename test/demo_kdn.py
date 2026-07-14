@@ -62,7 +62,7 @@ if __name__ == "__main__":
 
     args = build_args()
 
-    # 这里暴露配置（你想要的“demo里配置，不在模块里写死”）
+    # Expose configuration here: configure it in the demo rather than hard-coding it in the module
     os.environ["KDN_TEXT_DB_DIR"] = str(KDN_TEXT_DB_DIR)
     os.environ["KDN_KV_DB_DIR"] = str(KDN_KV_DB_DIR)
     os.environ[

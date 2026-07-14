@@ -6,7 +6,7 @@ from CacheRoute.core import TokenizerRegistry
 
 
 """
-    本地验证 Request.build_request 对不同请求格式的兼容性：
+    Locally validate Request.build_request compatibility with different request formats:
         1) legacy: {"model", "user_prompt"}
         2) /v1/chat/completions: {"model", "messages":[...], ...}
         3) /v1/completions: {"model", "prompt": ... , ...}
@@ -14,14 +14,14 @@ from CacheRoute.core import TokenizerRegistry
 FAKE_USER_IP = "192.168.1.123"
 
 def build_legacy_payload() -> Dict[str, Any]:
-    """旧版 TCP 协议：直接传递 user_prompt。"""
+    """Legacy TCP protocol: pass user_prompt directly."""
     return {
         "model": "/workspace/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
-        "user_prompt": "这是 legacy 协议下的简单问句。",
+        "user_prompt": "This is a simple question under the legacy protocol.",
     }
 
 def build_chat_completions_payload() -> Dict[str, Any]:
-    """/v1/chat/completions 风格：使用 messages。"""
+    """/v1/chat/completions style: use messages."""
     return {
         "model": "/workspace/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
         "messages": [
@@ -35,10 +35,10 @@ def build_chat_completions_payload() -> Dict[str, Any]:
     }
 
 def build_completions_payload() -> Dict[str, Any]:
-    """/v1/completions 风格：使用 prompt。"""
+    """/v1/completions style: use prompt."""
     return {
         "model": "/workspace/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B",
-        "prompt": "用中文简单介绍一下算力网络和 KDN 的区别。",
+        "prompt": "Briefly introduce the difference between compute-power networks and KDN.",
         "max_tokens": 512,
         "temperature": 0.3,
         "top_p": 1.0,
@@ -46,7 +46,7 @@ def build_completions_payload() -> Dict[str, Any]:
     }
 
 if __name__ == "__main__":
-    # 调度器预热tokenizer
+    # Scheduler tokenizer warmup
     TokenizerRegistry.warmup_tokenizers("/workspace/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B")
 
     start = time.perf_counter()
@@ -80,8 +80,8 @@ if __name__ == "__main__":
     print(req_comp)
     end = time.perf_counter()
     time = (end - start) * 1000
-    print(f"build_request_info 耗时：{time:.4f} ms")
+    print(f"build_request_info elapsed:{time:.4f} ms")
 
-    # 读取任务的模型参数
+    # Read task model parameters
     model_config = model_config.get_config_by_model(req_legacy.Prompt.model)
     print(model_config)
