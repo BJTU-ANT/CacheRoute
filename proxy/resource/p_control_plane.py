@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI
@@ -106,6 +107,24 @@ async def healthz() -> Dict[str, Any]:
     return {"ok": True, "ttl_s": pool.ttl_s}
 
 
+
+
+@_control_plane.get("/debug/status")
+async def debug_status() -> Dict[str, Any]:
+    pool = get_pool()
+    alive_items = pool.list(include_dead=False)
+    all_items = pool.list(include_dead=True)
+    return {
+        "ok": True,
+        "ttl_s": pool.ttl_s,
+        "alive_instances": len(alive_items),
+        "total_instances": len(all_items),
+        "expired_instances": max(0, len(all_items) - len(alive_items)),
+        "sample_ids": [it.instance_id for it in alive_items[:10]],
+        "topology_kdn_links": len(_kdn_links),
+    }
+
+
 @_control_plane.post("/v1/instance/register")
 async def register(req: InstanceRegisterReq) -> Dict[str, Any]:
     pool = get_pool()
@@ -188,7 +207,9 @@ async def list_instances(include_dead: bool = False) -> List[Dict[str, Any]]:
     pool = get_pool()
     items = pool.list(include_dead=include_dead)
     out: List[Dict[str, Any]] = []
+    now = int(time.time())
     for it in items:
+        is_alive = (now - int(it.last_seen_at)) <= pool.ttl_s
         out.append({
             "instance_id": it.instance_id,
             "host": it.host,
@@ -223,8 +244,8 @@ async def list_instances(include_dead: bool = False) -> List[Dict[str, Any]]:
                 "reported_instance_id": it.resource.reported_instance_id,
                 "raw_resource": it.resource.raw_resource,
             },
-            # 由 include_dead 决定返回集合，alive 在这里标记方便调试
-            "is_alive": True if not include_dead else None,
+            # Always expose the real TTL-derived state so UIs can distinguish alive and stale rows.
+            "is_alive": is_alive,
         })
     return out
 

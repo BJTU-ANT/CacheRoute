@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CacheRoute Proxy UI</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand-mark">CR</div>
+      <div>
+        <h1>CacheRoute Proxy UI</h1>
+        <p>Observability dashboard for Proxy, Instance resources, topology, and Scheduler registration.</p>
+      </div>
+    </div>
+    <div class="topbar-status">
+      <span id="proxyHealthBadge" class="badge muted-badge">Proxy: loading</span>
+      <span id="schedulerBadge" class="badge muted-badge">Scheduler: loading</span>
+      <span id="lastUpdated" class="topbar-time">Never updated</span>
+    </div>
+    <div class="topbar-actions">
+      <button id="refreshBtn" class="primary">Refresh now</button>
+      <button id="pauseBtn">Pause polling</button>
+      <button id="themeBtn">Light theme</button>
+    </div>
+  </header>
+
+  <nav class="controls" aria-label="Dashboard controls">
+    <label>
+      Auto refresh
+      <select id="intervalSelect">
+        <option value="1000">1s</option>
+        <option value="3000" selected>3s</option>
+        <option value="5000">5s</option>
+        <option value="10000">10s</option>
+      </select>
+    </label>
+    <label><input id="aliveOnlyToggle" type="checkbox"> Show alive only</label>
+    <label><input id="staleOnlyToggle" type="checkbox"> Show stale only</label>
+    <label><input id="resourcesOnlyToggle" type="checkbox"> With resources only</label>
+    <label class="search-box">
+      Search
+      <input id="searchInput" type="search" placeholder="instance id or host">
+    </label>
+    <button id="clearHistoryBtn">Clear chart history</button>
+    <button id="copyDiagnosticsBtn">Copy diagnostics JSON</button>
+    <a id="proxyApiLink" class="button-link" href="/api/proxy/status" target="_blank" rel="noreferrer">Open Proxy API</a>
+  </nav>
+
+  <main>
+    <section class="summary-grid" id="summaryCards" aria-label="Summary cards"></section>
+
+    <section class="panel overview-panel" data-section="overview">
+      <div class="panel-heading">
+        <div>
+          <h2>Resource Trends</h2>
+          <p>Short in-browser history. Missing metrics degrade to empty chart segments.</p>
+        </div>
+        <span id="pollingState" class="badge ok-badge">Polling</span>
+      </div>
+      <div class="chart-grid">
+        <article class="chart-card"><h3>CPU avg %</h3><canvas id="chartCpu" width="460" height="160"></canvas></article>
+        <article class="chart-card"><h3>Memory used %</h3><canvas id="chartMemory" width="460" height="160"></canvas></article>
+        <article class="chart-card"><h3>GPU avg %</h3><canvas id="chartGpu" width="460" height="160"></canvas></article>
+        <article class="chart-card"><h3>Alive / stale instances</h3><canvas id="chartLiveness" width="460" height="160"></canvas></article>
+        <article class="chart-card wide"><h3>Network RX / TX Mbps</h3><canvas id="chartNetwork" width="940" height="160"></canvas></article>
+      </div>
+    </section>
+
+    <section class="panel" data-section="instances">
+      <div class="panel-heading">
+        <div>
+          <h2>Instance Cards</h2>
+          <p id="instanceSummary">Loading instances...</p>
+        </div>
+      </div>
+      <div id="instanceCards" class="instance-grid"></div>
+    </section>
+
+    <section class="panel" data-section="instances">
+      <div class="panel-heading">
+        <div>
+          <h2>Instance Pool Table</h2>
+          <p>Sortable by state, age, CPU, memory, GPU, and resource report time.</p>
+        </div>
+        <select id="sortSelect">
+          <option value="state">Sort: state</option>
+          <option value="age">Sort: last seen age</option>
+          <option value="cpu">Sort: CPU</option>
+          <option value="memory">Sort: memory</option>
+          <option value="gpu">Sort: GPU</option>
+          <option value="resource">Sort: resource report</option>
+        </select>
+      </div>
+      <div class="table-wrap"><table id="instanceTable"></table></div>
+    </section>
+
+    <section class="panel" data-section="resources">
+      <div class="panel-heading">
+        <div>
+          <h2>Resource Snapshot Details</h2>
+          <p id="resourceSummary">Loading resources...</p>
+        </div>
+      </div>
+      <div class="table-wrap"><table id="resourceTable"></table></div>
+    </section>
+
+    <div class="tabbar" role="tablist" aria-label="Detail panels">
+      <button class="tab active" data-tab="topology">Topology</button>
+      <button class="tab" data-tab="scheduler">Scheduler</button>
+      <button class="tab" data-tab="raw">Raw JSON</button>
+    </div>
+
+    <section id="tab-topology" class="panel tab-panel active">
+      <div class="panel-heading">
+        <h2>KDN Topology Links</h2>
+        <button class="copy-btn" data-copy="topology">Copy topology JSON</button>
+      </div>
+      <pre id="topologyPanel">Loading...</pre>
+    </section>
+
+    <section id="tab-scheduler" class="panel tab-panel">
+      <div class="panel-heading">
+        <h2>Scheduler Registration</h2>
+        <button class="copy-btn" data-copy="scheduler">Copy scheduler JSON</button>
+      </div>
+      <pre id="schedulerPanel">Loading...</pre>
+    </section>
+
+    <section id="tab-raw" class="panel tab-panel">
+      <div class="panel-heading">
+        <div>
+          <h2>Raw Diagnostics JSON</h2>
+          <p>Collapsible source payloads for debugging experiment state.</p>
+        </div>
+        <button id="toggleRawBtn">Expand raw JSON</button>
+      </div>
+      <div id="rawJsonPanels" class="raw-panels collapsed"></div>
+    </section>
+  </main>
+
+  <footer class="statusbar">
+    <span id="apiSummary">API endpoints: loading</span>
+    <span id="errorBox"></span>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
