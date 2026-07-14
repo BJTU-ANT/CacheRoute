@@ -86,13 +86,13 @@ CacheRoute separates global routing, local injection decision, and KV cache mana
 ### Default ports
 
 | Component | Service Plane | Control Plane / Auxiliary | UI |
-|---|---:|---:|---:|
+|---|---|---|---|
 | Scheduler | 7001 | 7002 | TBD. |
 | Proxy | 8001 | 8002 | 8202 |
 | Client UI | - | - | 7071 |
 | Instance | 9001 | 9002 | 9202|
 | vLLM | 8000 | - | - |
-| KDN Server | 9101 | - | - |
+| KDN Server | 9101 | - | TBD. |
 
 ### Frontend URLs
 
