@@ -1,4 +1,5 @@
 # kdn_server/kv_builder.py
+"""Build KVCache dump directories by triggering vLLM and diffing Redis keys."""
 from __future__ import annotations
 
 import base64
@@ -34,17 +35,17 @@ class KVBuildConfig:
     redis_db: int = 0
     redis_password: Optional[str] = None
 
-    match: str = "vllm@*"           # 你之前 dump 的 key pattern
+    match: str = "vllm@*"           # Previous dump key pattern.
     scan_count: int = 1000
-    settle_wait_s: float = 0.2      # 请求后等 key 稳定的等待
-    settle_rounds: int = 3          # 连续 N 轮 keys 数不变 => 认为稳定
+    settle_wait_s: float = 0.2      # Wait after request for keys to stabilize.
+    settle_rounds: int = 3          # Treat keys as stable after N consecutive rounds with unchanged key count.
 
-    flushdb: bool = False           # 注意：会清空整个 redis db（危险）
+    flushdb: bool = False           # Warning: clears the entire Redis DB; dangerous.
 
 
 class KVCacheBuilder:
     """
-    统一的“触发推理 -> Redis 扫描 KV key -> dump 到 KV_database/<kid>/”实现。
+    Unified implementation of triggering inference, scanning Redis KV keys, and dumping them to KV_database/<kid>/.
     """
 
     def __init__(self, cfg: KVBuildConfig, text_db=None):
@@ -54,7 +55,7 @@ class KVCacheBuilder:
             port=cfg.redis_port,
             db=cfg.redis_db,
             password=cfg.redis_password,
-            decode_responses=False,   # 必须 False：key/value 都按 bytes 处理
+            decode_responses=False,   # Must be False so key/value are handled as bytes.
         )
         self.text_db = text_db
 
@@ -73,32 +74,32 @@ class KVCacheBuilder:
         kid = compute_kid(norm)
         out_dir = Path(self.cfg.kv_root).resolve() / kid
 
-        # 覆盖刷新：删旧目录
+        # Overwrite refresh: delete the old directory.
         if out_dir.exists():
             shutil.rmtree(out_dir)
         (out_dir / "blocks").mkdir(parents=True, exist_ok=True)
 
         if self.cfg.flushdb:
-            # 高危：会影响同 db 内其他任务
+            # High risk: affects other tasks in the same DB.
             self.rds.flushdb()
 
-        # (A) 记录 before
+        # (A) Record before state.
         keys_before = self._scan_keys_set()
 
-        # (B) 触发一次推理
+        # (B) Trigger one inference request.
         self._trigger_infer(norm)
 
-        # (C) 等待稳定并取 after
+        # (C) Wait for stability and capture after state.
         keys_after = self._wait_keys_settle_set()
 
-        # (D) 差分：只 dump 新增 keys
+        # (D) Diff: dump only newly added keys.
         keys_new = list(keys_after - keys_before)
 
         # 3) dump keys -> files
         manifest_path = out_dir / "manifest.jsonl"
         dumped = self._dump_keys(keys_new, out_dir / "blocks", manifest_path)
 
-        # 4) 写 run_meta
+        # 4) Write run_meta.
         meta = {
             "kid": kid,
             "time": int(time.time()),
@@ -126,7 +127,7 @@ class KVCacheBuilder:
 
 
     def _trigger_infer(self, prompt: str) -> None:
-        # 你之前用的是 /v1/chat/completions，这里保持一致
+        # Preserve previous use of /v1/chat/completions here.
         payload = {
             "model": self.cfg.model,
             "messages": [{"role": "system", "content": prompt}],
@@ -199,7 +200,7 @@ class KVCacheBuilder:
 
                 fname = _b64url(k) + ".dump"
                 fpath = blocks_dir / fname
-                # 原样 bytes 落盘
+                # Persist bytes as-is.
                 fpath.write_bytes(v)
 
                 rec = {

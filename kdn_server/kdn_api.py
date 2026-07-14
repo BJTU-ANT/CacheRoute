@@ -1,4 +1,5 @@
 # kdn_server/kdn_api.py
+"""FastAPI KDN service for text registration, KV build, KV injection, and scheduler reporting."""
 from __future__ import annotations
 
 import asyncio
@@ -35,7 +36,7 @@ _REAL_NET_COND: asyncio.Condition = asyncio.Condition()
 
 
 async def _acquire_real_net_text_slot() -> None:
-    """高优先级文本传输槽位：仅等待当前传输结束。"""
+    """High-priority text transfer slot: wait only for the current transfer to finish."""
     global _REAL_NET_LINK_BUSY, _REAL_NET_TEXT_WAITERS
     async with _REAL_NET_COND:
         _REAL_NET_TEXT_WAITERS += 1
@@ -48,7 +49,7 @@ async def _acquire_real_net_text_slot() -> None:
 
 
 async def _acquire_real_net_kv_slot() -> None:
-    """低优先级 KV 传输槽位：除链路空闲外，还需让出所有待发送文本。"""
+    """Low-priority KV transfer slot: wait for the link to be idle and yield to all pending text transfers."""
     global _REAL_NET_LINK_BUSY
     async with _REAL_NET_COND:
         while _REAL_NET_LINK_BUSY or _REAL_NET_TEXT_WAITERS > 0:
@@ -65,9 +66,9 @@ async def _release_real_net_slot() -> None:
 
 def _resolve_redis_target_host(request_host: str) -> str:
     """
-    为网络调试提供 redis 目标地址重写：
-      1) KDN_FORCE_REDIS_HOST: 无条件覆盖
-      2) KDN_REWRITE_LOOPBACK_TO: 仅在请求是回环地址时重写
+    Provide Redis target-host rewriting for network debugging:
+      1) KDN_FORCE_REDIS_HOST: unconditional override
+      2) KDN_REWRITE_LOOPBACK_TO: rewrite only when the request host is loopback
     """
     enabled_raw = os.getenv("KDN_REDIS_REWRITE_ENABLE", str(getattr(config, "KDN_REDIS_REWRITE_ENABLE", False))).strip().lower()
     enabled = enabled_raw in {"1", "true", "yes", "y", "on"}
@@ -86,7 +87,7 @@ def _resolve_redis_target_host(request_host: str) -> str:
 
 
 def _squelch_noisy_loggers() -> None:
-    # 外部控制信令正常请求不需要持续刷屏
+    # Normal external control-plane requests should not flood logs.
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
@@ -127,13 +128,13 @@ class TransferTask:
 
 class NetworkSimulator:
     """
-    单链路串行网络模拟器（M/D/1 风格）：
-    - 同一时刻只服务 1 个传输任务
-    - 后续任务在 pending 队列排队
-    - 维持 ack 异步返回与可观测队列时延
+    Single-link serial network simulator in an M/D/1 style:
+    - Serves only one transfer task at a time.
+    - Later tasks wait in the pending queue.
+    - Keeps asynchronous ACK return and observable queue latency.
 
-    兼容性说明：
-    - 仍保留 batch_window_ms 参数，但在串行模型中不参与调度，仅保留配置兼容。
+    Compatibility note:
+    - batch_window_ms is retained for configuration compatibility, but does not participate in serial-model scheduling.
     """
 
     def __init__(
@@ -152,7 +153,7 @@ class NetworkSimulator:
         self.batch_seq = 0
         self.running = True
         self.worker_task: Optional[asyncio.Task] = None
-        # 用于心跳上报的轻量统计
+        # Lightweight statistics reported through heartbeat.
         self._active_transfers = 0
         self._queue_ms_ema = 0.0
         self._ema_alpha = 0.2
@@ -227,7 +228,7 @@ class NetworkSimulator:
         self._active_transfers = 0
 
     def get_runtime_stats(self) -> Dict[str, Any]:
-        """返回用于 scheduler heartbeat 的运行时统计。"""
+        """Return runtime statistics for scheduler heartbeat reporting."""
         return {
             "pending_transfers": int(self.pending.qsize()),
             "active_transfers": int(self._active_transfers),
@@ -252,18 +253,18 @@ class NetworkSimulator:
 
 
 def _get_db_dir() -> Path:
-    # 允许 demo 里配置，不在模块里写死
+    # Allow demos to configure this instead of hard-coding it in the module.
     db_dir = os.getenv("KDN_TEXT_DB_DIR", "").strip()
     if db_dir:
         return Path(db_dir).resolve()
-    # 默认放在 kdn_server/text_database
+    # Default to kdn_server/text_database.
     return (Path(__file__).resolve().parent / "text_database").resolve()
 
 def _get_kv_root_dir() -> Path:
     kv_dir = os.getenv("KDN_KV_DB_DIR", "").strip()
     if kv_dir:
         return Path(kv_dir).resolve()
-    # 默认与 text_database 同级：kdn_server/KV_database
+    # Default to kdn_server/KV_database next to text_database.
     return (Path(__file__).resolve().parent / "KV_database").resolve()
 
 
@@ -273,7 +274,7 @@ async def _startup():
 
     _squelch_noisy_loggers()
 
-    # 1) 原有 TextDB 初始化逻辑（保持不变）
+    # 1) Existing TextDB initialization logic, kept unchanged.
     db_dir = _get_db_dir()
     embedding_model = os.getenv("KDN_EMBEDDING_MODEL")
     print(f"[KDN] KDN_EMBEDDING_MODEL={embedding_model!r}")
@@ -403,14 +404,14 @@ async def topology_ping() -> Dict[str, Any]:
 @kdn.post("/knowledge/snapshot")
 async def knowledge_snapshot(payload: Dict[str, Any]):
     """
-    Scheduler 启动时拉取 KDN 知识库快照：
+    Scheduler pulls the KDN knowledge-base snapshot at startup:
       {
         "need_fields": ["kid","length","embedding","embed_dim","kv_ready","kv_rel_dir","kv_dumped_keys","kv_updated_at","rel_path"],
         "limit": 1000000,
         "offset": 0
       }
 
-    返回：
+    Returns:
       { "items": [...], "count": N, "limit": L, "offset": O }
     """
     if _TEXT_DB is None:
@@ -420,7 +421,7 @@ async def knowledge_snapshot(payload: Dict[str, Any]):
     if not isinstance(need_fields, list):
         return JSONResponse(status_code=400, content={"error": "need_fields must be a list"})
 
-    # 默认给足建库需要字段
+    # Provide all fields needed to build the scheduler knowledge table by default.
     if not need_fields:
         need_fields = [
             "kid", "length", "embedding", "embed_dim",
@@ -433,12 +434,12 @@ async def knowledge_snapshot(payload: Dict[str, Any]):
     include_embedding = ("embedding" in need_fields)
     rows = _TEXT_DB.snapshot(limit=limit, offset=offset, include_embedding=include_embedding)
 
-    # --- 字段投影：只返回 scheduler 要的字段，避免无用大字段 ---
+    # --- Field projection: return only scheduler-requested fields to avoid unnecessary large fields. ---
     allow = set(need_fields)
     items = []
     for r in rows:
         item = {}
-        # KDN 对外字段名统一：kid
+        # Externally, KDN uses the unified field name: kid.
         if "kid" in allow:
             item["kid"] = r.get("kid")
         if "rel_path" in allow:
@@ -471,10 +472,10 @@ async def knowledge_snapshot(payload: Dict[str, Any]):
 @kdn.post("/knowledge/register_text")
 async def register_text(payload: Dict[str, Any]):
     """
-    外部系统 -> KDN 注册知识块：
+    External system -> KDN knowledge-block registration:
       { "content": "...", "meta": { ... optional ... } }
 
-    返回：
+    Returns:
       { "kid": "<sha256>", "status": "created|exists", "length": 123 }
     """
     if _TEXT_DB is None:
@@ -498,12 +499,12 @@ async def register_text(payload: Dict[str, Any]):
 @kdn.post("/knowledge/build_kv")
 async def build_kv(payload: Dict[str, Any]):
     """
-    触发为某个 kid 生成 KVCache dump 并落盘到 KV_database/<kid>/。
+    Trigger KVCache dump generation for a kid and persist it under KV_database/<kid>/.
 
-    请求（最小）：
+    Minimal request:
       { "kid": "<kid>", "api_url": "...", "model": "..." }
 
-    可选参数：
+    Optional parameters:
       max_tokens, temperature,
       redis_host, redis_port, redis_db, redis_password,
       match, scan_count, flushdb
@@ -522,15 +523,15 @@ async def build_kv(payload: Dict[str, Any]):
     if not isinstance(model, str) or not model.strip():
         return JSONResponse(status_code=400, content={"error": "model must be a string"})
 
-    # 1) 从 TextDatabase 取文本（必须完全一致，确保后续复用命中）
+    # 1) Read text from TextDatabase; it must match exactly to ensure later reuse hits.
     items, miss = _TEXT_DB.get_many([kid.strip().lower()])
     if miss or not items:
         return JSONResponse(status_code=404, content={"error": f"kid not found: {kid}"})
 
-    kb = items[0]  # 你当前 get_many 保证顺序
+    kb = items[0]  # Current get_many preserves order.
     text = kb.content
 
-    # 2) 组装 KV build 配置
+    # 2) Assemble KV build configuration.
     kv_root = str(_get_kv_root_dir())
     cfg = KVBuildConfig(
         kv_root=kv_root,
@@ -547,26 +548,26 @@ async def build_kv(payload: Dict[str, Any]):
         flushdb=bool(payload.get("flushdb", False)),
     )
 
-    # 3) 触发 build（覆盖刷新 KV_database/<kid>/）
+    # 3) Trigger build, overwriting/refreshing KV_database/<kid>/.
     try:
-        # 如果你已把 kv_builder 做成 build 后自动回写 mark_kv_ready，可直接传 _TEXT_DB
-        builder = KVCacheBuilder(cfg, text_db=_TEXT_DB)  # 若你还没改 kv_builder，这里会报参数不匹配
+        # If kv_builder already writes back mark_kv_ready after build, pass _TEXT_DB directly.
+        builder = KVCacheBuilder(cfg, text_db=_TEXT_DB)  # If kv_builder has not been updated yet, this may raise a constructor-argument mismatch.
         out = builder.build_from_text(text)
     except TypeError:
-        # 兼容你尚未修改 kv_builder 构造函数的情况
+        # Compatibility path for an older kv_builder constructor.
         builder = KVCacheBuilder(cfg)
         out = builder.build_from_text(text)
 
-        # 如果你已经在 text_db.py 里实现了 mark_kv_ready，就在这里回写
+        # If mark_kv_ready is implemented in text_db.py, write the status back here.
         if hasattr(_TEXT_DB, "mark_kv_ready"):
             try:
                 _TEXT_DB.mark_kv_ready(
                     kid=out["kid"],
-                    kv_rel_dir=out["kid"],          # 推荐：索引里只存 kid 作为相对目录名
+                    kv_rel_dir=out["kid"],          # Recommended: store only kid in the index as the relative directory name.
                     dumped_keys=int(out.get("dumped_keys", 0)),
                 )
             except Exception:
-                # 回写失败不影响 build 成功，但你应该在日志里看到（此处先不打断）
+                # Writeback failure does not invalidate a successful build; logs should expose it, so do not interrupt here.
                 pass
 
     return JSONResponse(content={
@@ -580,10 +581,10 @@ async def build_kv(payload: Dict[str, Any]):
 @kdn.post("/knowledge/search/text")
 async def knowledge_text(payload: Dict[str, Any]):
     """
-    Proxy -> KDN 查询：
+    Proxy -> KDN query:
       { "knowledge_ids": ["<kid1>", "<kid2>", ...], "need_fields": ["content","length"] }
 
-    KDN -> Proxy 响应：
+    KDN -> Proxy response:
       { "items": [{"id":"<kid>","content":"...","length":180}, ...], "miss":["<kid3>"] }
     """
     if _TEXT_DB is None:
@@ -593,7 +594,7 @@ async def knowledge_text(payload: Dict[str, Any]):
     if not isinstance(ids, list):
         return JSONResponse(status_code=400, content={"error": "knowledge_ids must be a list"})
 
-    # kid：统一转成小写字符串；不强制长度为 64（方便你未来做短ID展示），但索引里用全长
+    # Normalize kid to lowercase strings; do not force length 64 so shorter display IDs can be supported later while the index keeps full IDs.
     kids: List[str] = []
     for x in ids:
         if isinstance(x, str):
@@ -611,8 +612,8 @@ async def knowledge_text(payload: Dict[str, Any]):
         allow = set(need_fields) if need_fields else None
 
         def _pick(it):
-            d = {"id": it.id}  # 保持旧字段 id，避免 proxy 侧再改一堆
-            # 无 need_fields → 保持原行为（兼容）
+            d = {"id": it.id}  # Keep legacy field id to avoid broad Proxy-side changes.
+            # No need_fields -> keep original compatible behavior.
             if allow is None:
                 d.update({
                     "content": it.content,
@@ -627,7 +628,7 @@ async def knowledge_text(payload: Dict[str, Any]):
                 })
                 return d
 
-            # 有 need_fields → 只返回指定字段
+            # With need_fields -> return only requested fields.
             if "content" in allow: d["content"] = it.content
             if "length" in allow: d["length"] = it.length
             if "rel_path" in allow: d["rel_path"] = it.rel_path
@@ -650,7 +651,7 @@ async def knowledge_text(payload: Dict[str, Any]):
 @kdn.post("/knowledge/delete")
 async def delete_knowledge(payload: Dict[str, Any]):
     """
-    删除知识块（默认仅删 text_database 的索引+txt；可选同时删 KV_database/<kid>/）。
+    Delete knowledge blocks. By default, only delete the text_database index and txt file; optionally delete KV_database/<kid>/ too.
     Body:
       {
         "knowledge_ids": ["kid1", "kid2"],
@@ -668,10 +669,10 @@ async def delete_knowledge(payload: Dict[str, Any]):
 
     delete_kv = bool(payload.get("delete_kv", False))
 
-    # 1) 删除 text_database（索引 + txt）
+    # 1) Delete text_database entries, including index and txt file.
     res = _TEXT_DB.delete_many([str(k).strip().lower() for k in kids])
 
-    # 2) 可选：删除 KV_database/<kid>/（仅对实际 deleted 的 kid 执行）
+    # 2) Optionally delete KV_database/<kid>/, only for kids actually deleted.
     kv_deleted = []
     kv_errors = []
     if delete_kv:
@@ -696,10 +697,10 @@ async def delete_knowledge(payload: Dict[str, Any]):
 @kdn.post("/knowledge/purge_all")
 async def purge_all(payload: Dict[str, Any]):
     """
-    清空整个 KDN 数据库（危险操作）：
-    - 删除 text_database 下 blocks/ 全部 txt
-    - 删除 index.sqlite3（或重建为空）
-    - 可选：删除 KV_database 下全部 kid 目录
+    Purge the entire KDN database; dangerous operation:
+    - Delete all txt files under text_database/blocks/.
+    - Delete index.sqlite3, or rebuild it as empty.
+    - Optionally delete all kid directories under KV_database.
 
     Body:
       { "delete_kv": true }
@@ -712,18 +713,18 @@ async def purge_all(payload: Dict[str, Any]):
     db_dir = _get_db_dir()
     kv_root = _get_kv_root_dir()
 
-    # 1) 删除 SQLite
+    # 1) Delete SQLite files.
     db_path = db_dir / "index.sqlite3"
 
-    # 2) 删除 blocks 目录下所有 txt
+    # 2) Delete all txt files under the blocks directory.
     blocks_dir = db_dir / "blocks"
 
-    # 3) 可选：删除 KV_database 下所有目录
+    # 3) Optionally delete all directories under KV_database.
     kv_deleted = False
 
     errors = []
 
-    # 先尽量删 blocks（不依赖 sqlite）
+    # Delete blocks first where possible; this does not depend on SQLite.
     try:
         if blocks_dir.exists():
             shutil.rmtree(blocks_dir)
@@ -731,7 +732,7 @@ async def purge_all(payload: Dict[str, Any]):
     except Exception as e:
         errors.append({"part": "text_blocks", "error": str(e)})
 
-    # 删除 sqlite 文件（以及 sqlite 的 wal/shm）
+    # Delete the SQLite file and its wal/shm sidecar files.
     try:
         for p in [db_path, db_path.with_suffix(".sqlite3-wal"), db_path.with_suffix(".sqlite3-shm")]:
             if p.exists():
@@ -739,7 +740,7 @@ async def purge_all(payload: Dict[str, Any]):
     except Exception as e:
         errors.append({"part": "sqlite", "error": str(e)})
 
-    # 重建一个空库，避免服务继续运行时报 “no such table”
+    # Rebuild an empty database to avoid no-such-table errors while the service keeps running.
     try:
         _TEXT_DB._init_db()
         _TEXT_DB._ensure_kv_columns()
@@ -797,10 +798,10 @@ async def _shutdown():
 @kdn.post("/knowledge/inject_ready_kv")
 async def inject_ready_kv(payload: Dict[str, Any]):
     """
-    运行时 KV 注入接口：
-    - 只按 kid 查询已有状态
-    - 只对 kv_ready=1 的 kid 执行注入
-    - 不做 build
+    Runtime KV injection endpoint:
+    - Query existing status only by kid.
+    - Inject only kids with kv_ready=1.
+    - Do not build.
     """
     if _TEXT_DB is None:
         return JSONResponse(
@@ -832,10 +833,10 @@ async def inject_ready_kv(payload: Dict[str, Any]):
         request_redis_host, redis_host, redis_port, redis_db
     )
 
-    # 这里一定要拆包：get_many -> (items, miss)
+    # Unpack get_many as (items, miss).
     items, miss = _TEXT_DB.get_many(requested)
 
-    # items 里的元素是 KBItem，不是 dict
+    # items contains KBItem objects, not dicts.
     row_map = {str(it.id): it for it in items}
 
     injected_kids: List[str] = []
@@ -862,16 +863,16 @@ async def inject_ready_kv(payload: Dict[str, Any]):
 
         row = row_map.get(kid)
         if row is None:
-            # 理论上 get_many 已经把 miss 给出来了，这里兜底
+            # get_many should already report misses; this is a fallback.
             miss_kids.append(kid)
             continue
 
-        # KBItem 字段访问用属性，不是 get()
+        # Access KBItem fields as attributes, not through get().
         if not bool(row.kv_ready):
             text_only_kids.append(kid)
             continue
 
-        # 运行时注入路径只认 kid，不信任 kv_rel_dir 的格式
+        # The runtime injection path trusts only kid and does not trust kv_rel_dir formatting.
         kv_dir = os.path.join(kv_root, kid)
 
         try:
@@ -888,7 +889,7 @@ async def inject_ready_kv(payload: Dict[str, Any]):
             }
 
             if _NETWORK_SIM is None:
-                # 无模拟器时：按 KDN->Instance 单链路 FIFO 串行模型统计真实排队与传输时间。
+                # Without the simulator, measure real queue and transfer time with a KDN->Instance single-link FIFO serial model.
                 enqueue_ts = time.perf_counter()
                 await _acquire_real_net_kv_slot()
                 try:
@@ -915,7 +916,7 @@ async def inject_ready_kv(payload: Dict[str, Any]):
                 net_result["transfer_start_ts"] = kid_request_start_ts
                 net_result["transfer_end_ts"] = time.time()
 
-            # 基于 payload 与总传输时间估算实际吞吐与带宽利用率（用于实验观测）。
+            # Estimate observed throughput and bandwidth utilization from payload size and total transfer time for experiments.
             total_s = float(net_result["network_total_ms"]) / 1000.0
             observed_bw_mb_s = 0.0
             if int(res.payload_bytes) > 0 and total_s > 0.0:
@@ -929,7 +930,7 @@ async def inject_ready_kv(payload: Dict[str, Any]):
             net_result["estimated_bw_mb_s"] = observed_bw_mb_s
             net_result["bandwidth_utilization"] = utilization
 
-            # 只有真正注入完成 + 网络模拟完成后才记 success
+            # Count success only after real injection and network simulation complete.
             injected_kids.append(kid)
             total_keys += int(res.injected)
             total_payload_bytes += int(res.payload_bytes)
@@ -959,7 +960,7 @@ async def inject_ready_kv(payload: Dict[str, Any]):
             )
 
         except Exception as e:
-            # 注入失败时先降级为 text_only，不阻断业务
+            # On injection failure, degrade to text_only first and do not block the workflow.
             text_only_kids.append(kid)
             logging.exception(
                 "[KDN] inject_ready_kv failed: kid=%s kv_dir=%s err=%s",
@@ -984,9 +985,9 @@ async def inject_ready_kv(payload: Dict[str, Any]):
 @kdn.post("/knowledge/pool_status")
 async def knowledge_pool_status(payload: Dict[str, Any]):
     """
-    KDN 整体资源池状态总览：
+    Overall KDN resource-pool status:
       {
-        "sample_limit": 10   # 可选，返回前N条样本
+        "sample_limit": 10   # Optional; return the first N sample rows.
       }
     """
     if _TEXT_DB is None:
@@ -995,7 +996,7 @@ async def knowledge_pool_status(payload: Dict[str, Any]):
     sample_limit = int((payload or {}).get("sample_limit", 10))
     sample_limit = max(0, sample_limit)
 
-    # 直接复用现有 snapshot 能力
+    # Reuse the existing snapshot capability directly.
     rows = _TEXT_DB.snapshot(limit=1000000, offset=0, include_embedding=False)
 
     total = len(rows)

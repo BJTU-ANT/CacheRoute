@@ -1,3 +1,4 @@
+"""Batch utility for registering text blocks with KDN and optionally building KVCache dumps."""
 import argparse
 import json
 import time

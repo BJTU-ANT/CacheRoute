@@ -1,4 +1,5 @@
 # kdn_server/kv_inject.py
+"""Inject KVCache dump files from KDN storage into a target Redis instance."""
 from __future__ import annotations
 
 import argparse
@@ -22,14 +23,13 @@ class InjectResult:
     injected: int
     missing_files: int
     keys_b64url: List[str]
-    payload_bytes: int                  # 本次实际成功注入到 Redis 的 KV dump 总字节数
+    payload_bytes: int                  # Total KV dump bytes successfully injected into Redis in this run
     payload_files: int
 
 
 class KVCacheInjector:
     """
-    从 KV_database/<kid>/manifest.jsonl 读取 key -> dump_file 映射，
-    将 dump 的 value bytes 原样注入到目标 Redis。
+    Read key -> dump_file mappings from KV_database/<kid>/manifest.jsonl and inject dump value bytes into target Redis as-is.
     """
 
     def __init__(
@@ -45,7 +45,7 @@ class KVCacheInjector:
             port=redis_port,
             db=redis_db,
             password=redis_password,
-            decode_responses=False,  # 必须 False：保证 key/value 都是 bytes
+            decode_responses=False,  # Must be False so both keys and values remain bytes.
             socket_timeout=socket_timeout_s,
         )
 
@@ -86,7 +86,7 @@ class KVCacheInjector:
                 value = dump_path.read_bytes()
                 value_size = len(value)
 
-                # 覆盖/注入：不清空现有 redis，只写入这些 key
+                # Overwrite/inject without clearing existing Redis data; write only these keys.
                 self.rds.set(key, value)
                 injected += 1
                 payload_bytes += value_size
@@ -122,7 +122,7 @@ def main():
     )
     res = injector.inject_kv_dir(args.kv_dir, return_keys=not args.no_return_keys)
 
-    # 打印结果：测试阶段你就能直接看到 keys 是否符合预期
+    # Print results so tests can directly show whether keys match expectations.
     out: Dict = {
         "kv_dir": str(Path(args.kv_dir).resolve()),
         "injected": res.injected,
