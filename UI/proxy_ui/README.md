@@ -1,30 +1,30 @@
 # CacheRoute Proxy UI
 
-Lightweight browser dashboard for observing the Proxy control plane without changing scheduling, forwarding, KDN, or KVCache behavior.
+`UI/proxy_ui/` contains the browser dashboard for observing the CacheRoute Proxy control plane. It is frontend / observability only: it does not change scheduling, forwarding, KDN, KVCache, Instance selection, or Resource Agent reporting behavior.
 
-## Default behavior in `demo_proxy.py`
+## Default URL
 
-`test/demo_proxy.py` starts the browser Proxy UI by default for demo usability. The UI is observability-only: if it fails to start, `demo_proxy.py` prints a warning and continues starting the Proxy data/control planes.
+When launched by `test/demo_proxy.py`, the default browser URL is:
 
-Useful flags:
+```text
+http://127.0.0.1:8202
+```
 
-- `--no-proxy-ui`: disable the UI subprocess.
-- `--proxy-ui-listen HOST:PORT`: choose where the UI server listens, default `127.0.0.1:8202`.
-- `--proxy-ui-url URL`: choose the browser-facing URL printed in logs, useful when tunneling or forwarding ports.
+`demo_proxy.py` starts the Proxy UI by default for demo usability. If the UI fails to start, the demo prints a warning and continues starting the Proxy data plane and control plane.
 
-When the UI starts correctly, the demo prints:
+Typical startup log:
 
 ```text
 [demo_proxy] Proxy UI available at: http://127.0.0.1:8202
 ```
 
-If the UI subprocess exits early, cannot import, or the port is occupied, the demo prints a warning like:
+Failure example:
 
 ```text
 [demo_proxy][WARN] Proxy UI failed to start: ...
 ```
 
-## Run with demo proxy
+## Run with demo Proxy
 
 ```bash
 cd test
@@ -35,14 +35,18 @@ python3 demo_proxy.py \
   --injection-strategy iws
 ```
 
-Disable the UI when needed:
+Useful flags:
 
-```bash
-cd test
-python3 demo_proxy.py --no-proxy-ui
-```
+| Flag | Description |
+|---|---|
+| `--proxy-ui` | Explicitly enable the browser Proxy UI. This is already the demo default. |
+| `--no-proxy-ui` | Disable the UI subprocess. |
+| `--proxy-ui-listen HOST:PORT` | UI server listen address, default `127.0.0.1:8202`. |
+| `--proxy-ui-url URL` | Browser-facing URL printed in logs, useful for SSH tunnels or forwarded container ports. |
 
 ## Run standalone
+
+Use this when Proxy is already running and you only want to start the UI server manually:
 
 ```bash
 PROXY_UI_PROXY_CP_URL=http://127.0.0.1:8002 \
@@ -50,31 +54,84 @@ PROXY_UI_SCHEDULER_CP_URL=http://127.0.0.1:7002 \
 python3 -m uvicorn UI.proxy_ui.proxy_ui_server:app --host 127.0.0.1 --port 8202
 ```
 
-## What the first version shows
+Open:
 
-- Proxy health and debug status.
-- Instance pool records from `/v1/instance/list?include_dead=true`, including accurate `is_alive` state when the Proxy API provides it.
-- Instance resource snapshots from `/debug/instance_resources`.
-- KDN topology links from `/v1/topology/kdn_links`.
-- Best-effort Scheduler registration state when `PROXY_UI_PROXY_ID` is configured.
+```text
+http://127.0.0.1:8202
+```
 
-The UI polls the Proxy control plane through the UI server, so the browser does not need direct CORS access to Proxy APIs. Optional Scheduler/topology failures are shown as unavailable states and do not block the local Proxy and Instance panels from rendering.
+## What the dashboard shows
 
-## Polished dashboard features
+The polished Proxy UI exposes both current state and short in-browser trends.
 
-upgrades the first Proxy UI into a richer frontend-only dashboard while keeping the same observability-only contract.
+### Summary and health
 
-- Sticky top navigation with Proxy/Scheduler badges, last refresh time, refresh, pause/resume, and theme controls.
-- Auto-refresh interval selector for 1s / 3s / 5s / 10s polling.
-- Local filters for alive-only, stale-only, resources-only, and instance-id/host search.
-- Short in-browser chart history for CPU, memory, GPU utilization, network RX/TX, and alive/stale counts.
-- Per-instance cards with liveness badges, resource freshness badges, progress bars, network mini-metrics, and admission state.
-- Sortable Instance table by state, age, CPU, memory, GPU, or resource report time.
-- Topology, Scheduler, and Raw JSON tabs so raw payloads remain available without dominating the main dashboard.
-- Copy buttons for diagnostics JSON and individual raw payloads.
-- Optional Scheduler/topology failures render as unavailable/degraded states and do not block local Proxy/Instance panels.
+- Proxy health and `/debug/status` summary.
+- Scheduler registration status, best effort and optional.
+- Alive / stale / total Instance counts.
+- Visible resource-report count.
+- KDN topology-link count.
+- Last refresh time and polling state.
 
-All controls are browser-local display controls only. They do not mutate Scheduler routing, Proxy instance selection, Proxy injection strategy, KDN behavior, KVCache behavior, Instance forwarding, or Resource Agent reporting semantics.
+### Controls
+
+- `Refresh now`.
+- `Pause polling` / `Resume polling`.
+- Auto-refresh interval selector: 1s / 3s / 5s / 10s.
+- Alive-only, stale-only, resources-only filters.
+- Instance ID / host search.
+- Sort selector for state, age, CPU, memory, GPU, and resource report time.
+- Clear chart history.
+- Copy diagnostics JSON.
+- Theme toggle.
+
+All controls are local browser display controls only.
+
+### Charts
+
+The UI keeps a short in-browser history buffer and draws lightweight Canvas charts for:
+
+- CPU average utilization.
+- Memory used ratio.
+- GPU average utilization.
+- Network RX / TX Mbps.
+- Alive / stale Instance counts.
+
+No backend persistence is required. Missing metrics degrade to empty chart segments.
+
+### Instance and resource views
+
+- Per-Instance cards with liveness badges, address, last-seen age, resource freshness, admission state, CPU/memory/GPU progress bars, and network mini-metrics.
+- Detailed Instance table with sorting and local filtering.
+- Resource snapshot table with freshness and admission-state fields.
+- Topology, Scheduler, and Raw JSON tabs.
+- Copy buttons for raw diagnostic payloads.
+
+## API sources
+
+The UI server proxies browser requests to existing Proxy / Scheduler APIs:
+
+| UI endpoint | Source |
+|---|---|
+| `GET /api/config` | UI runtime configuration. |
+| `GET /api/proxy/healthz` | Proxy control plane `/healthz`. |
+| `GET /api/proxy/status` | Proxy control plane `/debug/status`. |
+| `GET /api/proxy/instances?include_dead=true` | Proxy control plane `/v1/instance/list`. |
+| `GET /api/proxy/resources?include_dead=true` | Proxy control plane `/debug/instance_resources`. |
+| `GET /api/proxy/topology` | Proxy control plane `/v1/topology/kdn_links`. |
+| `GET /api/scheduler/proxy` | Scheduler control plane `/v1/proxy/list`, best effort. |
+
+Optional Scheduler/topology failures are displayed as unavailable or degraded states. They do not block the local Proxy and Instance panels from rendering.
+
+## Related frontend URLs
+
+| Component | Default frontend URL | Notes |
+|---|---|---|
+| Proxy UI | `http://127.0.0.1:8202` | This dashboard. Started by `demo_proxy.py` by default. |
+| Instance Resource Dashboard | `http://127.0.0.1:9202` | Browser fallback for `instance/resource_dashboard/dashboard_server.py`. |
+| Client UI | `http://127.0.0.1:7071/ui/client` | Started by `demo_client.py --with-ui`. |
+| Scheduler UI | TBD | Planned. |
+| KDN Server UI | TBD | Planned. |
 
 ## Validation steps
 
@@ -98,12 +155,6 @@ python3 demo_proxy.py \
   --injection-strategy iws
 ```
 
-Expected log when UI starts correctly:
-
-```text
-[demo_proxy] Proxy UI available at: http://127.0.0.1:8202
-```
-
 Start Instance:
 
 ```bash
@@ -123,12 +174,14 @@ curl -sS "http://127.0.0.1:8002/v1/instance/list?include_dead=true" | python3 -m
 curl -sS "http://127.0.0.1:8002/debug/instance_resources" | python3 -m json.tool
 ```
 
-Open the UI URL and confirm:
+Open the UI and confirm:
 
-- Proxy status is visible.
-- Instance pool rows are visible.
-- Resource snapshot rows update periodically.
-- Alive/stale state is accurate.
-- Scheduler unavailable state does not break the page.
-- Stopping `demo_proxy.py` cleans up the UI subprocess.
-- No scheduling, routing, injection, KDN, KVCache, or Instance forwarding behavior changed.
+- summary cards update periodically;
+- pause / resume works;
+- refresh interval changes take effect;
+- filters and search work;
+- Instance cards and table show alive / stale state correctly;
+- charts update as snapshots arrive;
+- Scheduler unavailable state does not break the page;
+- raw JSON can be expanded, collapsed, and copied;
+- stopping `demo_proxy.py` cleans up the UI subprocess.
