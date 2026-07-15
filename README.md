@@ -10,7 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/BJTU-ANT/CacheRoute/releases">
-    <img src="https://img.shields.io/badge/version-0.1.8-blue" alt="Version">
+    <img src="https://img.shields.io/badge/version-0.1.9-blue" alt="Version">
   </a>
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License">
