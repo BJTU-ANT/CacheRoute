@@ -97,6 +97,22 @@ class QueueManager:
             self._text_bypass_max_per_flush,
         )
 
+
+    def queue_depth_snapshot(self) -> Dict[str, Any]:
+        """Return coarse queue depths without exposing task payloads.
+
+        Scheduler-facing pool_resource uses only the global totals. The per-instance
+        section stays Proxy-local for debugging.
+        """
+        per_instance = self._qmap.snapshot_depths()
+        prepare_total = sum(item["prepare_queue_depth"] for item in per_instance.values())
+        ready_total = sum(item["ready_queue_depth"] for item in per_instance.values())
+        return {
+            "prepare_queue_depth": int(prepare_total),
+            "ready_queue_depth": int(ready_total),
+            "per_instance": per_instance,
+        }
+
     def _get_kdn_kv_link_lock(self, link_key: str) -> asyncio.Lock:
         lock = self._kdn_kv_link_locks.get(link_key)
         if lock is None:

@@ -152,7 +152,11 @@ class InstancePool:
         prepare_queue_depth: Optional[int] = None,
         ready_queue_depth: Optional[int] = None,
     ) -> Dict[str, Any]:
-        """Build a compact Proxy pool-level resource snapshot for Scheduler reporting."""
+        """Build a compact Proxy pool-level resource snapshot for Scheduler reporting.
+
+        Null means unavailable/not wired; zero means the metric is actually reported as zero.
+        This keeps Scheduler-side consumers from mistaking placeholders for measured load.
+        """
         now = time.time()
         with self._lock:
             items = list(self._items.values())
@@ -175,22 +179,30 @@ class InstancePool:
                 admission_counts[state] += 1
 
         missing_resource = max(0, len(alive_items) - len(reporting))
-        inflight_total = sum(int(it.load.inflight or 0) for it in alive_items)
-        qps_1m_total = sum(float(it.load.qps_1m or 0.0) for it in alive_items)
+        inflight_values = [int(it.load.inflight) for it in alive_items if it.load.inflight is not None]
+        qps_values = [float(it.load.qps_1m) for it in alive_items if it.load.qps_1m is not None]
+        inflight_total = sum(inflight_values) if inflight_values else None
+        qps_1m_total = sum(qps_values) if qps_values else None
         effective_capacity = int(capacity or 0)
-        load_ratio = inflight_total / max(effective_capacity, 1)
+        load_ratio = _ratio(float(inflight_total), float(effective_capacity)) if inflight_total is not None else None
+        queued_total = None
+        if prepare_queue_depth is not None or ready_queue_depth is not None:
+            queued_total = int(prepare_queue_depth or 0) + int(ready_queue_depth or 0)
+        queue_pressure = _ratio(float(queued_total), float(effective_capacity)) if queued_total is not None else None
 
         cpu_values = [float(it.resource.cpu_util) for it in reporting if it.resource.cpu_util is not None]
         gpu_values = [float(it.resource.gpu_util_avg) for it in reporting if it.resource.gpu_util_avg is not None]
-        mem_used = sum(float(it.resource.memory_used_mb or 0.0) for it in reporting)
-        mem_total = sum(float(it.resource.memory_total_mb or 0.0) for it in reporting)
-        gpu_mem_used = sum(float(it.resource.gpu_mem_used_mb or 0.0) for it in reporting)
-        gpu_mem_total = sum(float(it.resource.gpu_mem_total_mb or 0.0) for it in reporting)
+        mem_used_values = [float(it.resource.memory_used_mb) for it in reporting if it.resource.memory_used_mb is not None]
+        mem_total_values = [float(it.resource.memory_total_mb) for it in reporting if it.resource.memory_total_mb is not None]
+        gpu_mem_used_values = [float(it.resource.gpu_mem_used_mb) for it in reporting if it.resource.gpu_mem_used_mb is not None]
+        gpu_mem_total_values = [float(it.resource.gpu_mem_total_mb) for it in reporting if it.resource.gpu_mem_total_mb is not None]
+        mem_used = sum(mem_used_values) if mem_used_values else None
+        mem_total = sum(mem_total_values) if mem_total_values else None
+        gpu_mem_used = sum(gpu_mem_used_values) if gpu_mem_used_values else None
+        gpu_mem_total = sum(gpu_mem_total_values) if gpu_mem_total_values else None
         mem_free_ratios = [float(it.resource.memory_free_ratio) for it in reporting if it.resource.memory_free_ratio is not None]
-        rx_total = sum(float(it.resource.network_rx_mbps or 0.0) for it in reporting if it.resource.network_rx_mbps is not None)
-        tx_total = sum(float(it.resource.network_tx_mbps or 0.0) for it in reporting if it.resource.network_tx_mbps is not None)
-        has_rx = any(it.resource.network_rx_mbps is not None for it in reporting)
-        has_tx = any(it.resource.network_tx_mbps is not None for it in reporting)
+        rx_values = [float(it.resource.network_rx_mbps) for it in reporting if it.resource.network_rx_mbps is not None]
+        tx_values = [float(it.resource.network_tx_mbps) for it in reporting if it.resource.network_tx_mbps is not None]
 
         if len(alive_items) == 0:
             pool_state = "rejecting"
@@ -201,11 +213,33 @@ class InstancePool:
         else:
             pool_state = "accepting"
 
+        metric_source = {
+            "instances": "proxy_instance_pool_ttl",
+            "resource": "instance_resource_snapshot" if reporting else "unavailable",
+            "inflight_total": "instance_heartbeat" if inflight_values else "unavailable",
+            "qps_1m_total": "instance_heartbeat" if qps_values else "unavailable",
+            "load_ratio": "derived_from_inflight_capacity" if load_ratio is not None else "unavailable",
+            "capacity": "proxy_config",
+            "prepare_queue_depth": "proxy_queue_manager" if prepare_queue_depth is not None else "unavailable",
+            "ready_queue_depth": "proxy_queue_manager" if ready_queue_depth is not None else "unavailable",
+            "queue_pressure": "derived_from_queue_depth_capacity" if queue_pressure is not None else "unavailable",
+            "utilization": "instance_resource_snapshot" if reporting else "unavailable",
+            "pool_admission_state": "derived_from_instance_resource_admission",
+            "resource_freshness_s": "derived_from_instance_resource_report_time" if reporting else "unavailable",
+        }
+        metric_quality = {
+            "resource": _quality(len(reporting), len(alive_items)),
+            "load": _quality(len(inflight_values) + len(qps_values), max(1, len(alive_items) * 2)) if alive_items else "missing",
+            "queue": "complete" if prepare_queue_depth is not None and ready_queue_depth is not None else "missing",
+        }
+
         return {
             "schema_version": 1,
             "proxy_id": proxy_id,
             "generated_at": now,
             "ttl_s": self._ttl_s,
+            "metric_source": metric_source,
+            "metric_quality": metric_quality,
             "resource_freshness_s": _min_avg_max(freshness),
             "instances": {
                 "total": len(items),
@@ -224,21 +258,22 @@ class InstancePool:
                 "capacity": effective_capacity,
                 "prepare_queue_depth": prepare_queue_depth,
                 "ready_queue_depth": ready_queue_depth,
+                "queue_pressure": queue_pressure,
             },
             "utilization": {
                 "cpu_avg": _avg(cpu_values),
                 "cpu_max": max(cpu_values) if cpu_values else None,
-                "memory_used_mb": mem_used if reporting else None,
-                "memory_total_mb": mem_total if reporting else None,
+                "memory_used_mb": mem_used,
+                "memory_total_mb": mem_total,
                 "memory_used_ratio": _ratio(mem_used, mem_total),
                 "memory_free_ratio_min": min(mem_free_ratios) if mem_free_ratios else None,
                 "gpu_util_avg": _avg(gpu_values),
                 "gpu_util_max": max(gpu_values) if gpu_values else None,
-                "gpu_mem_used_mb": gpu_mem_used if reporting else None,
-                "gpu_mem_total_mb": gpu_mem_total if reporting else None,
+                "gpu_mem_used_mb": gpu_mem_used,
+                "gpu_mem_total_mb": gpu_mem_total,
                 "gpu_mem_used_ratio": _ratio(gpu_mem_used, gpu_mem_total),
-                "network_rx_mbps_total": rx_total if has_rx else None,
-                "network_tx_mbps_total": tx_total if has_tx else None,
+                "network_rx_mbps_total": sum(rx_values) if rx_values else None,
+                "network_tx_mbps_total": sum(tx_values) if tx_values else None,
             },
             "pool_admission_state": pool_state,
             "pool_admission_reason": (
@@ -280,8 +315,16 @@ def _min_avg_max(values: List[float]) -> Dict[str, Optional[float]]:
     return {"min": min(values), "avg": sum(values) / len(values), "max": max(values)}
 
 
-def _ratio(used: float, total: float) -> Optional[float]:
-    return (used / total) if total > 0 else None
+def _ratio(used: Optional[float], total: Optional[float]) -> Optional[float]:
+    return (used / total) if used is not None and total is not None and total > 0 else None
+
+
+def _quality(populated: int, expected: int) -> str:
+    if expected <= 0 or populated <= 0:
+        return "missing"
+    if populated >= expected:
+        return "complete"
+    return "partial"
 
 
 def _as_float(value: Any) -> Optional[float]:

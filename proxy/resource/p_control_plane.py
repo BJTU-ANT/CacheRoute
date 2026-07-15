@@ -6,7 +6,7 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -26,6 +26,7 @@ _resource_snapshot_seen: set[str] = set()
 _unknown_resource_warn_at: Dict[str, float] = {}
 _proxy_id: str = os.environ.get("PROXY_ID", "unknown")
 _proxy_capacity: int = int(os.environ.get("PROXY_MAX_CAPACITY", "0") or 0)
+_queue_snapshot_provider: Optional[Callable[[], Dict[str, Any]]] = None
 
 
 def set_pool(pool: InstancePool) -> None:
@@ -37,6 +38,34 @@ def set_pool_resource_context(proxy_id: str, capacity: int = 0) -> None:
     global _proxy_id, _proxy_capacity
     _proxy_id = proxy_id
     _proxy_capacity = int(capacity or 0)
+
+
+def set_queue_snapshot_provider(provider: Optional[Callable[[], Dict[str, Any]]]) -> None:
+    """Register a lazy queue-depth provider without coupling control plane to QueueManager."""
+    global _queue_snapshot_provider
+    _queue_snapshot_provider = provider
+
+
+def _build_pool_resource_snapshot() -> Dict[str, Any]:
+    pool = get_pool()
+    prepare_queue_depth = None
+    ready_queue_depth = None
+    if _queue_snapshot_provider is not None:
+        try:
+            queue_depths = _queue_snapshot_provider() or {}
+            prepare_queue_depth = queue_depths.get("prepare_queue_depth")
+            ready_queue_depth = queue_depths.get("ready_queue_depth")
+        except Exception:
+            logger.warning(
+                "[ProxyCP] queue snapshot provider failed; queue metrics unavailable",
+                exc_info=True,
+            )
+    return pool.build_pool_resource_snapshot(
+        proxy_id=_proxy_id,
+        capacity=_proxy_capacity,
+        prepare_queue_depth=prepare_queue_depth,
+        ready_queue_depth=ready_queue_depth,
+    )
 
 
 def get_pool() -> InstancePool:
@@ -264,8 +293,18 @@ async def list_instances(include_dead: bool = False) -> List[Dict[str, Any]]:
 
 @_control_plane.get("/debug/pool_resource")
 async def debug_pool_resource() -> Dict[str, Any]:
-    pool = get_pool()
-    return {"ok": True, "pool_resource": pool.build_pool_resource_snapshot(proxy_id=_proxy_id, capacity=_proxy_capacity)}
+    return {"ok": True, "pool_resource": _build_pool_resource_snapshot()}
+
+
+@_control_plane.get("/debug/pool_resource_sources")
+async def debug_pool_resource_sources() -> Dict[str, Any]:
+    snapshot = _build_pool_resource_snapshot()
+    return {
+        "ok": True,
+        "metric_source": snapshot.get("metric_source", {}),
+        "metric_quality": snapshot.get("metric_quality", {}),
+        "null_semantics": "0 means measured zero; null means unavailable, not wired, or unknown",
+    }
 
 
 @_control_plane.get("/debug/instance_resources")

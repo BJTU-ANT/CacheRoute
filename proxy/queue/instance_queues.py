@@ -45,6 +45,18 @@ class PerInstanceQueueMap:
             )
         return self._m[instance_id]
 
+    def snapshot_depths(self) -> Dict[str, Dict[str, int]]:
+        """Return current per-instance queue depths for coarse pool-level observability."""
+        out: Dict[str, Dict[str, int]] = {}
+        for instance_id, queues in self._m.items():
+            out[instance_id] = {
+                "prepare_queue_depth": int(queues.prepare_q.qsize()),
+                "ready_queue_depth": int(queues.ready_q.qsize()),
+                "active_prepare": int(queues.active_prepare),
+                "active_ready": int(queues.active_ready),
+            }
+        return out
+
     @property
     def ready_concurrency_per_instance(self) -> int:
         return self._ready_concurrency_per_instance

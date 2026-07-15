@@ -96,11 +96,12 @@ async def _build_proxy_topology_meta() -> Dict[str, Any]:
 
 def _build_pool_resource_snapshot(app: FastAPI) -> Dict[str, Any]:
     pool: InstancePool = app.state.instance_pool  # type: ignore
+    queue_depths = queue_mgr.queue_depth_snapshot()
     return pool.build_pool_resource_snapshot(
         proxy_id=PROXY_ID,
         capacity=PROXY_MAX_CAPACITY,
-        prepare_queue_depth=None,
-        ready_queue_depth=None,
+        prepare_queue_depth=queue_depths.get("prepare_queue_depth"),
+        ready_queue_depth=queue_depths.get("ready_queue_depth"),
     )
 
 
@@ -133,6 +134,7 @@ async def lifespan(app: FastAPI):
     app.state.instance_pool = InstancePool(ttl_s=ttl_s)  # type: ignore
     p_control_plane.set_pool(app.state.instance_pool)  # type: ignore
     p_control_plane.set_pool_resource_context(PROXY_ID, PROXY_MAX_CAPACITY)
+    p_control_plane.set_queue_snapshot_provider(lambda: queue_mgr.queue_depth_snapshot())
 
     # --- Load the proxy scheduling strategy for the data plane ---
     strategy_name = os.environ.get("PROXY_INSTANCE_STRATEGY", "round_robin")
