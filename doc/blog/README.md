@@ -11,6 +11,29 @@ This document records major engineering milestones for the CacheRoute prototype.
 
 ---
 
+## 260715: Proxy Pool Resource Reporting and Metric Contract
+
+### Changes
+
+- Added compact Proxy `pool_resource` aggregation and reporting to Scheduler registration and heartbeat flows.
+- Added Scheduler-side storage and debug APIs for Proxy resource state, including liveness, freshness, utilization, load, and admission summaries.
+- Defined null-vs-zero semantics, metric provenance and quality fields, and coarse prepare/ready queue-pressure reporting.
+- Added a required PR template and Codex branch-hygiene workflow to keep generated changes scoped and reviewable.
+
+### Files
+
+- `proxy/resource/instance_pool.py`
+- `proxy/resource/p_control_plane.py`
+- `proxy/queue/`
+- `scheduler/resource/`
+- `doc/pool_resource_metrics.md`
+- `.github/PULL_REQUEST_TEMPLATE.md`
+- `doc/codex_workflow.md`
+
+Owner: yao
+
+---
+
 ## 260714: Proxy UI and Repository Readability Improvements
 
 ### Changes
