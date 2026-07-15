@@ -75,6 +75,8 @@ class ProxyInfo:
     # 时间戳：注册时间、最后心跳时间
     registered_at: float = field(default_factory=lambda: time.time())
     last_seen_at: float = field(default_factory=lambda: time.time())
+    pool_resource: Dict[str, Any] = field(default_factory=dict)
+    pool_resource_reported_at: Optional[float] = None
 
     def touch(self) -> None:
         """收到心跳/更新时刷新 last_seen_at。"""
@@ -124,6 +126,9 @@ class ProxyPool:
 
             # 保留首次注册时间，其他字段以最新为准
             info.registered_at = old.registered_at
+            if not info.pool_resource and old.pool_resource:
+                info.pool_resource = old.pool_resource
+                info.pool_resource_reported_at = old.pool_resource_reported_at
             self._data[info.proxy_id] = info
 
     async def heartbeat(
@@ -131,6 +136,7 @@ class ProxyPool:
         proxy_id: str,
         load: Optional[ProxyLoad] = None,
         meta_patch: Optional[Dict[str, Any]] = None,
+        pool_resource: Optional[Dict[str, Any]] = None,
     ) -> bool:
         """
         proxy 心跳。
@@ -149,6 +155,9 @@ class ProxyPool:
                 p.load.gpu_util = float(load.gpu_util)
             if meta_patch:
                 p.meta.update(dict(meta_patch))
+            if pool_resource is not None:
+                p.pool_resource = dict(pool_resource)
+                p.pool_resource_reported_at = time.time()
             return True
 
     async def remove(self, proxy_id: str) -> None:

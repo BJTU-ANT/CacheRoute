@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CacheRoute Instance Resource Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>CacheRoute Instance Resource Dashboard</h1>
+      <p class="muted">Native resource agent validation frontend</p>
+    </div>
+    <div class="header-grid">
+      <div><span class="label">Instance</span><strong id="instanceId">-</strong></div>
+      <div><span class="label">Agent</span><strong id="agentHealth">unknown</strong></div>
+      <div><span class="label">Last update</span><strong id="lastUpdate">-</strong></div>
+      <div><span class="label">Admission</span><strong id="admissionBadge" class="badge">unknown</strong></div>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="card control-card">
+      <h2>Agent Control</h2>
+      <div id="agentStatus" class="status-text">Loading...</div>
+      <div class="button-row">
+        <button id="startAgent">Start Agent</button>
+        <button id="stopAgent" class="danger">Stop Agent</button>
+        <button id="refreshSnapshot">Refresh Snapshot</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>CPU</h2>
+      <canvas id="cpuGauge" width="220" height="140"></canvas>
+      <div class="metric-grid">
+        <div><span>Utilization</span><strong id="cpuUtil">-</strong></div>
+        <div><span>load1</span><strong id="load1">-</strong></div>
+        <div><span>load5</span><strong id="load5">-</strong></div>
+        <div><span>load15</span><strong id="load15">-</strong></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Memory</h2>
+      <canvas id="memoryDonut" width="220" height="180"></canvas>
+      <div class="metric-grid">
+        <div><span>Used MB</span><strong id="memUsed">-</strong></div>
+        <div><span>Free MB</span><strong id="memFree">-</strong></div>
+        <div><span>Total MB</span><strong id="memTotal">-</strong></div>
+        <div><span>Free Ratio</span><strong id="memFreeRatio">-</strong></div>
+      </div>
+    </section>
+
+    <section class="card wide">
+      <h2>GPU</h2>
+      <div id="gpuList" class="gpu-list">Loading...</div>
+    </section>
+
+    <section class="card wide">
+      <h2>Network</h2>
+      <div id="networkList" class="network-list">Loading...</div>
+      <canvas id="networkChart" width="720" height="220"></canvas>
+    </section>
+
+    <section class="card wide">
+      <details>
+        <summary>Raw JSON Snapshot</summary>
+        <pre id="rawJson">{}</pre>
+      </details>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

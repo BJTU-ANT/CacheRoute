@@ -19,6 +19,14 @@ _pool: Optional[InstancePool] = None
 _kdn_links: Dict[str, Dict[str, Any]] = {}
 _instance_kdn_links: Dict[str, Dict[str, Dict[str, Any]]] = {}
 _kdn_links_lock = asyncio.Lock()
+_proxy_id: str = "unknown"
+_proxy_capacity: int = 0
+
+
+def set_proxy_context(proxy_id: str, max_capacity: int = 0) -> None:
+    global _proxy_id, _proxy_capacity
+    _proxy_id = proxy_id
+    _proxy_capacity = int(max_capacity or 0)
 
 
 def set_pool(pool: InstancePool) -> None:
@@ -51,6 +59,11 @@ class InstanceHeartbeatReq(BaseModel):
 
 class InstanceUnregisterReq(BaseModel):
     instance_id: str
+
+
+class InstanceResourceSnapshotReq(BaseModel):
+    instance_id: str
+    snapshot: Dict[str, Any]
 
 
 class TopologyReportReq(BaseModel):
@@ -141,6 +154,20 @@ async def heartbeat(req: InstanceHeartbeatReq) -> Dict[str, Any]:
     return {"ok": ok}
 
 
+@_control_plane.post("/v1/instance/resource_snapshot")
+async def report_resource_snapshot(req: InstanceResourceSnapshotReq) -> Dict[str, Any]:
+    pool = get_pool()
+    ok = pool.report_resource_snapshot(
+        instance_id=req.instance_id,
+        snapshot=req.snapshot,
+    )
+    if not ok:
+        logger.warning("[ProxyCP] resource snapshot for unknown instance_id=%s", req.instance_id)
+        return {"ok": False, "error": "unknown_instance"}
+    logger.info("[ProxyCP] resource snapshot updated: instance_id=%s", req.instance_id)
+    return {"ok": True}
+
+
 @_control_plane.post("/v1/instance/unregister")
 async def unregister(req: InstanceUnregisterReq) -> Dict[str, Any]:
     pool = get_pool()
@@ -173,10 +200,40 @@ async def list_instances(include_dead: bool = False) -> List[Dict[str, Any]]:
                 "qps_1m": it.load.qps_1m,
                 "gpu_util": it.load.gpu_util,
             },
+            "resource": {
+                "cpu_util": it.resource.cpu_util,
+                "memory_used_mb": it.resource.memory_used_mb,
+                "memory_total_mb": it.resource.memory_total_mb,
+                "memory_free_mb": it.resource.memory_free_mb,
+                "memory_free_ratio": it.resource.memory_free_ratio,
+                "gpu_util_avg": it.resource.gpu_util_avg,
+                "gpu_mem_used_mb": it.resource.gpu_mem_used_mb,
+                "gpu_mem_total_mb": it.resource.gpu_mem_total_mb,
+                "network_rx_mbps": it.resource.network_rx_mbps,
+                "network_tx_mbps": it.resource.network_tx_mbps,
+                "admission_state": it.resource.admission_state,
+                "resource_ts_ms": it.resource.resource_ts_ms,
+                "resource_reported_at": it.resource.resource_reported_at,
+                "raw_resource": it.resource.raw_resource,
+            },
             # 由 include_dead 决定返回集合，alive 在这里标记方便调试
             "is_alive": True if not include_dead else None,
         })
     return out
+
+
+@_control_plane.get("/debug/pool_resource")
+async def debug_pool_resource() -> Dict[str, Any]:
+    pool = get_pool()
+    return pool.build_pool_resource_snapshot(
+        proxy_id=_proxy_id,
+        capacity=_proxy_capacity,
+    )
+
+
+@_control_plane.get("/debug/instance_resources")
+async def debug_instance_resources(include_dead: bool = True) -> Dict[str, Any]:
+    return {"instances": await list_instances(include_dead=include_dead)}
 
 
 @_control_plane.post("/v1/topology/report")

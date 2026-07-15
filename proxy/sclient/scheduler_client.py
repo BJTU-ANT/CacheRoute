@@ -42,6 +42,7 @@ class SchedulerControlClient:
         instance_count: int = 0,
         kv_mem_per_instance_gb: float = 0.0,
         kv_cache_update_policy: str = "lru",
+        pool_resource: Optional[Dict[str, Any]] = None,
     ) -> RegisterResult:
         payload = {
             "proxy_id": proxy_id,
@@ -56,6 +57,8 @@ class SchedulerControlClient:
             "kv_mem_per_instance_gb": kv_mem_per_instance_gb,
             "kv_cache_update_policy": kv_cache_update_policy,
         }
+        if pool_resource is not None:
+            payload["pool_resource"] = pool_resource
         r = await self._client.post(f"{self.base_url}/v1/proxy/register", json=payload)
         r.raise_for_status()
         j = r.json()
@@ -72,6 +75,7 @@ class SchedulerControlClient:
         qps_1m: Optional[float] = None,
         gpu_util: Optional[float] = None,
         meta_patch: Optional[Dict[str, Any]] = None,
+        pool_resource: Optional[Dict[str, Any]] = None,
     ) -> None:
         payload: Dict[str, Any] = {"proxy_id": proxy_id}
         # 只在有值时携带，避免触发服务端“全量覆盖为 0”
@@ -83,6 +87,8 @@ class SchedulerControlClient:
             payload["gpu_util"] = gpu_util
         if meta_patch:
             payload["meta_patch"] = meta_patch
+        if pool_resource is not None:
+            payload["pool_resource"] = pool_resource
 
         r = await self._client.post(f"{self.base_url}/v1/proxy/heartbeat", json=payload)
         r.raise_for_status()

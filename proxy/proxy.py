@@ -122,6 +122,7 @@ async def lifespan(app: FastAPI):
     ttl_s = int(os.environ.get("PROXY_INSTANCE_TTL_S", config.INSTANCE_ALIVE_TTL_S))
     app.state.instance_pool = InstancePool(ttl_s=ttl_s)  # type: ignore
     p_control_plane.set_pool(app.state.instance_pool)  # type: ignore
+    p_control_plane.set_proxy_context(PROXY_ID, max_capacity=PROXY_MAX_CAPACITY)
 
     # --- 加载proxy调度策略（业务面使用） ---
     strategy_name = os.environ.get("PROXY_INSTANCE_STRATEGY", "round_robin")
@@ -177,6 +178,10 @@ async def lifespan(app: FastAPI):
         # 可选注入 KDN->Proxy 静态拓扑信息，供 Scheduler 词典序策略使用。
         # 环境变量示例：
         # PROXY_KDN_LINKS_JSON='{"kdn_a":{"bandwidth_tier":3,"latency_tier":1}}'
+        pool_resource = app.state.instance_pool.build_pool_resource_snapshot(  # type: ignore
+            proxy_id=PROXY_ID,
+            capacity=PROXY_MAX_CAPACITY,
+        )
         proxy_meta: Dict[str, Any] = {"version": "proxy_v1"}
         proxy_meta.update(await _build_proxy_topology_meta())
 
@@ -190,6 +195,7 @@ async def lifespan(app: FastAPI):
             instance_count=PROXY_INSTANCE_COUNT,
             kv_mem_per_instance_gb=PROXY_KV_MEM_PER_INSTANCE_GB,
             kv_cache_update_policy=PROXY_KV_CACHE_UPDATE_POLICY,
+            pool_resource=pool_resource,
         )
         # 用 scheduler 建议的心跳周期覆盖本地默认
         interval = float(reg.heartbeat_interval_s) if reg.heartbeat_interval_s else PROXY_HEARTBEAT_S
@@ -206,9 +212,14 @@ async def lifespan(app: FastAPI):
         reporter: HeartbeatReporter = app.state._hb_reporter  # type: ignore
         while not app.state._hb_stop.is_set():  # type: ignore
             try:
+                pool_resource = app.state.instance_pool.build_pool_resource_snapshot(  # type: ignore
+                    proxy_id=PROXY_ID,
+                    capacity=PROXY_MAX_CAPACITY,
+                )
                 await client.heartbeat(
                     proxy_id=PROXY_ID,
                     meta_patch=await _build_proxy_topology_meta(),
+                    pool_resource=pool_resource,
                 )
                 await reporter.record(ok=True)
             except Exception as e:

@@ -19,7 +19,7 @@ Scheduler 控制平面（Control Plane）：
 from __future__ import annotations
 
 import os
-# import time
+import time
 import uuid
 import asyncio
 
@@ -69,6 +69,7 @@ class ProxyRegisterRequest(BaseModel):
     instance_count: int = Field(default=0, ge=0)
     kv_mem_per_instance_gb: float = Field(default=0.0, ge=0.0)
     kv_cache_update_policy: str = Field(default="lru")
+    pool_resource: Optional[Dict[str, Any]] = None
 
 class ProxyRegisterResponse(BaseModel):
     """
@@ -94,6 +95,7 @@ class ProxyHeartbeatRequest(BaseModel):
     qps_1m: Optional[float] = None
     gpu_util: Optional[float] = None
     meta_patch: Optional[Dict[str, Any]] = None
+    pool_resource: Optional[Dict[str, Any]] = None
 
 
 class ProxyUnregisterRequest(BaseModel):
@@ -126,6 +128,8 @@ class ProxyInfoResponse(BaseModel):
     registered_at: float
     last_seen_at: float
     is_alive: bool
+    pool_resource: Dict[str, Any] = Field(default_factory=dict)
+    pool_resource_reported_at: Optional[float] = None
 
 
 class KDNRegisterRequest(BaseModel):
@@ -263,6 +267,8 @@ def _to_response(info: ProxyInfo) -> ProxyInfoResponse:
         registered_at=float(info.registered_at),
         last_seen_at=float(info.last_seen_at),
         is_alive=info.is_alive(pool.ttl_s),
+        pool_resource=dict(info.pool_resource or {}),
+        pool_resource_reported_at=info.pool_resource_reported_at,
     )
 
 
@@ -299,6 +305,8 @@ async def proxy_register(req: ProxyRegisterRequest):
                        kv_mem_per_instance_gb=float(req.kv_mem_per_instance_gb or 0.0),
                        kv_cache_pool_gb=float(inst_cnt) * float(kv_gb),
                        ),  # 注册阶段先给空负载，后续由心跳更新
+        pool_resource=dict(req.pool_resource or {}),
+        pool_resource_reported_at=time.time() if req.pool_resource is not None else None,
     )
     # 注册本质是 upsert
     pool = get_pool()
@@ -334,7 +342,12 @@ async def proxy_heartbeat(req: ProxyHeartbeatRequest):
         )
 
     pool = get_pool()
-    ok = await pool.heartbeat(req.proxy_id, load=load, meta_patch=req.meta_patch)
+    ok = await pool.heartbeat(
+        req.proxy_id,
+        load=load,
+        meta_patch=req.meta_patch,
+        pool_resource=req.pool_resource,
+    )
     if not ok:
         # 失败：立刻输出（并计入 err）
         await _hb_agg.record_proxy(req.proxy_id, ok=False)
@@ -371,6 +384,25 @@ async def proxy_list(include_dead: bool = False):
     pool = get_pool()
     infos = await pool.list(include_dead=include_dead)
     return [_to_response(x) for x in infos]
+
+
+@control_plane.get("/debug/proxy_pool_resources")
+async def debug_proxy_pool_resources() -> Dict[str, Any]:
+    pool = get_pool()
+    infos = await pool.list(include_dead=True)
+    return {
+        "ok": True,
+        "proxies": [
+            {
+                "proxy_id": p.proxy_id,
+                "is_alive": p.is_alive(pool.ttl_s),
+                "last_seen_at": p.last_seen_at,
+                "pool_resource_reported_at": p.pool_resource_reported_at,
+                "pool_resource": p.pool_resource,
+            }
+            for p in infos
+        ],
+    }
 
 # -------------------
 # --- KDN 侧方法 ---
