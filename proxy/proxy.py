@@ -134,6 +134,7 @@ async def lifespan(app: FastAPI):
     app.state.instance_pool = InstancePool(ttl_s=ttl_s)  # type: ignore
     p_control_plane.set_pool(app.state.instance_pool)  # type: ignore
     p_control_plane.set_pool_resource_context(PROXY_ID, PROXY_MAX_CAPACITY)
+    p_control_plane.set_queue_snapshot_provider(lambda: queue_mgr.queue_depth_snapshot())
 
     # --- Load the proxy scheduling strategy for the data plane ---
     strategy_name = os.environ.get("PROXY_INSTANCE_STRATEGY", "round_robin")
