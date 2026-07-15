@@ -4,13 +4,14 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI
 from pydantic import BaseModel
 
-from .instance_pool import InstancePool
+from .instance_pool import InstancePool, build_pool_resource_sources
 
 import logging
 logger = logging.getLogger("proxy.p_control_plane")
@@ -23,11 +24,19 @@ _instance_kdn_links: Dict[str, Dict[str, Dict[str, Any]]] = {}
 _kdn_links_lock = asyncio.Lock()
 _resource_snapshot_seen: set[str] = set()
 _unknown_resource_warn_at: Dict[str, float] = {}
+_proxy_id: str = os.environ.get("PROXY_ID", "unknown")
+_proxy_capacity: int = int(os.environ.get("PROXY_MAX_CAPACITY", "0") or 0)
 
 
 def set_pool(pool: InstancePool) -> None:
     global _pool
     _pool = pool
+
+
+def set_pool_resource_context(proxy_id: str, capacity: int = 0) -> None:
+    global _proxy_id, _proxy_capacity
+    _proxy_id = proxy_id
+    _proxy_capacity = int(capacity or 0)
 
 
 def get_pool() -> InstancePool:
@@ -251,6 +260,17 @@ async def list_instances(include_dead: bool = False) -> List[Dict[str, Any]]:
     return out
 
 
+
+
+@_control_plane.get("/debug/pool_resource")
+async def debug_pool_resource() -> Dict[str, Any]:
+    pool = get_pool()
+    return {"ok": True, "pool_resource": pool.build_pool_resource_snapshot(proxy_id=_proxy_id, capacity=_proxy_capacity)}
+
+
+@_control_plane.get("/debug/pool_resource_sources")
+async def debug_pool_resource_sources() -> Dict[str, Any]:
+    return {"ok": True, "sources": build_pool_resource_sources()}
 
 
 @_control_plane.get("/debug/instance_resources")

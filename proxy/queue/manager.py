@@ -97,6 +97,13 @@ class QueueManager:
             self._text_bypass_max_per_flush,
         )
 
+
+    def queue_snapshot(self) -> Dict[str, Any]:
+        """Return coarse queue counters for Proxy-level resource reporting."""
+        snap = self._qmap.snapshot()
+        snap["source"] = "proxy_queue_manager"
+        return snap
+
     def _get_kdn_kv_link_lock(self, link_key: str) -> asyncio.Lock:
         lock = self._kdn_kv_link_locks.get(link_key)
         if lock is None:

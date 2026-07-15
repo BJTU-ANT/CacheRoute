@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Dict
+from typing import Any, Dict
 
 from .task import ProxyTask
 
@@ -44,6 +44,35 @@ class PerInstanceQueueMap:
                 prepare_sem=asyncio.Semaphore(self._prepare_concurrency_per_instance)
             )
         return self._m[instance_id]
+
+
+    def snapshot(self) -> Dict[str, Any]:
+        instances = []
+        prepare_depth = 0
+        ready_depth = 0
+        active_prepare = 0
+        active_ready = 0
+        for instance_id, q in self._m.items():
+            pd = q.prepare_q.qsize()
+            rd = q.ready_q.qsize()
+            prepare_depth += pd
+            ready_depth += rd
+            active_prepare += int(q.active_prepare)
+            active_ready += int(q.active_ready)
+            instances.append({
+                "instance_id": instance_id,
+                "prepare_queue_depth": pd,
+                "ready_queue_depth": rd,
+                "active_prepare": int(q.active_prepare),
+                "active_ready": int(q.active_ready),
+            })
+        return {
+            "prepare_queue_depth": prepare_depth,
+            "ready_queue_depth": ready_depth,
+            "active_prepare": active_prepare,
+            "active_ready": active_ready,
+            "instances": instances,
+        }
 
     @property
     def ready_concurrency_per_instance(self) -> int:

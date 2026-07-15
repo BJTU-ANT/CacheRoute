@@ -94,6 +94,19 @@ async def _build_proxy_topology_meta() -> Dict[str, Any]:
     return {"kdn_links": merged_links} if merged_links else {}
 
 
+def _build_pool_resource_snapshot(app: FastAPI) -> Dict[str, Any]:
+    pool: InstancePool = app.state.instance_pool  # type: ignore
+    queue_snapshot = queue_mgr.queue_snapshot()
+    return pool.build_pool_resource_snapshot(
+        proxy_id=PROXY_ID,
+        capacity=PROXY_MAX_CAPACITY,
+        prepare_queue_depth=queue_snapshot.get("prepare_queue_depth"),
+        ready_queue_depth=queue_snapshot.get("ready_queue_depth"),
+        active_prepare=queue_snapshot.get("active_prepare"),
+        active_ready=queue_snapshot.get("active_ready"),
+    )
+
+
 def _squelch_noisy_loggers():
     # http client
     logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -122,6 +135,7 @@ async def lifespan(app: FastAPI):
     ttl_s = int(os.environ.get("PROXY_INSTANCE_TTL_S", config.INSTANCE_ALIVE_TTL_S))
     app.state.instance_pool = InstancePool(ttl_s=ttl_s)  # type: ignore
     p_control_plane.set_pool(app.state.instance_pool)  # type: ignore
+    p_control_plane.set_pool_resource_context(PROXY_ID, PROXY_MAX_CAPACITY)
 
     # --- Load the proxy scheduling strategy for the data plane ---
     strategy_name = os.environ.get("PROXY_INSTANCE_STRATEGY", "round_robin")
@@ -190,6 +204,7 @@ async def lifespan(app: FastAPI):
             instance_count=PROXY_INSTANCE_COUNT,
             kv_mem_per_instance_gb=PROXY_KV_MEM_PER_INSTANCE_GB,
             kv_cache_update_policy=PROXY_KV_CACHE_UPDATE_POLICY,
+            pool_resource=_build_pool_resource_snapshot(app),
         )
         # Override the local default heartbeat interval with the interval suggested by the scheduler
         interval = float(reg.heartbeat_interval_s) if reg.heartbeat_interval_s else PROXY_HEARTBEAT_S
@@ -209,6 +224,7 @@ async def lifespan(app: FastAPI):
                 await client.heartbeat(
                     proxy_id=PROXY_ID,
                     meta_patch=await _build_proxy_topology_meta(),
+                    pool_resource=_build_pool_resource_snapshot(app),
                 )
                 await reporter.record(ok=True)
             except Exception as e:

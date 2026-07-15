@@ -113,7 +113,8 @@ The frontend URLs above assume a single-machine demo with loopback addresses. In
 3. The Proxy predicts the cost of text-based and KVCache-based injection.
 4. The KDN Server injects reusable KVCache blocks when KVCache reuse is selected.
 5. The Instance forwards the request to vLLM + LMCache and returns the response.
-6. Optionally, the Proxy UI and Instance Resource Dashboard visualize control-plane and resource state for debugging and validation.
+6. Instance resource snapshots can flow through the Proxy control plane, where the Proxy aggregates a compact `pool_resource` snapshot and reports it to the Scheduler through register/heartbeat payloads. The Scheduler stores this state for debug visibility without changing routing decisions.
+7. Optionally, the Proxy UI and Instance Resource Dashboard visualize control-plane and resource state for debugging and validation.
 
 ---
 
@@ -139,6 +140,10 @@ pip install -r requirements.txt
 ```
 
 For the recommended Docker-based environment, see [`env/README.md`](env/README.md). The CacheRoute Dockerfile installs Rust and Tkinter for the optional Instance Resource Agent/Dashboard.
+
+### Resource metric hierarchy
+
+Scheduler-facing Proxy `pool_resource` reports use coarse pool-level summaries only. Detailed per-Instance and per-task metrics stay Proxy-local for debugging and future Proxy-side decisions. For Scheduler-facing fields, `0` means a measured zero and `null` means unavailable, unwired, or insufficient source data. See [`doc/resource_metric_hierarchy.md`](doc/resource_metric_hierarchy.md) for the current metric source audit, source/quality metadata contract, and validation commands.
 
 ---
 
