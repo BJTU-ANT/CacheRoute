@@ -11,6 +11,28 @@ This document records major engineering milestones for the CacheRoute prototype.
 
 ---
 
+## 260714: Proxy UI and Repository Readability Improvements
+
+### Changes
+
+- Added a browser-based Proxy observability UI with Instance status, resource snapshots, topology state, and a compact `/debug/status` API.
+- Integrated Proxy UI startup and cleanup into `test/demo_proxy.py`, and documented frontend entry URLs.
+- Expanded TTFT/TPOT predictor documentation and improved request, tokenizer, prompt-generation, and non-blocking warmup workflows.
+- Standardized English comments, docstrings, logs, and README content across the main CacheRoute modules.
+
+### Files
+
+- `UI/proxy_ui/`
+- `proxy/resource/p_control_plane.py`
+- `test/demo_proxy.py`
+- `instance/TTFT_predictor/`
+- `instance/TPOT_predictor/`
+- project source comments and READMEs
+
+Owner: yao
+
+---
+
 ## 260713: Instance Resource Agent Demo Integration and Resource Reporting
 
 ### Context
