@@ -126,6 +126,7 @@ sudo docker run --gpus all -it \
   --memory=0 \
   --memory-swap=0 \
   -v /llm-stack:/workspace/llm-stack \
+  -w /workspace/llm-stack \
   basic-cu128 bash
 ```
 
