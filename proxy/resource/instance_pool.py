@@ -144,6 +144,109 @@ class InstancePool:
             it.resource = _resource_from_snapshot(snapshot=snapshot, reported_at=now, metadata=metadata or {})
             return True
 
+
+    def build_pool_resource_snapshot(
+        self,
+        proxy_id: str,
+        capacity: int = 0,
+        prepare_queue_depth: Optional[int] = None,
+        ready_queue_depth: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Build a compact Proxy pool-level resource snapshot for Scheduler reporting."""
+        now = time.time()
+        with self._lock:
+            items = list(self._items.values())
+
+        alive_items: List[InstanceInfo] = []
+        stale = 0
+        for it in items:
+            if (now - float(it.last_seen_at)) <= self._ttl_s:
+                alive_items.append(it)
+            else:
+                stale += 1
+
+        reporting = [it for it in alive_items if _has_resource(it.resource)]
+        freshness = [max(0.0, now - float(it.resource.resource_reported_at or now)) for it in reporting]
+
+        admission_counts = {"accepting": 0, "degraded": 0, "rejecting": 0}
+        for it in reporting:
+            state = (it.resource.admission_state or "").strip().lower()
+            if state in admission_counts:
+                admission_counts[state] += 1
+
+        missing_resource = max(0, len(alive_items) - len(reporting))
+        inflight_total = sum(int(it.load.inflight or 0) for it in alive_items)
+        qps_1m_total = sum(float(it.load.qps_1m or 0.0) for it in alive_items)
+        effective_capacity = int(capacity or 0)
+        load_ratio = inflight_total / max(effective_capacity, 1)
+
+        cpu_values = [float(it.resource.cpu_util) for it in reporting if it.resource.cpu_util is not None]
+        gpu_values = [float(it.resource.gpu_util_avg) for it in reporting if it.resource.gpu_util_avg is not None]
+        mem_used = sum(float(it.resource.memory_used_mb or 0.0) for it in reporting)
+        mem_total = sum(float(it.resource.memory_total_mb or 0.0) for it in reporting)
+        gpu_mem_used = sum(float(it.resource.gpu_mem_used_mb or 0.0) for it in reporting)
+        gpu_mem_total = sum(float(it.resource.gpu_mem_total_mb or 0.0) for it in reporting)
+        mem_free_ratios = [float(it.resource.memory_free_ratio) for it in reporting if it.resource.memory_free_ratio is not None]
+        rx_total = sum(float(it.resource.network_rx_mbps or 0.0) for it in reporting if it.resource.network_rx_mbps is not None)
+        tx_total = sum(float(it.resource.network_tx_mbps or 0.0) for it in reporting if it.resource.network_tx_mbps is not None)
+        has_rx = any(it.resource.network_rx_mbps is not None for it in reporting)
+        has_tx = any(it.resource.network_tx_mbps is not None for it in reporting)
+
+        if len(alive_items) == 0:
+            pool_state = "rejecting"
+        elif reporting and admission_counts["rejecting"] == len(reporting) and missing_resource == 0:
+            pool_state = "rejecting"
+        elif admission_counts["degraded"] or admission_counts["rejecting"] or missing_resource:
+            pool_state = "degraded"
+        else:
+            pool_state = "accepting"
+
+        return {
+            "schema_version": 1,
+            "proxy_id": proxy_id,
+            "generated_at": now,
+            "ttl_s": self._ttl_s,
+            "resource_freshness_s": _min_avg_max(freshness),
+            "instances": {
+                "total": len(items),
+                "alive": len(alive_items),
+                "stale": stale,
+                "with_resource": len(reporting),
+                "missing_resource": missing_resource,
+                "accepting": admission_counts["accepting"],
+                "degraded": admission_counts["degraded"],
+                "rejecting": admission_counts["rejecting"],
+            },
+            "load": {
+                "inflight_total": inflight_total,
+                "qps_1m_total": qps_1m_total,
+                "load_ratio": load_ratio,
+                "capacity": effective_capacity,
+                "prepare_queue_depth": prepare_queue_depth,
+                "ready_queue_depth": ready_queue_depth,
+            },
+            "utilization": {
+                "cpu_avg": _avg(cpu_values),
+                "cpu_max": max(cpu_values) if cpu_values else None,
+                "memory_used_mb": mem_used if reporting else None,
+                "memory_total_mb": mem_total if reporting else None,
+                "memory_used_ratio": _ratio(mem_used, mem_total),
+                "memory_free_ratio_min": min(mem_free_ratios) if mem_free_ratios else None,
+                "gpu_util_avg": _avg(gpu_values),
+                "gpu_util_max": max(gpu_values) if gpu_values else None,
+                "gpu_mem_used_mb": gpu_mem_used if reporting else None,
+                "gpu_mem_total_mb": gpu_mem_total if reporting else None,
+                "gpu_mem_used_ratio": _ratio(gpu_mem_used, gpu_mem_total),
+                "network_rx_mbps_total": rx_total if has_rx else None,
+                "network_tx_mbps_total": tx_total if has_tx else None,
+            },
+            "pool_admission_state": pool_state,
+            "pool_admission_reason": (
+                f"{admission_counts['accepting']} accepting, {admission_counts['degraded']} degraded, "
+                f"{admission_counts['rejecting']} rejecting, {len(alive_items)} alive"
+            ),
+        }
+
     def remove(self, instance_id: str) -> bool:
         with self._lock:
             return self._items.pop(instance_id, None) is not None
@@ -161,6 +264,24 @@ class InstancePool:
             if (now - int(it.last_seen_at)) <= self._ttl_s:
                 alive.append(it)
         return alive
+
+
+def _has_resource(resource: InstanceResource) -> bool:
+    return bool(resource.raw_resource) and resource.resource_reported_at is not None
+
+
+def _avg(values: List[float]) -> Optional[float]:
+    return (sum(values) / len(values)) if values else None
+
+
+def _min_avg_max(values: List[float]) -> Dict[str, Optional[float]]:
+    if not values:
+        return {"min": None, "avg": None, "max": None}
+    return {"min": min(values), "avg": sum(values) / len(values), "max": max(values)}
+
+
+def _ratio(used: float, total: float) -> Optional[float]:
+    return (used / total) if total > 0 else None
 
 
 def _as_float(value: Any) -> Optional[float]:
