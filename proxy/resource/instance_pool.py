@@ -57,7 +57,7 @@ class InstancePool:
     """
     In-memory instance pool (TTL based).
     - upsert: register/update instance static fields
-    - heartbeat: refresh last_seen and optionally update non-lifecycle load fields
+    - heartbeat: refresh last_seen and optionally update load fields
     - list(include_dead=False): returns alive instances by default
     """
     def __init__(self, ttl_s: int = 30):
@@ -90,6 +90,8 @@ class InstancePool:
                 it.weight = float(weight)
                 if meta:
                     it.meta.update(meta)
+                if it.load.inflight is None:
+                    it.load.inflight = 0
                 it.last_seen_at = now
                 return it
 
@@ -101,6 +103,7 @@ class InstancePool:
                 tags=tags or [],
                 weight=float(weight),
                 meta=meta or {},
+                load=InstanceLoad(inflight=0),
                 registered_at=now,
                 last_seen_at=now,
             )
@@ -188,14 +191,6 @@ class InstancePool:
             queue_item = per_instance_queue.get(it.instance_id, {})
             inflight = it.load.inflight
             qps_1m = it.load.qps_1m
-            score = {
-                "primary": "inflight" if inflight is not None else None,
-                "primary_value": inflight,
-                "primary_source": "proxy_lifecycle_counter" if inflight is not None else "unavailable",
-                "secondary": "qps_1m" if qps_1m is not None else None,
-                "secondary_value": qps_1m,
-                "secondary_source": "instance_heartbeat" if qps_1m is not None else "unavailable",
-            }
             instances.append({
                 "instance_id": it.instance_id,
                 "is_alive": is_alive,
@@ -205,7 +200,14 @@ class InstancePool:
                 "ready_queue_depth": queue_item.get("ready_queue_depth"),
                 "active_prepare": queue_item.get("active_prepare"),
                 "active_ready": queue_item.get("active_ready"),
-                "least_load_score": score,
+                "least_load_score": {
+                    "primary": "inflight" if inflight is not None else None,
+                    "primary_value": inflight,
+                    "primary_source": "proxy_lifecycle_counter" if inflight is not None else "unavailable",
+                    "secondary": "qps_1m" if qps_1m is not None else None,
+                    "secondary_value": qps_1m,
+                    "secondary_source": "instance_heartbeat" if qps_1m is not None else "unavailable",
+                },
             })
 
         return {

@@ -164,6 +164,8 @@ GET  /debug/instance_resources
 GET  /debug/instance_loads
 ```
 
+Use `/debug/instance_loads` to inspect Proxy-maintained per-Instance `inflight` counters, `qps_1m` when present, and queue-depth hints when the queue snapshot provider is available.
+
 The reporting path is:
 
 ```text
@@ -247,7 +249,7 @@ For streaming chat completion, the Proxy forwards the downstream SSE stream and 
 | Strategy | Aliases | Status | Description |
 |---|---|---|---|
 | `round_robin` | `round_robin`, `round-robin`, `rr` | Default | Selects alive Instances in round-robin order. |
-| `least_load` | `least_load`, `least-load`, `ll` | Experimental | Selects the lowest known Instance load by Proxy-maintained `load.inflight`, then uses `qps_1m` as a secondary signal. Missing metrics remain unknown rather than zero; if all candidates lack usable load metrics, selection falls back to round-robin. |
+| `least_load` | `least_load`, `least-load`, `ll` | Experimental | Selects the lowest known Instance load by `load.inflight`, then uses `qps_1m` as a secondary signal. Missing metrics remain unknown rather than zero; if all candidates lack usable load metrics, selection falls back to round-robin. |
 | `kv_aware` | Planned | Planned | Future strategy intended to consider KVCache locality/inventory together with runtime load. |
 
 Select `least_load` from the demo CLI:
@@ -260,12 +262,6 @@ Or select it through the environment:
 
 ```bash
 PROXY_INSTANCE_STRATEGY=least_load python3 test/demo_proxy.py
-```
-
-The Proxy increments the selected Instance's local inflight counter before enqueueing a request and decrements it when the response path finishes, fails, or is cancelled. Inspect these counters and queue-depth hints with:
-
-```bash
-curl -sS http://127.0.0.1:8002/debug/instance_loads | python3 -m json.tool
 ```
 
 If no alive Instance is available, the Proxy returns:

@@ -12,10 +12,9 @@ class LeastLoadStrategy(BaseInstanceStrategy):
     """
     Select the Instance with the lowest known load.
 
-    The strategy prefers known ``load.inflight`` values maintained by the Proxy
-    request lifecycle. It uses known ``load.qps_1m`` as a secondary signal,
-    without treating missing metrics as zero. When no useful load metrics are
-    known, it falls back to round-robin.
+    The strategy prefers known ``load.inflight`` values. It uses known
+    ``load.qps_1m`` as a secondary signal, without treating missing metrics as
+    zero. When no useful load metrics are known, it falls back to round-robin.
     """
 
     name = "least_load"
