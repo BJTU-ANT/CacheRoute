@@ -40,6 +40,7 @@ proxy/
 ├── strategy/
 │   ├── base.py                  # Base Instance selection strategy
 │   ├── round_robin.py           # Round-robin Instance selection
+│   ├── least_load.py            # Experimental least-load Instance selection
 │   ├── least_inflight.py        # Reserved for future strategy extension
 │   └── factory.py               # Strategy builder
 ├── queue/
@@ -83,7 +84,7 @@ Common options:
 |---|---|
 | `--host` | Proxy service-plane bind host. The demo also uses it as the advertised host. |
 | `--port` | Proxy service-plane bind port. The demo also uses it as the advertised port. |
-| `--strategy` | Local Instance selection strategy. Currently `round_robin` is the active demo path. |
+| `--strategy` | Local Instance selection strategy. Defaults to `round_robin`; use `least_load` for the experimental load-aware selector. |
 | `--injection-strategy` | Knowledge injection strategy. Use `default` or `iws`. |
 | `--ready-release-policy` | Ready queue release policy: `ordered` or `text_bypass`. |
 | `--kdn-links-json` | Optional static KDN topology metadata. |
@@ -240,11 +241,25 @@ For streaming chat completion, the Proxy forwards the downstream SSE stream and 
 
 ## Instance selection
 
-The active demo strategy is:
+### Proxy Instance selection strategies
 
-| Strategy | Description |
-|---|---|
-| `round_robin` | Selects alive Instances in round-robin order. |
+| Strategy | Aliases | Status | Description |
+|---|---|---|---|
+| `round_robin` | `round_robin`, `round-robin`, `rr` | Default | Selects alive Instances in round-robin order. |
+| `least_load` | `least_load`, `least-load`, `ll` | Experimental | Selects the lowest known Instance load by `load.inflight`, then uses `qps_1m` as a secondary signal. Missing metrics remain unknown rather than zero; if all candidates lack usable load metrics, selection falls back to round-robin. |
+| `kv_aware` | Planned | Planned | Future strategy intended to consider KVCache locality/inventory together with runtime load. |
+
+Select `least_load` from the demo CLI:
+
+```bash
+python3 test/demo_proxy.py --strategy least_load
+```
+
+Or select it through the environment:
+
+```bash
+PROXY_INSTANCE_STRATEGY=least_load python3 test/demo_proxy.py
+```
 
 If no alive Instance is available, the Proxy returns:
 
