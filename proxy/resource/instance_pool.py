@@ -172,7 +172,7 @@ class InstancePool:
         queue_depths: Optional[Dict[str, Any]] = None,
         include_dead: bool = True,
     ) -> Dict[str, Any]:
-        """Return per-Instance load inputs used by Proxy-local strategies and debug views."""
+        """Return per-Instance local load counters and optional queue-depth hints."""
         now = int(time.time())
         per_instance_queue = {}
         if queue_depths:
