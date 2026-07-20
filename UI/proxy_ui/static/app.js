@@ -16,6 +16,7 @@ const state = {
   },
   latest: {},
   history: [],
+  selectedInstanceId: null,
 };
 
 const OPTIONAL_UNAVAILABLE = {
@@ -72,8 +73,17 @@ function formatAge(value) {
   return `${(seconds / 60).toFixed(1)}m`;
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('\"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
 function badge(text, tone = 'muted') {
-  return `<span class="badge ${tone}-badge">${text}</span>`;
+  return `<span class="badge ${tone}-badge">${escapeHtml(text)}</span>`;
 }
 
 function progressBar(value, label) {
@@ -127,6 +137,60 @@ async function settleJson(path, options = {}) {
 function hasResourceReport(instance) {
   const resource = instance.resource || {};
   return Object.values(resource).some((value) => value !== null && value !== undefined);
+}
+
+
+function firstString(...values) {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+function summarizeModelCount(items, modelKeys = ['model', 'name', 'product_name']) {
+  if (!Array.isArray(items) || !items.length) {
+    return null;
+  }
+  const names = items.map((item) => {
+    if (typeof item === 'string') {
+      return item;
+    }
+    if (!item || typeof item !== 'object') {
+      return null;
+    }
+    return firstString(...modelKeys.map((key) => item[key]));
+  }).filter(Boolean);
+  if (!names.length) {
+    return `${items.length} device(s)`;
+  }
+  const first = names[0];
+  const same = names.every((name) => name === first);
+  return same ? `${items.length}×${first}` : `${items.length} devices`;
+}
+
+function hardwareSummary(instance) {
+  const raw = instance.resource?.raw_resource || {};
+  const devices = raw.devices && typeof raw.devices === 'object' ? raw.devices : {};
+  const cpu = devices.cpu && typeof devices.cpu === 'object' ? devices.cpu : {};
+  const cpuModel = firstString(cpu.model, cpu.model_name, cpu.name, instance.meta?.cpu_model);
+  const gpuList = Array.isArray(devices.gpu) ? devices.gpu : [];
+  const netList = Array.isArray(devices.network) ? devices.network : (Array.isArray(devices.nic) ? devices.nic : []);
+  return {
+    cpu: cpuModel ? `CPU: ${cpuModel}` : null,
+    gpu: summarizeModelCount(gpuList, ['model', 'name', 'product_name']) ? `GPU: ${summarizeModelCount(gpuList, ['model', 'name', 'product_name'])}` : null,
+    nic: summarizeModelCount(netList, ['model', 'name', 'interface', 'driver']) ? `NIC: ${summarizeModelCount(netList, ['model', 'name', 'interface', 'driver'])}` : null,
+  };
+}
+
+function hardwareBadges(instance) {
+  const hw = hardwareSummary(instance);
+  const parts = [hw.cpu, hw.gpu, hw.nic].filter(Boolean);
+  if (!parts.length) {
+    return badge('device: unknown', 'muted');
+  }
+  return parts.map((part) => badge(part, 'muted')).join('');
 }
 
 function resourceAgeTone(resource) {
@@ -268,9 +332,9 @@ function renderSummaryCards(summary, status, scheduler) {
 
   $('summaryCards').innerHTML = cards.map(([title, value, tone, detail]) => `
     <article class="summary-card ${tone}">
-      <span>${title}</span>
-      <strong>${value}</strong>
-      <small>${detail}</small>
+      <span>${escapeHtml(title)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      <small>${escapeHtml(detail)}</small>
     </article>
   `).join('');
 }
@@ -301,15 +365,16 @@ function renderInstanceCards(instances) {
       : null;
 
     return `
-      <article class="instance-card">
+      <article class="instance-card" role="button" tabindex="0" data-instance-id="${escapeHtml(instance.instance_id || '')}">
         <div class="instance-card-head">
-          <div><h3>${instance.instance_id || 'unknown instance'}</h3><p>${instance.host || '—'}:${instance.port || '—'}</p></div>
+          <div><h3>${escapeHtml(instance.instance_id || 'unknown instance')}</h3><p>${escapeHtml(instance.host || '—')}:${escapeHtml(instance.port || '—')}</p></div>
           ${instanceStateBadge(instance)}
         </div>
         <div class="badge-row">
           ${badge(`last seen: ${formatAge(instance.last_seen_at)}`, instance.is_alive === false ? 'bad' : 'muted')}
           ${badge(freshness, freshnessTone)}
           ${badge(resource.admission_state || 'admission: —', resource.admission_state ? 'muted' : 'warn')}
+          ${hardwareBadges(instance)}
         </div>
         ${progressBar(resource.cpu_util, 'CPU')}
         ${progressBar(memoryPercent, 'Memory')}
@@ -329,15 +394,15 @@ function renderInstanceTable(instances) {
   const filtered = sortInstances(applyFilters(instances));
   const rows = filtered.map((item) => `
     <tr>
-      <td>${item.instance_id || '—'}</td>
-      <td>${item.host || '—'}:${item.port || '—'}</td>
+      <td>${escapeHtml(item.instance_id || '—')}</td>
+      <td>${escapeHtml(item.host || '—')}:${escapeHtml(item.port || '—')}</td>
       <td>${instanceStateBadge(item)}</td>
       <td>${formatAge(item.last_seen_at)}<br><span class="muted">${formatTimestamp(item.last_seen_at)}</span></td>
       <td>${fmt(item.resource?.cpu_util)}%</td>
       <td>${fmt(item.resource?.memory_used_mb, 0)} / ${fmt(item.resource?.memory_total_mb, 0)} MB</td>
       <td>${fmt(item.resource?.gpu_util_avg)}%</td>
       <td>${badge(resourceAgeTone(item.resource || {})[0], resourceAgeTone(item.resource || {})[1])}</td>
-      <td><code>${JSON.stringify(item.meta || {})}</code></td>
+      <td><code>${escapeHtml(JSON.stringify(item.meta || {}))}</code></td>
     </tr>
   `).join('');
 
@@ -355,15 +420,15 @@ function renderResourceTable(resources) {
     const resource = item.resource || {};
     return `
       <tr>
-        <td>${item.instance_id}</td>
-        <td>${item.host}:${item.port}</td>
+        <td>${escapeHtml(item.instance_id)}</td>
+        <td>${escapeHtml(item.host)}:${escapeHtml(item.port)}</td>
         <td>${formatTimestamp(item.last_seen_at)}</td>
         <td>${fmt(resource.cpu_util)}%</td>
         <td>${fmt(resource.memory_used_mb, 0)} / ${fmt(resource.memory_total_mb, 0)} MB</td>
         <td>${fmt(resource.gpu_util_avg)}%</td>
         <td>${fmt(resource.gpu_mem_used_mb, 0)} / ${fmt(resource.gpu_mem_total_mb, 0)} MB</td>
         <td>rx ${fmt(resource.network_rx_mbps, 2)}<br>tx ${fmt(resource.network_tx_mbps, 2)}</td>
-        <td>${resource.admission_state || '—'}</td>
+        <td>${escapeHtml(resource.admission_state || '—')}</td>
         <td>${badge(resourceAgeTone(resource)[0], resourceAgeTone(resource)[1])}</td>
       </tr>
     `;
@@ -374,6 +439,54 @@ function renderResourceTable(resources) {
       <tr><th>Instance ID</th><th>Address</th><th>Last seen</th><th>CPU</th><th>Memory</th><th>GPU util</th><th>GPU memory</th><th>Network Mbps</th><th>Admission</th><th>Freshness</th></tr>
     </thead>
     <tbody>${rows || '<tr><td colspan="10">No resource snapshots yet.</td></tr>'}</tbody>
+  `;
+}
+
+
+function renderSystemTopology(instances, scheduler) {
+  const [schedulerLabel, schedulerTone] = schedulerText(scheduler);
+  const proxyId = state.config?.proxy_id || state.latest.status?.proxy_id || 'current proxy';
+  const instanceNodes = instances.map((instance) => `
+    <div class="topology-node instance ${instance.is_alive === false ? 'stale' : instance.is_alive === true ? 'alive' : 'unknown'}">
+      <strong>${escapeHtml(instance.instance_id || 'unknown')}</strong>
+      <span>${instance.is_alive === false ? 'stale' : instance.is_alive === true ? 'alive' : 'unknown'}</span>
+    </div>
+  `).join('') || '<div class="empty-state">No connected instances reported.</div>';
+  $('systemTopology').innerHTML = `
+    <div class="topology-node scheduler ${schedulerTone}"><strong>Scheduler</strong><span>${escapeHtml(schedulerLabel)}</span></div>
+    <div class="topology-edge">│</div>
+    <div class="topology-node proxy"><strong>Proxy (observed/local)</strong><span>${escapeHtml(proxyId)}</span></div>
+    <div class="topology-edge">┬</div>
+    <div class="topology-instances">${instanceNodes}</div>
+  `;
+}
+
+function renderInstanceDetail(instances) {
+  const panel = $('instanceDetailView');
+  if (!state.selectedInstanceId) {
+    panel.classList.add('hidden');
+    return;
+  }
+  const instance = instances.find((item) => String(item.instance_id) === String(state.selectedInstanceId));
+  if (!instance) {
+    panel.classList.remove('hidden');
+    panel.innerHTML = `<button id="backToOverviewBtn">← Back to overview</button><div class="empty-state">Selected instance is not present in the current payload.</div>`;
+    return;
+  }
+  const resource = instance.resource || {};
+  const hw = hardwareSummary(instance);
+  const staleNote = instance.is_alive === false ? '<p class="stale-note">This Instance is stale; values below may reflect the last known report.</p>' : '';
+  panel.classList.remove('hidden');
+  panel.innerHTML = `
+    <div class="panel-heading"><div><h2>Instance Detail: ${escapeHtml(instance.instance_id)}</h2>${staleNote}</div><button id="backToOverviewBtn">← Back to overview</button></div>
+    <div class="detail-grid">
+      <section><h3>Identity</h3><p>${escapeHtml(instance.host)}:${escapeHtml(instance.port)}</p><pre>${escapeHtml(stableJson({ endpoints: instance.endpoints, tags: instance.tags, weight: instance.weight, metadata: instance.meta }))}</pre></section>
+      <section><h3>Liveness</h3><p>${instanceStateBadge(instance)} ${badge(`registered: ${formatTimestamp(instance.registered_at)}`, 'muted')} ${badge(`last seen age: ${formatAge(instance.last_seen_at)}`, instance.is_alive === false ? 'bad' : 'muted')}</p></section>
+      <section><h3>Current Load</h3><p>inflight ${fmt(instance.load?.inflight, 0)} · qps ${fmt(instance.load?.qps_1m, 2)} · heartbeat GPU ${fmt(instance.load?.gpu_util)}%</p></section>
+      <section><h3>Resource Snapshot</h3><p>CPU ${fmt(resource.cpu_util)}% · memory ${fmt(resource.memory_used_mb,0)}/${fmt(resource.memory_total_mb,0)} MB · GPU ${fmt(resource.gpu_util_avg)}% · GPU memory ${fmt(resource.gpu_mem_used_mb,0)}/${fmt(resource.gpu_mem_total_mb,0)} MB · RX ${fmt(resource.network_rx_mbps,2)} Mbps · TX ${fmt(resource.network_tx_mbps,2)} Mbps · admission ${escapeHtml(resource.admission_state || '—')} · ${resourceAgeTone(resource)[0]}</p></section>
+      <section><h3>Hardware Summary</h3><p>${escapeHtml([hw.cpu, hw.gpu, hw.nic].filter(Boolean).join(' · ') || 'device: unknown')}</p></section>
+      <section class="wide"><h3>Raw Instance JSON</h3><pre>${escapeHtml(stableJson(instance))}</pre></section>
+    </div>
   `;
 }
 
@@ -402,9 +515,9 @@ function renderRawPanels() {
   $('toggleRawBtn').textContent = state.rawExpanded ? 'Collapse raw JSON' : 'Expand raw JSON';
   $('rawJsonPanels').innerHTML = entries.map(([title, payload]) => `
     <details ${state.rawExpanded ? 'open' : ''}>
-      <summary>${title}</summary>
-      <button class="copy-inline" data-copy-key="${title}">Copy</button>
-      <pre>${stableJson(payload || {})}</pre>
+      <summary>${escapeHtml(title)}</summary>
+      <button class="copy-inline" data-copy-key="${escapeHtml(title)}">Copy</button>
+      <pre>${escapeHtml(stableJson(payload || {}))}</pre>
     </details>
   `).join('');
 }
@@ -424,7 +537,16 @@ function drawLineChart(canvasId, series, options = {}) {
   context.lineTo(width - padding, height - padding);
   context.stroke();
 
-  const maxY = options.maxY ?? Math.max(1, ...series.flatMap((item) => item.values).filter((value) => Number.isFinite(value)));
+  const finiteValues = series.flatMap((item) => item.values).filter((value) => Number.isFinite(value));
+  if (!finiteValues.length) {
+    context.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--muted');
+    context.fillText('No metrics in rolling buffer', padding + 8, height / 2);
+    return;
+  }
+  context.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--muted');
+  context.fillText(options.yLabel || '', padding + 2, 12);
+  context.fillText(historyTimeLabel(), padding + 2, height - 4);
+  const maxY = options.maxY ?? Math.max(1, ...finiteValues);
   const colors = options.colors || ['#5ddcff', '#ffca5f'];
   series.forEach((line, lineIndex) => {
     context.strokeStyle = colors[lineIndex % colors.length];
@@ -448,19 +570,26 @@ function drawLineChart(canvasId, series, options = {}) {
   });
 }
 
+function historyTimeLabel() {
+  if (state.history.length < 2) {
+    return 'recent polling samples';
+  }
+  return `${state.history[0].at.toLocaleTimeString()} → ${state.history[state.history.length - 1].at.toLocaleTimeString()}`;
+}
+
 function renderCharts() {
   const history = state.history;
-  drawLineChart('chartCpu', [{ values: history.map((item) => item.cpu) }], { maxY: 100, colors: ['#5ddcff'] });
-  drawLineChart('chartMemory', [{ values: history.map((item) => item.memory) }], { maxY: 100, colors: ['#45d483'] });
-  drawLineChart('chartGpu', [{ values: history.map((item) => item.gpu) }], { maxY: 100, colors: ['#b38cff'] });
+  drawLineChart('chartCpu', [{ values: history.map((item) => item.cpu) }], { maxY: 100, colors: ['#5ddcff'], yLabel: '%' });
+  drawLineChart('chartMemory', [{ values: history.map((item) => item.memory) }], { maxY: 100, colors: ['#45d483'], yLabel: '%' });
+  drawLineChart('chartGpu', [{ values: history.map((item) => item.gpu) }], { maxY: 100, colors: ['#b38cff'], yLabel: '%' });
   drawLineChart('chartLiveness', [
     { values: history.map((item) => item.alive) },
     { values: history.map((item) => item.stale) },
-  ], { colors: ['#45d483', '#ff6b6b'] });
+  ], { colors: ['#45d483', '#ff6b6b'], yLabel: 'count' });
   drawLineChart('chartNetwork', [
     { values: history.map((item) => item.rx) },
     { values: history.map((item) => item.tx) },
-  ], { colors: ['#5ddcff', '#ffca5f'] });
+  ], { colors: ['#5ddcff', '#ffca5f'], yLabel: 'Mbps' });
 }
 
 function renderApiSummary() {
@@ -482,6 +611,8 @@ function renderAll() {
   renderInstanceCards(instances);
   renderInstanceTable(instances);
   renderResourceTable(resources);
+  renderSystemTopology(instances, state.latest.scheduler);
+  renderInstanceDetail(instances);
   renderTopology(state.latest.topology);
   renderScheduler(state.latest.scheduler);
   renderRawPanels();
@@ -594,6 +725,15 @@ function setupEventHandlers() {
     tab.addEventListener('click', () => activateTab(tab.dataset.tab));
   });
   document.addEventListener('click', (event) => {
+    const card = event.target.closest('.instance-card[data-instance-id]');
+    if (card) {
+      window.location.hash = `#/instances/${encodeURIComponent(card.dataset.instanceId)}`;
+      return;
+    }
+    if (event.target.closest('#backToOverviewBtn')) {
+      window.location.hash = '#/';
+      return;
+    }
     const copyButton = event.target.closest('[data-copy], [data-copy-key]');
     if (!copyButton) {
       return;
@@ -611,6 +751,24 @@ function setupEventHandlers() {
     };
     copyText(stableJson(payloads[key] || state.latest));
   });
+  document.addEventListener('keydown', (event) => {
+    const card = event.target.closest?.('.instance-card[data-instance-id]');
+    if (card && (event.key === 'Enter' || event.key === ' ')) {
+      event.preventDefault();
+      window.location.hash = `#/instances/${encodeURIComponent(card.dataset.instanceId)}`;
+    }
+  });
+  window.addEventListener('hashchange', syncRoute);
+  syncRoute();
+}
+
+function syncRoute() {
+  const match = window.location.hash.match(/^#\/instances\/(.+)$/);
+  state.selectedInstanceId = match ? decodeURIComponent(match[1]) : null;
+  renderInstanceDetail(Array.isArray(state.latest.instances) ? state.latest.instances : []);
+  if (state.selectedInstanceId) {
+    $('instanceDetailView').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 }
 
 function activateTab(tabName) {
