@@ -99,12 +99,58 @@ class QueueManager:
 
 
     def queue_depth_snapshot(self) -> Dict[str, Any]:
-        """Return coarse queue depths without exposing task payloads.
+        """Return queue pressure without exposing task payloads.
 
-        Scheduler-facing pool_resource uses only the global totals. The per-instance
-        section stays Proxy-local for debugging.
+        Scheduler-facing pool_resource uses only the global instantaneous totals.
+        The per-instance section stays Proxy-local for debugging and Instance
+        selection. It combines instantaneous queue depths with predicted pressure
+        derived from reservation timelines.
+        """
+        return self.queue_pressure_snapshot()
+
+    def queue_pressure_snapshot(self) -> Dict[str, Any]:
+        """Return per-instance instantaneous and predicted queue pressure.
+
+        The snapshot intentionally exposes only aggregate numeric fields. It never
+        includes task payloads, request bodies, prompts, or knowledge content.
         """
         per_instance = self._qmap.snapshot_depths()
+        now_s = time.time()
+
+        instance_ids = set(per_instance.keys())
+        instance_ids.update(self._instance_pending_tasks.keys())
+        instance_ids.update(self._instance_decode_tasks.keys())
+        instance_ids.update(self._instance_slot_free_ts_s.keys())
+        instance_ids.update(self._instance_prefill_free_ts_s.keys())
+
+        for instance_id in instance_ids:
+            item = per_instance.setdefault(
+                instance_id,
+                {
+                    "prepare_queue_depth": 0,
+                    "ready_queue_depth": 0,
+                    "active_prepare": 0,
+                    "active_ready": 0,
+                },
+            )
+            slot_free_ts = self._instance_slot_free_ts_s.get(instance_id) or []
+            next_slot_ready_in_ms = 0.0
+            if slot_free_ts:
+                next_slot_ready_in_ms = max(0.0, min(slot_free_ts) - now_s) * 1000.0
+            prefill_free_in_ms = max(
+                0.0,
+                float(self._instance_prefill_free_ts_s.get(instance_id, now_s)) - now_s,
+            ) * 1000.0
+            item.update(
+                {
+                    "pending_prefill_count": int(len(self._instance_pending_tasks.get(instance_id, []))),
+                    "active_decode_count": int(len(self._instance_decode_tasks.get(instance_id, []))),
+                    "next_slot_ready_in_ms": float(next_slot_ready_in_ms),
+                    "prefill_free_in_ms": float(prefill_free_in_ms),
+                    "predicted_total_backlog_ms": float(max(next_slot_ready_in_ms, prefill_free_in_ms)),
+                }
+            )
+
         prepare_total = sum(item["prepare_queue_depth"] for item in per_instance.values())
         ready_total = sum(item["ready_queue_depth"] for item in per_instance.values())
         return {

@@ -17,6 +17,9 @@ class LeastLoadWeights:
     active_ready: float = 1.0
     prepare_queue_depth: float = 0.25
     ready_queue_depth: float = 0.25
+    pending_prefill_count: float = 1.0
+    active_decode_count: float = 0.5
+    predicted_total_backlog_ms: float = 0.001
     qps_1m: float = 0.0
 
 
@@ -26,9 +29,10 @@ class LeastLoadStrategy(BaseInstanceStrategy):
 
     ``load.inflight`` remains the primary signal with implicit weight 1.0.
     Queue hints are added when the Proxy queue manager provides per-Instance
-    measurements. Missing metrics stay unknown rather than becoming measured
-    zeros. If no candidate has any measurable score component, selection falls
-    back to round-robin.
+    measurements, including instantaneous queue depth and predicted reservation
+    pressure. Missing metrics stay unknown rather than becoming measured zeros.
+    If no candidate has any measurable score component, selection falls back to
+    round-robin.
     """
 
     name = "least_load"
@@ -63,7 +67,15 @@ class LeastLoadStrategy(BaseInstanceStrategy):
         queue_item = self._queue_info(instance, hint)
         queue_source = "proxy_queue_manager" if queue_item is not None else "unavailable"
         if queue_item is not None:
-            for key in ("active_prepare", "active_ready", "prepare_queue_depth", "ready_queue_depth"):
+            for key in (
+                "active_prepare",
+                "active_ready",
+                "prepare_queue_depth",
+                "ready_queue_depth",
+                "pending_prefill_count",
+                "active_decode_count",
+                "predicted_total_backlog_ms",
+            ):
                 value = self._number_from_mapping(queue_item, key)
                 if value is not None:
                     components[key] = value
@@ -92,6 +104,9 @@ class LeastLoadStrategy(BaseInstanceStrategy):
             "active_ready": self.weights.active_ready,
             "prepare_queue_depth": self.weights.prepare_queue_depth,
             "ready_queue_depth": self.weights.ready_queue_depth,
+            "pending_prefill_count": self.weights.pending_prefill_count,
+            "active_decode_count": self.weights.active_decode_count,
+            "predicted_total_backlog_ms": self.weights.predicted_total_backlog_ms,
             "qps_1m": self.weights.qps_1m,
         }
 
