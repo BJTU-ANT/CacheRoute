@@ -7,6 +7,8 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from proxy.strategy.least_load import LeastLoadStrategy
+
 
 @dataclass
 class InstanceLoad:
@@ -183,6 +185,9 @@ class InstancePool:
         with self._lock:
             items = list(self._items.values())
 
+        score_strategy = LeastLoadStrategy()
+        score_hint = {"queue_depths": queue_depths} if queue_depths is not None else None
+
         instances: List[Dict[str, Any]] = []
         for it in items:
             is_alive = (now - int(it.last_seen_at)) <= self._ttl_s
@@ -191,6 +196,7 @@ class InstancePool:
             queue_item = per_instance_queue.get(it.instance_id, {})
             inflight = it.load.inflight
             qps_1m = it.load.qps_1m
+            least_load_score = score_strategy.compute_score(it, hint=score_hint)
             instances.append({
                 "instance_id": it.instance_id,
                 "is_alive": is_alive,
@@ -200,14 +206,7 @@ class InstancePool:
                 "ready_queue_depth": queue_item.get("ready_queue_depth"),
                 "active_prepare": queue_item.get("active_prepare"),
                 "active_ready": queue_item.get("active_ready"),
-                "least_load_score": {
-                    "primary": "inflight" if inflight is not None else None,
-                    "primary_value": inflight,
-                    "primary_source": "proxy_lifecycle_counter" if inflight is not None else "unavailable",
-                    "secondary": "qps_1m" if qps_1m is not None else None,
-                    "secondary_value": qps_1m,
-                    "secondary_source": "instance_heartbeat" if qps_1m is not None else "unavailable",
-                },
+                "least_load_score": least_load_score,
             })
 
         return {

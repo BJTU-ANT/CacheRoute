@@ -451,8 +451,17 @@ def select_instance(app: FastAPI, req_obj: SchedulerRequest):
     if not instances:
         return None
 
+    hint = {"request": req_obj}
     try:
-        chosen = strategy.select(instances, hint=req_obj)
+        hint["queue_depths"] = queue_mgr.queue_depth_snapshot()
+    except Exception:
+        logger.warning(
+            "[Proxy] queue snapshot failed during instance select; least_load will use inflight-only metrics",
+            exc_info=True,
+        )
+
+    try:
+        chosen = strategy.select(instances, hint=hint)
         return chosen
     except Exception as e:
         logger.warning("[Proxy] instance select failed: err=%s", str(e))

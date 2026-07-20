@@ -164,7 +164,26 @@ GET  /debug/instance_resources
 GET  /debug/instance_loads
 ```
 
-Use `/debug/instance_loads` to inspect Proxy-maintained per-Instance `inflight` counters, `qps_1m` when present, and queue-depth hints when the queue snapshot provider is available.
+Use `/debug/instance_loads` to inspect Proxy-maintained per-Instance `inflight` counters, `qps_1m` when present, queue-depth hints when the queue snapshot provider is available, and the queue-aware `least_load` score used for Instance selection.
+
+```bash
+curl -sS http://127.0.0.1:8002/debug/instance_loads | python3 -m json.tool
+```
+
+`least_load` uses a conservative deterministic score. `load.inflight` remains the primary signal with implicit weight `1.0`. When queue hints are available, the strategy also adds per-Instance active prepare work, active ready work, prepare queue depth, and ready queue depth. `qps_1m` from Instance heartbeats is supported but disabled by default with weight `0.0`. Missing metrics remain unavailable; they are not converted to measured zeroes, and the strategy falls back to round-robin if no load signal is known. Ties at the minimum score are also broken by round-robin.
+
+Default `least_load` weights are:
+
+| Component | Default weight | Source |
+| --- | ---: | --- |
+| `inflight` | `1.0` | Proxy lifecycle counter |
+| `active_prepare` | `1.0` | Proxy queue manager per-Instance snapshot |
+| `active_ready` | `1.0` | Proxy queue manager per-Instance snapshot |
+| `prepare_queue_depth` | `0.25` | Proxy queue manager per-Instance snapshot |
+| `ready_queue_depth` | `0.25` | Proxy queue manager per-Instance snapshot |
+| `qps_1m` | `0.0` | Instance heartbeat |
+
+The debug response includes `least_load_score.total`, raw `least_load_score.components`, weighted components, metric sources, queue source availability, and the weights used to compute the score.
 
 The reporting path is:
 
