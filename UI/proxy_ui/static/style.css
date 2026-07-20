@@ -605,65 +605,225 @@ summary {
   font-weight: 800;
 }
 
-.topology-diagram {
-  display: grid;
-  justify-items: center;
-  gap: 8px;
-  min-height: 260px;
+
+:root {
+  --topology-scheduler: var(--accent-2);
+  --topology-proxy: var(--accent);
+  --topology-instance: var(--ok);
+  --topology-link: color-mix(in srgb, var(--accent) 58%, var(--line));
+  --chart-free: color-mix(in srgb, var(--muted) 30%, transparent);
 }
 
-.topology-node {
-  width: min(100%, 320px);
+.topology-diagram {
+  min-height: 360px;
+}
+
+.topology-scroll {
+  width: 100%;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: radial-gradient(circle at 50% 10%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 24rem), var(--surface-2);
+}
+
+.topology-svg {
+  display: block;
+  width: 100%;
+  min-width: 720px;
+  height: auto;
+}
+
+.topology-link {
+  fill: none;
+  stroke: var(--topology-link);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-dasharray: 10 8;
+  animation: topology-flow 2.8s linear infinite;
+  opacity: 0.86;
+}
+
+.topology-link.inactive,
+.topology-link.unknown {
+  stroke: var(--muted);
+  stroke-dasharray: 4 8;
+  animation: none;
+  opacity: 0.48;
+}
+
+.topology-link.stale {
+  stroke: var(--bad);
+  animation: none;
+  opacity: 0.62;
+}
+
+.topology-diagram.paused .topology-link {
+  animation-play-state: paused;
+}
+
+@keyframes topology-flow {
+  to { stroke-dashoffset: -36; }
+}
+
+.topology-svg-node {
+  cursor: default;
+}
+
+.topology-svg-node[role='button'] {
+  cursor: pointer;
+}
+
+.topology-svg-node[role='button']:focus-visible .node-halo,
+.topology-svg-node[role='button']:hover .node-halo {
+  stroke-width: 4;
+  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--accent) 70%, transparent));
+}
+
+.topology-svg-node .node-halo {
+  fill: var(--surface);
+  stroke: var(--line);
+  stroke-width: 2;
+}
+
+.topology-svg-node.scheduler .node-halo { stroke: var(--topology-scheduler); }
+.topology-svg-node.scheduler.ok .node-halo { stroke: var(--ok); }
+.topology-svg-node.scheduler.bad .node-halo { stroke: var(--bad); }
+.topology-svg-node.scheduler.warn .node-halo { stroke: var(--warn); }
+.topology-svg-node.scheduler.muted .node-halo { stroke: var(--muted); }
+.topology-svg-node.proxy .node-halo { stroke: var(--topology-proxy); }
+.topology-svg-node.proxy.bad .node-halo { stroke: var(--bad); }
+.topology-svg-node.proxy.warn .node-halo { stroke: var(--warn); }
+.topology-svg-node.instance.ok .node-halo { stroke: var(--topology-instance); }
+.topology-svg-node.instance.bad .node-halo { stroke: var(--bad); }
+.topology-svg-node.instance.warn .node-halo { stroke: var(--warn); }
+
+.topology-svg-node use {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.topology-svg-node.scheduler { color: var(--topology-scheduler); }
+.topology-svg-node.scheduler.ok { color: var(--ok); }
+.topology-svg-node.scheduler.bad { color: var(--bad); }
+.topology-svg-node.scheduler.warn { color: var(--warn); }
+.topology-svg-node.scheduler.muted { color: var(--muted); }
+.topology-svg-node.proxy { color: var(--topology-proxy); }
+.topology-svg-node.proxy.bad { color: var(--bad); }
+.topology-svg-node.proxy.warn { color: var(--warn); }
+.topology-svg-node.instance.ok { color: var(--topology-instance); }
+.topology-svg-node.instance.bad { color: var(--bad); }
+.topology-svg-node.instance.warn { color: var(--warn); }
+
+.node-label,
+.node-status {
+  fill: var(--text);
+  font-weight: 800;
+  font-size: 13px;
+  text-anchor: middle;
+}
+
+.node-status {
+  fill: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.kpi-card,
+.donut-card,
+.hardware-grid article {
   padding: 12px;
-  text-align: center;
   background: var(--surface-2);
   border: 1px solid var(--line);
   border-radius: 14px;
 }
 
-.topology-node strong,
-.topology-node span {
+.kpi-card span,
+.viz-metric small,
+.donut-card p,
+.hardware-grid small {
+  color: var(--muted);
+}
+
+.kpi-card strong {
+  display: block;
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+
+.viz-metric {
+  margin-top: 12px;
+}
+
+.viz-metric.bad .progress span { background: linear-gradient(90deg, var(--bad), var(--warn)); }
+
+.donut-grid,
+.hardware-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.donut {
+  width: 150px;
+  max-width: 100%;
+  margin: 10px auto;
   display: block;
 }
 
-.topology-node span {
-  color: var(--muted);
-  font-size: 12px;
+.donut-free,
+.donut-used {
+  fill: none;
+  stroke-width: 5;
 }
 
-.topology-node.proxy {
-  border-color: color-mix(in srgb, var(--accent) 65%, var(--line));
+.donut-free { stroke: var(--chart-free); }
+.donut-used {
+  stroke: var(--accent);
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: 50% 50%;
 }
 
-.topology-node.alive,
-.topology-node.ok {
-  border-color: color-mix(in srgb, var(--ok) 65%, var(--line));
-}
-
-.topology-node.stale,
-.topology-node.bad {
-  border-color: color-mix(in srgb, var(--bad) 65%, var(--line));
-}
-
-.topology-node.warn,
-.topology-node.unknown {
-  border-color: color-mix(in srgb, var(--warn) 65%, var(--line));
-}
-
-.topology-edge {
-  color: var(--muted);
+.donut text {
+  fill: var(--text);
+  font-size: 8px;
   font-weight: 900;
+  text-anchor: middle;
 }
 
-.topology-instances {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-  gap: 10px;
-  width: 100%;
+.dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
 }
 
-.topology-instances .topology-node {
-  width: 100%;
+.dot.used { background: var(--accent); }
+.dot.free { background: var(--chart-free); }
+
+.empty-state.compact {
+  padding: 14px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .topology-link,
+  .progress span,
+  button,
+  .button-link,
+  .instance-card {
+    animation: none !important;
+    transition: none !important;
+  }
 }
 
 @media (max-width: 1200px) {
