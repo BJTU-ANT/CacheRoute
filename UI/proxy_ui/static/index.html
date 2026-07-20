@@ -52,22 +52,30 @@
   <main>
     <section class="summary-grid" id="summaryCards" aria-label="Summary cards"></section>
 
-    <section class="panel overview-panel" data-section="overview">
-      <div class="panel-heading">
-        <div>
-          <h2>Resource Trends</h2>
-          <p>Short in-browser history. Missing metrics degrade to empty chart segments.</p>
+    <section class="overview-layout" data-section="overview">
+      <section class="panel overview-panel">
+        <div class="panel-heading">
+          <div>
+            <h2>Resource Trends</h2>
+            <p>Rolling in-browser polling buffer; history is not persisted by the backend.</p>
+          </div>
+          <span id="pollingState" class="badge ok-badge">Polling</span>
         </div>
-        <span id="pollingState" class="badge ok-badge">Polling</span>
-      </div>
-      <div class="chart-grid">
-        <article class="chart-card"><h3>CPU avg %</h3><canvas id="chartCpu" width="460" height="160"></canvas></article>
-        <article class="chart-card"><h3>Memory used %</h3><canvas id="chartMemory" width="460" height="160"></canvas></article>
-        <article class="chart-card"><h3>GPU avg %</h3><canvas id="chartGpu" width="460" height="160"></canvas></article>
-        <article class="chart-card"><h3>Alive / stale instances</h3><canvas id="chartLiveness" width="460" height="160"></canvas></article>
-        <article class="chart-card wide"><h3>Network RX / TX Mbps</h3><canvas id="chartNetwork" width="940" height="160"></canvas></article>
-      </div>
+        <div class="chart-grid">
+          <article class="chart-card"><h3>CPU average</h3><p class="chart-caption">Y: %, X: recent polling samples</p><canvas id="chartCpu" width="460" height="160"></canvas></article>
+          <article class="chart-card"><h3>Memory used ratio</h3><p class="chart-caption">Y: %, X: recent polling samples</p><canvas id="chartMemory" width="460" height="160"></canvas></article>
+          <article class="chart-card"><h3>GPU average</h3><p class="chart-caption">Y: %, X: recent polling samples</p><canvas id="chartGpu" width="460" height="160"></canvas></article>
+          <article class="chart-card"><h3>Alive / stale instances</h3><p class="chart-caption">Y: count, X: recent polling samples</p><div class="legend"><span class="swatch ok"></span>alive <span class="swatch bad"></span>stale</div><canvas id="chartLiveness" width="460" height="160"></canvas></article>
+          <article class="chart-card wide"><h3>Network RX / TX</h3><p class="chart-caption">Y: Mbps, X: recent polling samples</p><div class="legend"><span class="swatch rx"></span>RX <span class="swatch tx"></span>TX</div><canvas id="chartNetwork" width="940" height="160"></canvas></article>
+        </div>
+      </section>
+      <section class="panel topology-card" aria-label="System topology">
+        <div class="panel-heading"><div><h2>System Topology</h2><p>Automatically discovered Scheduler → local Proxy → Instance view.</p></div></div>
+        <div id="systemTopology" class="topology-diagram">Loading topology...</div>
+      </section>
     </section>
+
+    <section id="instanceDetailView" class="panel detail-panel hidden" aria-label="Instance detail view"></section>
 
     <section class="panel" data-section="instances">
       <div class="panel-heading">
