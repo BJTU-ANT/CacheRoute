@@ -16,15 +16,47 @@ function inst(id, alive, extra = {}) {
 }
 
 function testNullSemantics() {
-  const cases = [null, undefined, '', '   ', true, false, NaN, Infinity, -Infinity];
+  const cases = [null, undefined, '', '   ', true, false, NaN, Infinity, -Infinity, [], [1], {}, new Date()];
   for (const value of cases) assert.strictEqual(ui.finiteNumber(value), null, `expected null for ${String(value)}`);
   assert.strictEqual(ui.finiteNumber(0), 0);
   assert.strictEqual(ui.finiteNumber(-3), -3);
   assert.strictEqual(ui.finiteNumber('0'), 0);
+  assert.strictEqual(ui.finiteNumber('42'), 42);
   assert.strictEqual(ui.finiteNumber(' 42.5 '), 42.5);
   assert.strictEqual(ui.fmt(null), '—');
   assert.strictEqual(ui.percentOf('', 100), null);
   assert(!ui.renderMetricBar({ label: 'null', value: null, max: 100 }).includes('0.00'));
+}
+
+
+function testComputeMetricsNullAverages() {
+  let metrics = ui.computeMetrics([
+    inst('missing', true, { resource: { cpu_util: null, gpu_util_avg: null, network_rx_mbps: null, network_tx_mbps: null, memory_used_mb: null, memory_total_mb: null } }),
+    inst('valid', true, { resource: { cpu_util: 80, gpu_util_avg: 60, network_rx_mbps: 10, network_tx_mbps: 5, memory_used_mb: 50, memory_total_mb: 100 } }),
+  ]);
+  assert.strictEqual(metrics.cpu, 80);
+  assert.strictEqual(metrics.gpu, 60);
+  assert.strictEqual(metrics.rx, 10);
+  assert.strictEqual(metrics.tx, 5);
+  assert.strictEqual(metrics.memory, 50);
+
+  metrics = ui.computeMetrics([
+    inst('all-null-a', true, { resource: { cpu_util: null, gpu_util_avg: null, network_rx_mbps: null, network_tx_mbps: null, memory_used_mb: null, memory_total_mb: null } }),
+    inst('all-null-b', true, { resource: { cpu_util: '', gpu_util_avg: undefined, network_rx_mbps: false, network_tx_mbps: {}, memory_used_mb: 1, memory_total_mb: 0 } }),
+  ]);
+  assert.strictEqual(metrics.cpu, null);
+  assert.strictEqual(metrics.gpu, null);
+  assert.strictEqual(metrics.rx, null);
+  assert.strictEqual(metrics.tx, null);
+  assert.strictEqual(metrics.memory, null);
+}
+
+function testHasResourceReport() {
+  assert.strictEqual(ui.hasResourceReport(inst('raw-empty', true, { resource: { raw_resource: {} } })), false);
+  assert.strictEqual(ui.hasResourceReport(inst('reported-null', true, { resource: { resource_reported_at: null, raw_resource: { devices: {} } } })), false);
+  assert.strictEqual(ui.hasResourceReport(inst('reported', true, { resource: { resource_reported_at: 1700000000, raw_resource: {} } })), true);
+  assert.strictEqual(ui.hasResourceReport(inst('scalar', true, { resource: { cpu_util: 0, resource_reported_at: null } })), true);
+  assert.strictEqual(ui.hasResourceReport(inst('unavailable', true, { resource: { cpu_util: null, memory_total_mb: '', gpu_util_avg: false, network_rx_mbps: {}, raw_resource: {} } })), false);
 }
 
 function testTopologyScenarios() {
@@ -74,12 +106,13 @@ function testMetricsAndMissingData() {
 }
 
 function testQueueExtractionAndLoadMerge() {
-  const loads = { ok: true, instances: [{ instance_id: 'known', inflight: null, qps_1m: '2.5', prepare_queue_depth: 3, ready_queue_depth: 4, active_prepare: 1, active_ready: 0, least_load_score: { total: 9.25 } }] };
+  const loads = { ok: true, metric_source: { queue_depth: 'proxy_queue_manager' }, instances: [{ instance_id: 'known', inflight: null, qps_1m: '2.5', prepare_queue_depth: 3, ready_queue_depth: 4, active_prepare: 1, active_ready: 0, least_load_score: { total: 9.25 } }] };
   const metrics = ui.queueMetricsForInstance(inst('known', true, { load: { inflight: null, qps_1m: null } }), loads);
   assert(metrics.some((q) => q.key === 'prepare_queue_depth' && q.value === 3));
   assert(metrics.some((q) => q.key === 'active_ready' && q.value === 0));
-  assert(metrics.some((q) => q.key === 'least_load_score.total' && q.value === 9.25));
+  assert(!metrics.some((q) => q.key === 'least_load_score.total'));
   assert(!metrics.some((q) => q.key === 'inflight'));
+  assert.deepStrictEqual(ui.queueMetricsForInstance(inst('only-load', true)).map((q) => q.key), []);
 
   assert.deepStrictEqual(ui.extractQueueMetrics(inst('none', true)).map((q) => q.key), ['load.inflight']);
   const nested = inst('nested', true, {
@@ -114,6 +147,7 @@ function testHardwareAndPausedDom() {
   assert(panel.innerHTML.includes('350 W'));
   assert(panel.innerHTML.includes('eth0'));
   assert(panel.innerHTML.includes('100000 Mbps'));
+  assert(panel.innerHTML.includes('No detailed queue counters are exposed by the current Instance load snapshot.'));
 
   const container = { classList: { value: false, toggle(cls, on) { this.value = cls === 'paused' && on; } } };
   ui.state.paused = true;
@@ -133,6 +167,8 @@ function testThemeAndReducedMotionStaticHooks() {
 }
 
 testNullSemantics();
+testComputeMetricsNullAverages();
+testHasResourceReport();
 testTopologyScenarios();
 testMetricsAndMissingData();
 testQueueExtractionAndLoadMerge();

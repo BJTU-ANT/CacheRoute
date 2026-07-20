@@ -136,7 +136,15 @@ async function settleJson(path, options = {}) {
 
 function hasResourceReport(instance) {
   const resource = instance.resource || {};
-  return Object.values(resource).some((value) => value !== null && value !== undefined);
+  if (finiteNumber(resource.resource_reported_at) !== null) {
+    return true;
+  }
+  const scalarKeys = [
+    'cpu_util', 'memory_used_mb', 'memory_total_mb', 'memory_free_mb',
+    'gpu_util_avg', 'gpu_mem_used_mb', 'gpu_mem_total_mb',
+    'network_rx_mbps', 'network_tx_mbps',
+  ];
+  return scalarKeys.some((key) => finiteNumber(resource[key]) !== null);
 }
 
 
@@ -294,15 +302,15 @@ function average(values) {
 }
 
 function computeMetrics(instances) {
-  const cpu = average(instances.map((item) => Number(item.resource?.cpu_util)));
+  const cpu = average(instances.map((item) => finiteNumber(item.resource?.cpu_util)));
   const memory = average(instances.map((item) => {
-    const used = Number(item.resource?.memory_used_mb);
-    const total = Number(item.resource?.memory_total_mb);
-    return Number.isFinite(used) && Number.isFinite(total) && total > 0 ? (used / total) * 100 : NaN;
+    const used = finiteNumber(item.resource?.memory_used_mb);
+    const total = finiteNumber(item.resource?.memory_total_mb);
+    return used !== null && total !== null && total > 0 ? (used / total) * 100 : null;
   }));
-  const gpu = average(instances.map((item) => Number(item.resource?.gpu_util_avg)));
-  const rx = average(instances.map((item) => Number(item.resource?.network_rx_mbps)));
-  const tx = average(instances.map((item) => Number(item.resource?.network_tx_mbps)));
+  const gpu = average(instances.map((item) => finiteNumber(item.resource?.gpu_util_avg)));
+  const rx = average(instances.map((item) => finiteNumber(item.resource?.network_rx_mbps)));
+  const tx = average(instances.map((item) => finiteNumber(item.resource?.network_tx_mbps)));
   return { cpu, memory, gpu, rx, tx };
 }
 
@@ -456,14 +464,18 @@ function shortText(value, max = 18) {
 }
 
 function finiteNumber(value) {
-  if (value === null || value === undefined || typeof value === 'boolean') {
-    return null;
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
   }
-  if (typeof value === 'string' && value.trim() === '') {
-    return null;
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    const numberPattern = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i;
+    if (!numberPattern.test(trimmed)) return null;
+    const number = Number(trimmed);
+    return Number.isFinite(number) ? number : null;
   }
-  const number = Number(value);
-  return Number.isFinite(number) ? number : null;
+  return null;
 }
 
 function percentOf(value, max) {
@@ -621,24 +633,37 @@ function nestedNumber(payload, path) {
   return path.split('.').reduce((acc, key) => (acc && typeof acc === 'object' ? acc[key] : undefined), payload);
 }
 
-function explicitQueueMetrics(load) {
+function explicitLoadMetrics(load) {
   return [
     ['inflight', 'Inflight'],
     ['qps_1m', 'QPS 1m'],
-    ['prepare_queue_depth', 'Prepare queue depth'],
-    ['ready_queue_depth', 'Ready queue depth'],
-    ['active_prepare', 'Active prepare'],
-    ['active_ready', 'Active ready'],
+    ['gpu_util', 'Heartbeat GPU util'],
     ['least_load_score.total', 'Least-load score'],
   ].map(([key, label]) => ({ key, label, value: finiteNumber(nestedNumber(load, key)) }))
     .filter((item) => item.value !== null);
 }
 
+function explicitDetailedQueueMetrics(load) {
+  return [
+    ['prepare_queue_depth', 'Prepare queue depth'],
+    ['ready_queue_depth', 'Ready queue depth'],
+    ['active_prepare', 'Active prepare'],
+    ['active_ready', 'Active ready'],
+  ].map(([key, label]) => ({ key, label, value: finiteNumber(nestedNumber(load, key)) }))
+    .filter((item) => item.value !== null);
+}
+
+
 function queueMetricsForInstance(instance, loadsPayload = state.latest.loads) {
   const load = mergedInstanceLoad(instance, loadsPayload);
-  const explicit = explicitQueueMetrics(load);
-  return explicit.length ? explicit : extractQueueMetrics(instance);
+  const explicit = explicitDetailedQueueMetrics(load);
+  const explicitKeys = new Set(explicit.map((item) => item.key));
+  const loadOnlyKeys = new Set(['load.inflight', 'load.qps_1m', 'load.gpu_util', 'inflight', 'qps_1m', 'gpu_util', 'least_load_score.total']);
+  const heuristic = extractQueueMetrics(instance)
+    .filter((item) => !explicitKeys.has(item.key) && !loadOnlyKeys.has(item.key));
+  return [...explicit, ...heuristic];
 }
+
 
 function applyPausedTopologyState() {
   const container = typeof document !== 'undefined' ? $('systemTopology') : null;
@@ -709,6 +734,7 @@ function renderInstanceDetail(instances) {
   const memPercent = percentOf(resource.memory_used_mb, resource.memory_total_mb);
   const gpuMemPercent = percentOf(resource.gpu_mem_used_mb, resource.gpu_mem_total_mb);
   const networkMax = Math.max(finiteNumber(resource.network_rx_mbps) || 0, finiteNumber(resource.network_tx_mbps) || 0, 1);
+  const loadMetrics = explicitLoadMetrics(load);
   const queues = queueMetricsForInstance(instance);
   const maxQueue = Math.max(1, ...queues.map((item) => item.value));
   const hw = hardwareDetails(instance);
@@ -716,12 +742,13 @@ function renderInstanceDetail(instances) {
   panel.classList.remove('hidden');
   panel.innerHTML = `<div class="panel-heading detail-header"><div><h2>Instance Detail: ${escapeHtml(instance.instance_id)}</h2><p>${escapeHtml(instance.host || '—')}:${escapeHtml(instance.port || '—')} · ${instanceStateBadge(instance)}</p>${staleNote}</div><button id="backToOverviewBtn">← Back to overview</button></div>
     <div class="kpi-grid">
-      ${[['Status', stateLabel(instance)], ['Instance ID', instance.instance_id], ['Host:port', `${instance.host || '—'}:${instance.port || '—'}`], ['Admission', resource.admission_state || '—'], ['Registered', formatTimestamp(instance.registered_at)], ['Last seen age', formatAge(instance.last_seen_at)], ['Resource age', formatAge(resource.resource_reported_at)], ['Inflight', displayNumber(load.inflight, 0)], ['QPS 1m', displayNumber(load.qps_1m, 2)]].map(([k,v]) => `<article class="kpi-card"><span>${escapeHtml(k)}</span><strong>${escapeHtml(v)}</strong></article>`).join('')}
+      ${[['Status', stateLabel(instance)], ['Instance ID', instance.instance_id], ['Host:port', `${instance.host || '—'}:${instance.port || '—'}`], ['Admission', resource.admission_state || '—'], ['Registered', formatTimestamp(instance.registered_at)], ['Last seen age', formatAge(instance.last_seen_at)], ['Resource age', formatAge(resource.resource_reported_at)], ['Inflight', displayNumber(load.inflight, 0)], ['QPS 1m', displayNumber(load.qps_1m, 2)], ['GPU util', displayNumber(load.gpu_util, 1)], ['Least-load score', displayNumber(nestedNumber(load, 'least_load_score.total'), 2)]].map(([k,v]) => `<article class="kpi-card"><span>${escapeHtml(k)}</span><strong>${escapeHtml(v)}</strong></article>`).join('')}
     </div>
     <div class="detail-grid visual-detail">
       <section><h3>Resource utilization</h3>${renderMetricBar({ label:'CPU utilization', value:resource.cpu_util, max:100, unit:'%', secondaryText:'reported resource.cpu_util' })}${renderMetricBar({ label:'System memory', value:resource.memory_used_mb, max:resource.memory_total_mb, unit:' MB', secondaryText:`${displayNumber(resource.memory_used_mb,0)} / ${displayNumber(resource.memory_total_mb,0)} MB (${memPercent === null ? '—' : memPercent.toFixed(1)+'%'})` })}${renderMetricBar({ label:'GPU utilization', value:resource.gpu_util_avg, max:100, unit:'%', secondaryText:'reported resource.gpu_util_avg' })}${renderMetricBar({ label:'GPU memory', value:resource.gpu_mem_used_mb, max:resource.gpu_mem_total_mb, unit:' MB', secondaryText:`${displayNumber(resource.gpu_mem_used_mb,0)} / ${displayNumber(resource.gpu_mem_total_mb,0)} MB (${gpuMemPercent === null ? '—' : gpuMemPercent.toFixed(1)+'%'})` })}${renderMetricBar({ label:'Network RX', value:resource.network_rx_mbps, max:networkMax, unit:' Mbps', secondaryText:'relative to current RX/TX max' })}${renderMetricBar({ label:'Network TX', value:resource.network_tx_mbps, max:networkMax, unit:' Mbps', secondaryText:'relative to current RX/TX max' })}</section>
       <section><h3>Resource composition</h3><div class="donut-grid">${renderDonutChart({ label:'System memory', used:resource.memory_used_mb, total:resource.memory_total_mb, unit:' MB' })}${renderDonutChart({ label:'GPU memory', used:resource.gpu_mem_used_mb, total:resource.gpu_mem_total_mb, unit:' MB' })}</div></section>
-      <section><h3>Queue and load</h3><p class="muted">Known load fields: inflight ${escapeHtml(displayNumber(load.inflight,0))}, qps_1m ${escapeHtml(displayNumber(load.qps_1m,2))}, gpu_util ${escapeHtml(displayNumber(load.gpu_util,1))}%.</p>${queues.length ? queues.map((q) => renderMetricBar({ label:q.label, value:q.value, max:maxQueue, unit:'', secondaryText:q.key })).join('') : '<div class="empty-state compact">No detailed queue counters are exposed by the current Instance payload.</div>'}</section>
+      <section><h3>Load metrics</h3>${loadMetrics.length ? loadMetrics.map((metric) => `<article class="kpi-card inline-kpi"><span>${escapeHtml(metric.label)}</span><strong>${escapeHtml(displayNumber(metric.value, 2))}</strong><small>${escapeHtml(metric.key)}</small></article>`).join('') : '<div class="empty-state compact">No load metrics are exposed by the current Instance load snapshot.</div>'}</section>
+      <section><h3>Detailed queue counters</h3>${queues.length ? queues.map((q) => renderMetricBar({ label:q.label, value:q.value, max:maxQueue, unit:'', secondaryText:q.key })).join('') : '<div class="empty-state compact">No detailed queue counters are exposed by the current Instance load snapshot.</div>'}</section>
       <section><h3>Hardware</h3><div class="hardware-grid"><article><h4>CPU</h4><p>${escapeHtml(firstString(hw.cpu.model, hw.cpu.model_name, hw.cpu.name, instance.meta?.cpu_model) || 'No CPU details')}</p>${hw.cpu.cores || hw.cpu.logical_cpus ? `<small>${escapeHtml(`cores ${hw.cpu.cores || '—'} · logical ${hw.cpu.logical_cpus || '—'}`)}</small>` : ''}</article><article><h4>GPU</h4>${hw.gpus.length ? hw.gpus.map((gpu, i) => `<p>${escapeHtml(`#${gpu.index ?? i} ${gpuName(gpu) || 'GPU'}`)}${gpu.uuid ? ` · ${escapeHtml(gpu.uuid)}` : ''} · mem ${escapeHtml(displayNumber(gpu.memory_used_mb,0))}/${escapeHtml(displayNumber(gpu.memory_total_mb,0))} MB${gpu.memory_free_mb !== undefined ? ` · free ${escapeHtml(displayNumber(gpu.memory_free_mb,0))} MB` : ''} · util ${escapeHtml(displayNumber(gpuUtil(gpu),1))}%${gpu.temperature_c !== undefined ? ` · ${escapeHtml(displayNumber(gpu.temperature_c,1))}°C` : ''}${gpu.power_w !== undefined ? ` · ${escapeHtml(displayNumber(gpu.power_w,1))} W` : ''}</p>`).join('') : '<p>No GPU details</p>'}</article><article><h4>NIC</h4>${hw.nics.length ? hw.nics.map((nic) => `<p>${escapeHtml(nicName(nic) || 'NIC')}${nic.driver ? ` · ${escapeHtml(nic.driver)}` : ''}${nic.speed_mbps ? ` · ${escapeHtml(displayNumber(nic.speed_mbps,0))} Mbps` : (nic.speed ? ` · ${escapeHtml(nic.speed)}` : '')}${nic.rx_mbps !== undefined ? ` · RX ${escapeHtml(displayNumber(nic.rx_mbps,2))} Mbps` : ''}${nic.tx_mbps !== undefined ? ` · TX ${escapeHtml(displayNumber(nic.tx_mbps,2))} Mbps` : ''}</p>`).join('') : '<p>No NIC details</p>'}</article></div></section>
       <section class="wide"><details><summary>Raw Instance JSON</summary><button class="copy-inline" data-instance-copy="${escapeHtml(instance.instance_id)}">Copy JSON</button><pre>${escapeHtml(stableJson(instance))}</pre></details></section>
     </div>`;
@@ -1034,7 +1061,7 @@ async function copyText(text) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { buildTopologyModel, computeTopologyLayout, renderMetricBar, renderDonutChart, extractQueueMetrics, queueMetricsForInstance, finiteNumber, clampPercent, percentOf, fmt, stateLabel, hardwareDetails, mergedInstanceLoad, applyPausedTopologyState, renderInstanceDetail, renderSystemTopology, state };
+  module.exports = { buildTopologyModel, computeTopologyLayout, renderMetricBar, renderDonutChart, extractQueueMetrics, queueMetricsForInstance, computeMetrics, hasResourceReport, finiteNumber, clampPercent, percentOf, fmt, stateLabel, hardwareDetails, mergedInstanceLoad, applyPausedTopologyState, renderInstanceDetail, renderSystemTopology, state };
 } else {
   setTheme(state.theme);
   setupEventHandlers();
