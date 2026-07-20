@@ -339,6 +339,22 @@ async def debug_instance_resources(include_dead: bool = True) -> Dict[str, Any]:
         })
     return {"instances": resources}
 
+
+@_control_plane.get("/debug/instance_loads")
+async def debug_instance_loads(include_dead: bool = True) -> Dict[str, Any]:
+    pool = get_pool()
+    queue_depths = None
+    if _queue_snapshot_provider is not None:
+        try:
+            queue_depths = _queue_snapshot_provider() or {}
+        except Exception:
+            logger.warning(
+                "[ProxyCP] queue snapshot provider failed; instance load queue metrics unavailable",
+                exc_info=True,
+            )
+    snapshot = pool.snapshot_instance_loads(queue_depths=queue_depths, include_dead=include_dead)
+    return {"ok": True, **snapshot}
+
 @_control_plane.post("/v1/topology/report")
 async def report_topology(req: TopologyReportReq) -> Dict[str, Any]:
     merged = 0

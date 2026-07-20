@@ -152,7 +152,7 @@ POST /v1/instance/unregister
 GET  /v1/instance/list?include_dead=true
 ```
 
-Instances register static information such as `instance_id`, `host`, `port`, `endpoints`, `tags`, `weight`, and `meta`. Heartbeats refresh `last_seen_at` and can optionally report lightweight load fields such as `inflight`, `qps_1m`, and `gpu_util`.
+Instances register static information such as `instance_id`, `host`, `port`, `endpoints`, `tags`, `weight`, and `meta`. Heartbeats refresh `last_seen_at` and can optionally report lightweight non-lifecycle load fields such as `qps_1m` and `gpu_util`; Proxy request lifecycle hooks maintain `inflight`.
 
 ### Instance resource snapshots
 
@@ -161,7 +161,10 @@ After PR #87, demo Instances can report host resource snapshots to the Proxy con
 ```text
 POST /v1/instance/resource_snapshot
 GET  /debug/instance_resources
+GET  /debug/instance_loads
 ```
+
+Use `/debug/instance_loads` to inspect Proxy-maintained per-Instance `inflight` counters, `qps_1m` when present, and queue-depth hints when the queue snapshot provider is available.
 
 The reporting path is:
 

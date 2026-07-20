@@ -393,7 +393,12 @@ def _sse_meta_event(task: ProxyTask) -> bytes:
     ).encode("utf-8")
 
 
-async def _wrap_chat_stream_with_meta(task: ProxyTask, queue_mgr: QueueManager) -> AsyncGenerator[bytes, None]:
+async def _wrap_chat_stream_with_meta(
+    task: ProxyTask,
+    queue_mgr: QueueManager,
+    instance_pool: InstancePool,
+    instance_id: str,
+) -> AsyncGenerator[bytes, None]:
     """
     Forward downstream chat SSE, but delay [DONE] and insert one cacheroute_meta event first.
     """
@@ -423,11 +428,14 @@ async def _wrap_chat_stream_with_meta(task: ProxyTask, queue_mgr: QueueManager) 
         task.trace["stream_exception_ms"] = int(time.time() * 1000)
         logger.exception("[Proxy] stream wrapper failed rid=%s", task.request_id)
     finally:
-        if pending:
-            yield pending
-            pending = b""
-        yield _sse_meta_event(task)
-        yield b"data: [DONE]\n\n"
+        try:
+            if pending:
+                yield pending
+                pending = b""
+            yield _sse_meta_event(task)
+            yield b"data: [DONE]\n\n"
+        finally:
+            instance_pool.end_request(instance_id)
 
 
 def select_instance(app: FastAPI, req_obj: SchedulerRequest):
@@ -593,8 +601,15 @@ async def proxy_chat_completions(request: FastAPIRequest):
     # ====================================
     # Send into the queue: enqueue -> manager -> forward
     # ====================================
+    instance_pool: InstancePool = proxy.state.instance_pool  # type: ignore
+    request_counted = instance_pool.begin_request(chosen.instance_id)
+    if not request_counted:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "no_instance", "detail": "selected instance is no longer registered"},
+        )
     try:
-        # 1) Wrap the task (note: chosen comes from RR and has instance_id/host/port fields)
+        # 1) Wrap the task (note: chosen comes from strategy and has instance_id/host/port fields)
         task = ProxyTask(
             request_id=getattr(req_obj, "Request_ID", None),
             req_obj=req_obj,
@@ -611,10 +626,12 @@ async def proxy_chat_completions(request: FastAPIRequest):
 
         await queue_mgr.enqueue_prepare(task)
 
-        stream_gen = _wrap_chat_stream_with_meta(task, queue_mgr)
+        stream_gen = _wrap_chat_stream_with_meta(task, queue_mgr, instance_pool, chosen.instance_id)
         return StreamingResponse(stream_gen, media_type="text/event-stream")
 
     except Exception as e:
+        if request_counted:
+            instance_pool.end_request(chosen.instance_id)
         logger.exception("[Proxy] failed to call Worker(chat)")
         return JSONResponse(
             status_code=502,
@@ -762,6 +779,13 @@ async def proxy_completions(request: FastAPIRequest):
     # ==================================
     # Send into the queue: enqueue -> drain -> forward
     # ==================================
+    instance_pool: InstancePool = proxy.state.instance_pool  # type: ignore
+    request_counted = instance_pool.begin_request(chosen.instance_id)
+    if not request_counted:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "no_instance", "detail": "selected instance is no longer registered"},
+        )
     try:
         task = ProxyTask(
             request_id=getattr(req_obj, "Request_ID", None),
@@ -780,9 +804,14 @@ async def proxy_completions(request: FastAPIRequest):
         await queue_mgr.enqueue_prepare(task)
 
         content_bytes = b""
-        async for chunk in queue_mgr.iter_response(task):
-            if chunk:
-                content_bytes += chunk
+        try:
+            async for chunk in queue_mgr.iter_response(task):
+                if chunk:
+                    content_bytes += chunk
+        finally:
+            if request_counted:
+                instance_pool.end_request(chosen.instance_id)
+                request_counted = False
 
         # completions is non-streaming: the worker should return a one-shot JSON response
         if not content_bytes:
@@ -806,6 +835,8 @@ async def proxy_completions(request: FastAPIRequest):
             )
 
     except Exception as e:
+        if request_counted:
+            instance_pool.end_request(chosen.instance_id)
         logger.exception("[Proxy] failed to call Worker(completions)")
         return JSONResponse(
             status_code=502,
