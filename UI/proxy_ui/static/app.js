@@ -5,7 +5,7 @@ const state = {
   timer: null,
   paused: false,
   intervalMs: 3000,
-  theme: localStorage.getItem('proxy-ui-theme') || 'dark',
+  theme: (typeof localStorage !== 'undefined' && localStorage.getItem('proxy-ui-theme')) || 'dark',
   rawExpanded: false,
   sortBy: 'state',
   filters: {
@@ -443,51 +443,217 @@ function renderResourceTable(resources) {
 }
 
 
-function renderSystemTopology(instances, scheduler) {
+
+function stateLabel(instance) {
+  if (instance?.is_alive === true) return 'alive';
+  if (instance?.is_alive === false) return 'stale';
+  return 'unknown';
+}
+
+function shortText(value, max = 18) {
+  const text = String(value ?? '—');
+  return text.length > max ? `${text.slice(0, Math.max(1, max - 1))}…` : text;
+}
+
+function finiteNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function percentOf(value, max) {
+  const current = finiteNumber(value);
+  const total = finiteNumber(max);
+  if (current === null || total === null || total <= 0) return null;
+  return clampPercent((current / total) * 100);
+}
+
+function displayNumber(value, digits = 1) {
+  const number = finiteNumber(value);
+  if (number === null) return '—';
+  return Number.isInteger(number) ? String(number) : number.toFixed(digits);
+}
+
+function buildTopologyModel(instances, scheduler, proxyState = {}) {
   const [schedulerLabel, schedulerTone] = schedulerText(scheduler);
-  const proxyId = state.config?.proxy_id || state.latest.status?.proxy_id || 'current proxy';
-  const instanceNodes = instances.map((instance) => `
-    <div class="topology-node instance ${instance.is_alive === false ? 'stale' : instance.is_alive === true ? 'alive' : 'unknown'}">
-      <strong>${escapeHtml(instance.instance_id || 'unknown')}</strong>
-      <span>${instance.is_alive === false ? 'stale' : instance.is_alive === true ? 'alive' : 'unknown'}</span>
-    </div>
-  `).join('') || '<div class="empty-state">No connected instances reported.</div>';
-  $('systemTopology').innerHTML = `
-    <div class="topology-node scheduler ${schedulerTone}"><strong>Scheduler</strong><span>${escapeHtml(schedulerLabel)}</span></div>
-    <div class="topology-edge">│</div>
-    <div class="topology-node proxy"><strong>Proxy (observed/local)</strong><span>${escapeHtml(proxyId)}</span></div>
-    <div class="topology-edge">┬</div>
-    <div class="topology-instances">${instanceNodes}</div>
-  `;
+  const proxyId = proxyState.proxy_id || state.config?.proxy_id || state.latest.status?.proxy_id || 'current proxy';
+  const sortedInstances = [...(Array.isArray(instances) ? instances : [])]
+    .sort((a, b) => String(a.instance_id || '').localeCompare(String(b.instance_id || '')));
+  const nodes = [
+    { id: 'scheduler', type: 'scheduler', label: 'Scheduler', status: schedulerLabel, tone: schedulerTone, raw: scheduler || {} },
+    { id: 'proxy', type: 'proxy', label: 'Proxy', status: String(proxyId), tone: 'ok', raw: proxyState || {} },
+    ...sortedInstances.map((instance) => ({
+      id: `instance:${instance.instance_id || 'unknown'}`,
+      type: 'instance',
+      instanceId: String(instance.instance_id || 'unknown'),
+      label: String(instance.instance_id || 'unknown'),
+      status: stateLabel(instance),
+      tone: stateLabel(instance) === 'alive' ? 'ok' : stateLabel(instance) === 'stale' ? 'bad' : 'warn',
+      raw: instance,
+    })),
+  ];
+  const links = [
+    { id: 'scheduler-proxy', source: 'scheduler', target: 'proxy', status: scheduler?.ok ? 'active' : 'inactive' },
+    ...sortedInstances.map((instance) => ({
+      id: `proxy-${instance.instance_id || 'unknown'}`,
+      source: 'proxy',
+      target: `instance:${instance.instance_id || 'unknown'}`,
+      status: stateLabel(instance) === 'alive' ? 'active' : stateLabel(instance) === 'stale' ? 'stale' : 'unknown',
+    })),
+  ];
+  return { nodes, links, schedulerLabel, schedulerTone, proxyId, instances: sortedInstances };
+}
+
+function computeTopologyLayout(model, options = {}) {
+  const count = model.instances.length;
+  const width = Math.max(760, options.width || 980);
+  const rows = count > 10 ? Math.ceil(count / 5) : count > 0 ? 1 : 0;
+  const height = Math.max(360, 270 + rows * 130);
+  const positions = { scheduler: { x: width / 2, y: 58 }, proxy: { x: width / 2, y: 168 } };
+  if (count > 0 && count <= 8) {
+    const start = -140;
+    const step = count === 1 ? 0 : 280 / (count - 1);
+    model.instances.forEach((instance, index) => {
+      const angle = (start + step * index) * Math.PI / 180;
+      positions[`instance:${instance.instance_id || 'unknown'}`] = { x: width / 2 + Math.cos(angle) * 320, y: 210 + Math.sin(angle) * 150 + 150 };
+    });
+  } else {
+    const cols = count > 20 ? 6 : count > 10 ? 5 : Math.max(1, count);
+    model.instances.forEach((instance, index) => {
+      const row = Math.floor(index / cols);
+      const col = index % cols;
+      const gapX = width / (cols + 1);
+      positions[`instance:${instance.instance_id || 'unknown'}`] = { x: gapX * (col + 1), y: 300 + row * 120 };
+    });
+  }
+  return { width, height, positions };
+}
+
+function nodeTooltip(node) {
+  const raw = node.raw || {};
+  const resource = raw.resource || {};
+  const address = raw.host ? `${raw.host}:${raw.port ?? '—'}` : (node.type === 'proxy' ? String(node.status) : '—');
+  const cpu = resource.cpu_util !== null && resource.cpu_util !== undefined ? `CPU ${fmt(resource.cpu_util)}%` : null;
+  const gpu = resource.gpu_util_avg !== null && resource.gpu_util_avg !== undefined ? `GPU ${fmt(resource.gpu_util_avg)}%` : null;
+  return [`Type: ${node.type}`, `ID: ${node.instanceId || node.label}`, `Address: ${address}`, `State: ${node.status}`, `Last seen: ${formatTimestamp(raw.last_seen_at)}`, cpu, gpu].filter(Boolean).join('\n');
+}
+
+function renderMetricBar({ label, value, max = 100, unit = '', tone = 'accent', secondaryText = '' }) {
+  const current = finiteNumber(value);
+  const total = finiteNumber(max);
+  const percent = current === null ? null : (total && total > 0 ? clampPercent((current / total) * 100) : null);
+  const width = percent === null ? 0 : percent;
+  const primary = current === null ? 'No data' : `${displayNumber(current, 2)}${unit}`;
+  return `<div class="viz-metric ${escapeHtml(tone)}"><div class="metric-row"><span>${escapeHtml(label)}</span><strong>${escapeHtml(primary)}</strong></div><div class="progress"><span style="width:${width}%"></span></div><small>${escapeHtml(secondaryText || (percent === null ? '—' : `${percent.toFixed(1)}% of ${displayNumber(total, 2)}${unit}`))}</small></div>`;
+}
+
+function renderDonutChart({ label, used, total, unit = '' }) {
+  const rawUsed = finiteNumber(used);
+  const rawTotal = finiteNumber(total);
+  if (rawUsed === null || rawTotal === null || rawTotal <= 0) {
+    return `<article class="donut-card"><h3>${escapeHtml(label)}</h3><div class="empty-state compact">No data</div></article>`;
+  }
+  const safeUsed = Math.max(0, Math.min(rawUsed, rawTotal));
+  const percent = (safeUsed / rawTotal) * 100;
+  const free = Math.max(0, rawTotal - safeUsed);
+  const dash = `${percent.toFixed(2)} ${Math.max(0, 100 - percent).toFixed(2)}`;
+  return `<article class="donut-card" aria-label="${escapeHtml(label)} used ${percent.toFixed(1)} percent"><h3>${escapeHtml(label)}</h3><svg class="donut" viewBox="0 0 42 42" role="img"><title>${escapeHtml(label)}: ${displayNumber(rawUsed, 1)} / ${displayNumber(rawTotal, 1)} ${unit}</title><circle class="donut-free" cx="21" cy="21" r="15.9155"></circle><circle class="donut-used" cx="21" cy="21" r="15.9155" stroke-dasharray="${dash}"></circle><text x="21" y="22">${percent.toFixed(0)}%</text></svg><p><span class="dot used"></span> used ${escapeHtml(displayNumber(rawUsed, 1))}${escapeHtml(unit)} · <span class="dot free"></span> free ${escapeHtml(displayNumber(free, 1))}${escapeHtml(unit)}</p></article>`;
+}
+
+function extractQueueMetrics(instance) {
+  const paths = [['load', instance?.load], ['resource', instance?.resource], ['meta', instance?.meta], ['queue', instance?.queue], ['queues', instance?.queues], ['stats', instance?.stats]];
+  const keywords = /ready|waiting|queued|pending|running|inflight|prepare|prefill|decode|kv|kvcache|transfer|inject/i;
+  const reject = /time|timestamp|ts|port|util|ratio|percent|age|memory|mem|gpu_util|cpu/i;
+  const seen = new Set();
+  const found = [];
+  function visit(prefix, value, depth = 0) {
+    if (!value || typeof value !== 'object' || depth > 3) return;
+    Object.entries(value).forEach(([key, child]) => {
+      const path = prefix ? `${prefix}.${key}` : key;
+      if (child && typeof child === 'object' && !Array.isArray(child)) visit(path, child, depth + 1);
+      const number = finiteNumber(child);
+      if (number === null || number < 0 || !keywords.test(key) || reject.test(key)) return;
+      if (seen.has(path)) return;
+      seen.add(path);
+      found.push({ key: path, label: key.replaceAll('_', ' '), value: number });
+    });
+  }
+  paths.forEach(([prefix, value]) => visit(prefix, value));
+  return found.sort((a, b) => a.key.localeCompare(b.key));
+}
+
+function hardwareDetails(instance) {
+  const devices = instance.resource?.raw_resource?.devices || {};
+  const cpu = devices.cpu && typeof devices.cpu === 'object' ? devices.cpu : {};
+  const gpus = Array.isArray(devices.gpu) ? devices.gpu : [];
+  const nics = Array.isArray(devices.network) ? devices.network : (Array.isArray(devices.nic) ? devices.nic : []);
+  return { cpu, gpus, nics };
+}
+
+function renderSystemTopology(instances, scheduler) {
+  const model = buildTopologyModel(instances, scheduler, state.latest.status || {});
+  const layout = computeTopologyLayout(model);
+  const linkHtml = model.links.map((link) => {
+    const a = layout.positions[link.source];
+    const b = layout.positions[link.target];
+    if (!a || !b) return '';
+    const midY = (a.y + b.y) / 2;
+    const d = `M ${a.x} ${a.y + 28} C ${a.x} ${midY}, ${b.x} ${midY}, ${b.x} ${b.y - 30}`;
+    return `<path class="topology-link ${escapeHtml(link.status)}" d="${d}"><title>${escapeHtml(link.source)} to ${escapeHtml(link.target)}: ${escapeHtml(link.status)}</title></path>`;
+  }).join('');
+  const nodeHtml = model.nodes.map((node) => {
+    const pos = layout.positions[node.id];
+    if (!pos) return '';
+    const isInstance = node.type === 'instance';
+    const aria = `${node.type} ${node.instanceId || node.label} ${node.status}`;
+    return `<g class="topology-svg-node ${escapeHtml(node.type)} ${escapeHtml(node.tone)}" transform="translate(${pos.x} ${pos.y})" ${isInstance ? `role="button" tabindex="0" data-instance-id="${escapeHtml(node.instanceId)}" aria-label="${escapeHtml(aria)}"` : `aria-label="${escapeHtml(aria)}"`}>
+      <title>${escapeHtml(nodeTooltip(node))}</title>
+      <circle class="node-halo" r="38"></circle>
+      <use href="#icon-${escapeHtml(node.type)}" x="-20" y="-24" width="40" height="40"></use>
+      <text class="node-label" y="32">${escapeHtml(shortText(node.label, 18))}</text>
+      <text class="node-status" y="48">${escapeHtml(shortText(node.status, 22))}</text>
+    </g>`;
+  }).join('');
+  $('systemTopology').classList.toggle('paused', state.paused);
+  $('systemTopology').innerHTML = `<div class="topology-scroll"><svg class="topology-svg" viewBox="0 0 ${layout.width} ${layout.height}" role="img" aria-label="Scheduler to Proxy to Instance topology">
+    <defs>
+      <symbol id="icon-scheduler" viewBox="0 0 48 48"><rect x="8" y="10" width="32" height="22" rx="5"></rect><path d="M16 38h16M24 32v6M16 18h16M16 25h10"></path></symbol>
+      <symbol id="icon-proxy" viewBox="0 0 48 48"><path d="M8 24h32M24 8v32M13 13l22 22M35 13L13 35"></path><circle cx="24" cy="24" r="15"></circle></symbol>
+      <symbol id="icon-instance" viewBox="0 0 48 48"><rect x="10" y="8" width="28" height="32" rx="4"></rect><path d="M16 17h16M16 25h16M16 33h10"></path><circle cx="33" cy="33" r="2"></circle></symbol>
+    </defs>
+    <g class="topology-links">${linkHtml}</g><g class="topology-nodes">${nodeHtml}</g>
+  </svg></div>${model.instances.length ? '' : '<div class="empty-state compact">No connected instances reported.</div>'}`;
 }
 
 function renderInstanceDetail(instances) {
   const panel = $('instanceDetailView');
-  if (!state.selectedInstanceId) {
-    panel.classList.add('hidden');
-    return;
-  }
+  if (!state.selectedInstanceId) { panel.classList.add('hidden'); return; }
   const instance = instances.find((item) => String(item.instance_id) === String(state.selectedInstanceId));
   if (!instance) {
     panel.classList.remove('hidden');
-    panel.innerHTML = `<button id="backToOverviewBtn">← Back to overview</button><div class="empty-state">Selected instance is not present in the current payload.</div>`;
+    panel.innerHTML = `<button id="backToOverviewBtn">← Back to overview</button><div class="empty-state">Selected instance ${escapeHtml(state.selectedInstanceId)} is not present in the current payload.</div>`;
     return;
   }
   const resource = instance.resource || {};
-  const hw = hardwareSummary(instance);
-  const staleNote = instance.is_alive === false ? '<p class="stale-note">This Instance is stale; values below may reflect the last known report.</p>' : '';
+  const load = instance.load || {};
+  const memPercent = percentOf(resource.memory_used_mb, resource.memory_total_mb);
+  const gpuMemPercent = percentOf(resource.gpu_mem_used_mb, resource.gpu_mem_total_mb);
+  const networkMax = Math.max(finiteNumber(resource.network_rx_mbps) || 0, finiteNumber(resource.network_tx_mbps) || 0, 1);
+  const queues = extractQueueMetrics(instance);
+  const maxQueue = Math.max(1, ...queues.map((item) => item.value));
+  const hw = hardwareDetails(instance);
+  const staleNote = instance.is_alive === false ? '<p class="stale-note">This Instance is stale; values may reflect the last known report.</p>' : '';
   panel.classList.remove('hidden');
-  panel.innerHTML = `
-    <div class="panel-heading"><div><h2>Instance Detail: ${escapeHtml(instance.instance_id)}</h2>${staleNote}</div><button id="backToOverviewBtn">← Back to overview</button></div>
-    <div class="detail-grid">
-      <section><h3>Identity</h3><p>${escapeHtml(instance.host)}:${escapeHtml(instance.port)}</p><pre>${escapeHtml(stableJson({ endpoints: instance.endpoints, tags: instance.tags, weight: instance.weight, metadata: instance.meta }))}</pre></section>
-      <section><h3>Liveness</h3><p>${instanceStateBadge(instance)} ${badge(`registered: ${formatTimestamp(instance.registered_at)}`, 'muted')} ${badge(`last seen age: ${formatAge(instance.last_seen_at)}`, instance.is_alive === false ? 'bad' : 'muted')}</p></section>
-      <section><h3>Current Load</h3><p>inflight ${fmt(instance.load?.inflight, 0)} · qps ${fmt(instance.load?.qps_1m, 2)} · heartbeat GPU ${fmt(instance.load?.gpu_util)}%</p></section>
-      <section><h3>Resource Snapshot</h3><p>CPU ${fmt(resource.cpu_util)}% · memory ${fmt(resource.memory_used_mb,0)}/${fmt(resource.memory_total_mb,0)} MB · GPU ${fmt(resource.gpu_util_avg)}% · GPU memory ${fmt(resource.gpu_mem_used_mb,0)}/${fmt(resource.gpu_mem_total_mb,0)} MB · RX ${fmt(resource.network_rx_mbps,2)} Mbps · TX ${fmt(resource.network_tx_mbps,2)} Mbps · admission ${escapeHtml(resource.admission_state || '—')} · ${resourceAgeTone(resource)[0]}</p></section>
-      <section><h3>Hardware Summary</h3><p>${escapeHtml([hw.cpu, hw.gpu, hw.nic].filter(Boolean).join(' · ') || 'device: unknown')}</p></section>
-      <section class="wide"><h3>Raw Instance JSON</h3><pre>${escapeHtml(stableJson(instance))}</pre></section>
+  panel.innerHTML = `<div class="panel-heading detail-header"><div><h2>Instance Detail: ${escapeHtml(instance.instance_id)}</h2><p>${escapeHtml(instance.host || '—')}:${escapeHtml(instance.port || '—')} · ${instanceStateBadge(instance)}</p>${staleNote}</div><button id="backToOverviewBtn">← Back to overview</button></div>
+    <div class="kpi-grid">
+      ${[['Status', stateLabel(instance)], ['Instance ID', instance.instance_id], ['Host:port', `${instance.host || '—'}:${instance.port || '—'}`], ['Admission', resource.admission_state || '—'], ['Registered', formatTimestamp(instance.registered_at)], ['Last seen age', formatAge(instance.last_seen_at)], ['Resource age', formatAge(resource.resource_reported_at)], ['Inflight', displayNumber(load.inflight, 0)], ['QPS 1m', displayNumber(load.qps_1m, 2)]].map(([k,v]) => `<article class="kpi-card"><span>${escapeHtml(k)}</span><strong>${escapeHtml(v)}</strong></article>`).join('')}
     </div>
-  `;
+    <div class="detail-grid visual-detail">
+      <section><h3>Resource utilization</h3>${renderMetricBar({ label:'CPU utilization', value:resource.cpu_util, max:100, unit:'%', secondaryText:'reported resource.cpu_util' })}${renderMetricBar({ label:'System memory', value:resource.memory_used_mb, max:resource.memory_total_mb, unit:' MB', secondaryText:`${displayNumber(resource.memory_used_mb,0)} / ${displayNumber(resource.memory_total_mb,0)} MB (${memPercent === null ? '—' : memPercent.toFixed(1)+'%'})` })}${renderMetricBar({ label:'GPU utilization', value:resource.gpu_util_avg, max:100, unit:'%', secondaryText:'reported resource.gpu_util_avg' })}${renderMetricBar({ label:'GPU memory', value:resource.gpu_mem_used_mb, max:resource.gpu_mem_total_mb, unit:' MB', secondaryText:`${displayNumber(resource.gpu_mem_used_mb,0)} / ${displayNumber(resource.gpu_mem_total_mb,0)} MB (${gpuMemPercent === null ? '—' : gpuMemPercent.toFixed(1)+'%'})` })}${renderMetricBar({ label:'Network RX', value:resource.network_rx_mbps, max:networkMax, unit:' Mbps', secondaryText:'relative to current RX/TX max' })}${renderMetricBar({ label:'Network TX', value:resource.network_tx_mbps, max:networkMax, unit:' Mbps', secondaryText:'relative to current RX/TX max' })}</section>
+      <section><h3>Resource composition</h3><div class="donut-grid">${renderDonutChart({ label:'System memory', used:resource.memory_used_mb, total:resource.memory_total_mb, unit:' MB' })}${renderDonutChart({ label:'GPU memory', used:resource.gpu_mem_used_mb, total:resource.gpu_mem_total_mb, unit:' MB' })}</div></section>
+      <section><h3>Queue and load</h3><p class="muted">Known load fields: inflight ${escapeHtml(displayNumber(load.inflight,0))}, qps_1m ${escapeHtml(displayNumber(load.qps_1m,2))}, gpu_util ${escapeHtml(displayNumber(load.gpu_util,1))}%.</p>${queues.length ? queues.map((q) => renderMetricBar({ label:q.label, value:q.value, max:maxQueue, unit:'', secondaryText:q.key })).join('') : '<div class="empty-state compact">No detailed queue counters are exposed by the current Instance payload.</div>'}</section>
+      <section><h3>Hardware</h3><div class="hardware-grid"><article><h4>CPU</h4><p>${escapeHtml(firstString(hw.cpu.model, hw.cpu.model_name, hw.cpu.name, instance.meta?.cpu_model) || 'No CPU details')}</p>${hw.cpu.cores || hw.cpu.logical_cpus ? `<small>${escapeHtml(`cores ${hw.cpu.cores || '—'} · logical ${hw.cpu.logical_cpus || '—'}`)}</small>` : ''}</article><article><h4>GPU</h4>${hw.gpus.length ? hw.gpus.map((gpu, i) => `<p>${escapeHtml(`#${i} ${firstString(gpu.model, gpu.name, gpu.product_name) || 'GPU'}`)} · mem ${escapeHtml(displayNumber(gpu.memory_used_mb,0))}/${escapeHtml(displayNumber(gpu.memory_total_mb,0))} MB · util ${escapeHtml(displayNumber(gpu.utilization_gpu_pct ?? gpu.gpu_util,1))}%</p>`).join('') : '<p>No GPU details</p>'}</article><article><h4>NIC</h4>${hw.nics.length ? hw.nics.map((nic) => `<p>${escapeHtml(firstString(nic.interface, nic.name, nic.model) || 'NIC')}${nic.driver ? ` · ${escapeHtml(nic.driver)}` : ''}${nic.speed ? ` · ${escapeHtml(nic.speed)}` : ''}</p>`).join('') : '<p>No NIC details</p>'}</article></div></section>
+      <section class="wide"><details><summary>Raw Instance JSON</summary><button class="copy-inline" data-instance-copy="${escapeHtml(instance.instance_id)}">Copy JSON</button><pre>${escapeHtml(stableJson(instance))}</pre></details></section>
+    </div>`;
 }
 
 function renderTopology(payload) {
@@ -664,7 +830,7 @@ function restartTimer() {
 function setTheme(theme) {
   state.theme = theme;
   document.documentElement.dataset.theme = theme;
-  localStorage.setItem('proxy-ui-theme', theme);
+  if (typeof localStorage !== 'undefined') localStorage.setItem('proxy-ui-theme', theme);
   $('themeBtn').textContent = theme === 'dark' ? 'Light theme' : 'Dark theme';
 }
 
@@ -725,13 +891,20 @@ function setupEventHandlers() {
     tab.addEventListener('click', () => activateTab(tab.dataset.tab));
   });
   document.addEventListener('click', (event) => {
-    const card = event.target.closest('.instance-card[data-instance-id]');
+    const card = event.target.closest('.instance-card[data-instance-id], .topology-svg-node[data-instance-id]');
     if (card) {
       window.location.hash = `#/instances/${encodeURIComponent(card.dataset.instanceId)}`;
       return;
     }
     if (event.target.closest('#backToOverviewBtn')) {
       window.location.hash = '#/';
+      return;
+    }
+    const instanceCopy = event.target.closest('[data-instance-copy]');
+    if (instanceCopy) {
+      const instances = Array.isArray(state.latest.instances) ? state.latest.instances : [];
+      const selected = instances.find((item) => String(item.instance_id) === String(instanceCopy.dataset.instanceCopy));
+      copyText(stableJson(selected || {}));
       return;
     }
     const copyButton = event.target.closest('[data-copy], [data-copy-key]');
@@ -752,7 +925,7 @@ function setupEventHandlers() {
     copyText(stableJson(payloads[key] || state.latest));
   });
   document.addEventListener('keydown', (event) => {
-    const card = event.target.closest?.('.instance-card[data-instance-id]');
+    const card = event.target.closest?.('.instance-card[data-instance-id], .topology-svg-node[data-instance-id]');
     if (card && (event.key === 'Enter' || event.key === ' ')) {
       event.preventDefault();
       window.location.hash = `#/instances/${encodeURIComponent(card.dataset.instanceId)}`;
@@ -785,6 +958,10 @@ async function copyText(text) {
   }
 }
 
-setTheme(state.theme);
-setupEventHandlers();
-refresh().then(restartTimer);
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { buildTopologyModel, computeTopologyLayout, renderMetricBar, renderDonutChart, extractQueueMetrics, clampPercent, percentOf, fmt, stateLabel };
+} else {
+  setTheme(state.theme);
+  setupEventHandlers();
+  refresh().then(restartTimer);
+}
