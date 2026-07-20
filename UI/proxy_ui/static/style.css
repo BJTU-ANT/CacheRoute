@@ -686,7 +686,13 @@ summary {
 }
 
 .topology-svg-node.scheduler .node-halo { stroke: var(--topology-scheduler); }
+.topology-svg-node.scheduler.ok .node-halo { stroke: var(--ok); }
+.topology-svg-node.scheduler.bad .node-halo { stroke: var(--bad); }
+.topology-svg-node.scheduler.warn .node-halo { stroke: var(--warn); }
+.topology-svg-node.scheduler.muted .node-halo { stroke: var(--muted); }
 .topology-svg-node.proxy .node-halo { stroke: var(--topology-proxy); }
+.topology-svg-node.proxy.bad .node-halo { stroke: var(--bad); }
+.topology-svg-node.proxy.warn .node-halo { stroke: var(--warn); }
 .topology-svg-node.instance.ok .node-halo { stroke: var(--topology-instance); }
 .topology-svg-node.instance.bad .node-halo { stroke: var(--bad); }
 .topology-svg-node.instance.warn .node-halo { stroke: var(--warn); }
@@ -700,7 +706,13 @@ summary {
 }
 
 .topology-svg-node.scheduler { color: var(--topology-scheduler); }
+.topology-svg-node.scheduler.ok { color: var(--ok); }
+.topology-svg-node.scheduler.bad { color: var(--bad); }
+.topology-svg-node.scheduler.warn { color: var(--warn); }
+.topology-svg-node.scheduler.muted { color: var(--muted); }
 .topology-svg-node.proxy { color: var(--topology-proxy); }
+.topology-svg-node.proxy.bad { color: var(--bad); }
+.topology-svg-node.proxy.warn { color: var(--warn); }
 .topology-svg-node.instance.ok { color: var(--topology-instance); }
 .topology-svg-node.instance.bad { color: var(--bad); }
 .topology-svg-node.instance.warn { color: var(--warn); }

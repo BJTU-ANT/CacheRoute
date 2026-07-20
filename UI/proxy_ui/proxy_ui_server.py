@@ -75,6 +75,11 @@ async def proxy_topology() -> Any:
     return await _get_json(DEFAULT_PROXY_CP_URL, "/v1/topology/kdn_links")
 
 
+@app.get("/api/proxy/loads")
+async def proxy_loads() -> Any:
+    return await _get_json(DEFAULT_PROXY_CP_URL, "/debug/instance_loads", {"include_dead": "true"})
+
+
 @app.get("/api/scheduler/proxy")
 async def scheduler_proxy() -> Dict[str, Any]:
     if not DEFAULT_PROXY_ID:
