@@ -164,6 +164,7 @@ function testThemeAndReducedMotionStaticHooks() {
   assert(css.includes("[data-theme='light']"));
   assert(css.includes('@media (prefers-reduced-motion: reduce)'));
   assert(css.includes('--topology-scheduler'));
+  ['.topology-svg-node.is-hovered', '.topology-svg-node.is-neighbor', '.topology-svg-node.is-dimmed', '.topology-svg-node.is-dragging', '.topology-link.is-related', '.topology-link.is-dimmed', '.topology-particle.is-related', '.topology-tooltip', '.topology-controls'].forEach((selector) => assert(css.includes(selector), `missing CSS selector ${selector}`));
 }
 
 testNullSemantics();
@@ -174,4 +175,62 @@ testMetricsAndMissingData();
 testQueueExtractionAndLoadMerge();
 testHardwareAndPausedDom();
 testThemeAndReducedMotionStaticHooks();
+function distance(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
+
+function testForceTopologyPureHelpers() {
+  assert.strictEqual(ui.stableHash('proxy:a'), ui.stableHash('proxy:a'));
+  assert.notStrictEqual(ui.seededUnitValue('instance:a', 'angle'), ui.seededUnitValue('instance:b', 'angle'));
+  const model = ui.buildTopologyModel(Array.from({ length: 8 }, (_, i) => inst(`force-${i}`, i % 2 === 0)), { ok: true }, { ok: true, proxy_id: 'proxy-a' });
+  const sig = ui.topologySignature(model);
+  assert(sig.includes('scheduler') && sig.includes('proxy'));
+  const a = ui.computeTopologyLayout(model, { width: 1000, height: 620 });
+  const b = ui.computeTopologyLayout(model, { width: 1000, height: 620 });
+  assert.deepStrictEqual(a.positions, b.positions, 'same node set should produce same layout');
+  const metricChanged = ui.buildTopologyModel(Array.from({ length: 8 }, (_, i) => inst(`force-${i}`, i % 2 === 0, { resource: { cpu_util: i * 3 } })), { ok: true }, { ok: true, proxy_id: 'proxy-a' });
+  assert.strictEqual(ui.topologySignature(metricChanged), sig, 'metric changes preserve topology signature');
+  const added = ui.buildTopologyModel(Array.from({ length: 9 }, (_, i) => inst(`force-${i}`, true)), { ok: true }, { ok: true, proxy_id: 'proxy-a' });
+  const addLayout = ui.computeTopologyLayout(added, { width: 1000, height: 620, existingPositions: a.positions, iterations: 20 });
+  assert(distance(a.positions.proxy, addLayout.positions.proxy) < 40, 'adding one node preserves proxy position');
+  assert(distance(a.positions['instance:force-0'], addLayout.positions['instance:force-0']) < 90, 'adding one node preserves existing instance approximately');
+  Object.values(a.positions).forEach((pos) => {
+    assert(pos.x >= a.nodePadding && pos.x <= a.width - a.nodePadding);
+    assert(pos.y >= a.nodePadding && pos.y <= a.height - a.labelPadding);
+  });
+  const nodes = Object.keys(a.positions);
+  for (let i = 0; i < nodes.length; i += 1) for (let j = i + 1; j < nodes.length; j += 1) assert(distance(a.positions[nodes[i]], a.positions[nodes[j]]) >= 78, 'minimum collision spacing');
+  assert(a.positions.scheduler.x < a.positions.proxy.x && a.positions.scheduler.y < a.positions.proxy.y, 'scheduler above-left anchor');
+  assert(Math.abs(a.positions.proxy.x - a.width / 2) < a.width * 0.18, 'proxy central placement');
+  const instanceDistances = model.nodes.filter((n) => n.type === 'instance').map((n) => distance(a.positions[n.id], a.positions.proxy));
+  assert(Math.max(...instanceDistances) - Math.min(...instanceDistances) > 20, 'instances have irregular radial distribution');
+}
+
+function testLinkHoverTooltipFitZoomDragHelpers() {
+  const model = ui.buildTopologyModel([inst('one', true), inst('two', false)], { ok: true }, { ok: true, proxy_id: 'proxy-a' });
+  const layout = ui.computeTopologyLayout(model, { width: 900, height: 560 });
+  assert.strictEqual(ui.deterministicLinkCurvature('proxy-one'), ui.deterministicLinkCurvature('proxy-one'));
+  const link = model.links.find((item) => item.target === 'instance:one');
+  const d = ui.computeLinkPath(link, layout.positions);
+  assert(d.startsWith('M '));
+  const nums = d.match(/-?\d+(?:\.\d+)?/g).map(Number);
+  assert(distance({ x: nums[0], y: nums[1] }, layout.positions[link.source]) > 30, 'link starts at edge, not center');
+  assert(distance({ x: nums.at(-2), y: nums.at(-1) }, layout.positions[link.target]) > 30, 'link ends at edge, not center');
+  let rel = ui.computeHoverRelationships(model, 'scheduler');
+  assert(rel.relatedNodes.has('proxy') && rel.relatedLinks.has('scheduler-proxy') && rel.dimmedNodes.has('instance:one'));
+  rel = ui.computeHoverRelationships(model, 'proxy');
+  assert.strictEqual(rel.dimmedNodes.size, 0); assert.strictEqual(rel.dimmedLinks.size, 0);
+  rel = ui.computeHoverRelationships(model, 'instance:one');
+  assert(rel.relatedNodes.has('proxy') && rel.relatedLinks.has('proxy-one') && rel.dimmedNodes.has('scheduler') && rel.dimmedNodes.has('instance:two'));
+  const tooltip = ui.buildTooltipModel(model.nodes.find((n) => n.id === 'instance:one'));
+  assert(tooltip.rows.some((row) => row.label === 'GPU memory' && row.value.includes('—')));
+  assert.strictEqual(ui.buildTooltipModel({ type: 'instance', raw: { resource: { cpu_util: null } }, instanceId: 'nulls', status: 'unknown' }).rows.find((row) => row.label === 'CPU utilization').value, '—');
+  const fit = ui.fitTopologyToView(layout.positions, { width: 800, height: 500 });
+  assert(fit.zoom >= 0.45 && fit.zoom <= 2.5);
+  assert.strictEqual(ui.clampZoom(0.1), 0.45);
+  assert.strictEqual(ui.clampZoom(10), 2.5);
+  assert.strictEqual(ui.dragExceededThreshold(3, 4), true);
+  assert.strictEqual(ui.dragExceededThreshold(2, 2), false);
+}
+
+testForceTopologyPureHelpers();
+testLinkHoverTooltipFitZoomDragHelpers();
 console.log('proxy-ui pure function tests passed');
