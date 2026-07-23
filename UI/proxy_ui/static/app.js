@@ -1,4 +1,10 @@
 const MAX_HISTORY = 60;
+const PROXY_UI_BUILD = 'force-topology-v2';
+
+if (typeof window !== 'undefined') {
+  window.PROXY_UI_BUILD = PROXY_UI_BUILD;
+  console.info(`[Proxy UI] build=${PROXY_UI_BUILD} topology=force-directed`);
+}
 
 const state = {
   config: null,
@@ -17,6 +23,25 @@ const state = {
   latest: {},
   history: [],
   selectedInstanceId: null,
+  topology: {
+    positions: {},
+    previousPositions: {},
+    pinnedNodeIds: new Set(),
+    signature: '',
+    viewportSignature: '',
+    zoom: 1,
+    panX: 0,
+    panY: 0,
+    hoveredNodeId: null,
+    dragging: null,
+    panning: null,
+    model: null,
+    linkPaths: {},
+    fitRequested: true,
+    suppressedClick: null,
+    handlersInstalled: false,
+    animationFrame: null,
+  },
 };
 
 const OPTIONAL_UNAVAILABLE = {
@@ -308,7 +333,7 @@ function computeMetrics(instances) {
     const total = finiteNumber(item.resource?.memory_total_mb);
     return used !== null && total !== null && total > 0 ? (used / total) * 100 : null;
   }));
-  const gpu = average(instances.map((item) => finiteNumber(item.resource?.gpu_util_avg)));
+  const gpu = average(instances.map((item) => aggregateGpuUtilization(item, mergedInstanceLoad(item), hardwareDetails(item))));
   const rx = average(instances.map((item) => finiteNumber(item.resource?.network_rx_mbps)));
   const tx = average(instances.map((item) => finiteNumber(item.resource?.network_tx_mbps)));
   return { cpu, memory, gpu, rx, tx };
@@ -371,6 +396,7 @@ function renderInstanceCards(instances) {
     const gpuMemoryPercent = Number(resource.gpu_mem_total_mb) > 0
       ? (Number(resource.gpu_mem_used_mb) / Number(resource.gpu_mem_total_mb)) * 100
       : null;
+    const aggregateGpuUtil = aggregateGpuUtilization(instance, mergedInstanceLoad(instance), hardwareDetails(instance));
 
     return `
       <article class="instance-card" role="button" tabindex="0" data-instance-id="${escapeHtml(instance.instance_id || '')}">
@@ -386,7 +412,7 @@ function renderInstanceCards(instances) {
         </div>
         ${progressBar(resource.cpu_util, 'CPU')}
         ${progressBar(memoryPercent, 'Memory')}
-        ${progressBar(resource.gpu_util_avg, 'GPU util')}
+        ${progressBar(aggregateGpuUtil, 'GPU util')}
         ${progressBar(gpuMemoryPercent, 'GPU memory')}
         <div class="mini-metrics">
           <span>RX ${fmt(resource.network_rx_mbps, 2)} Mbps</span>
@@ -522,45 +548,729 @@ function buildTopologyModel(instances, scheduler, proxyState = {}) {
   return { nodes, links, schedulerLabel, schedulerTone, proxyId, instances: sortedInstances };
 }
 
-function computeTopologyLayout(model, options = {}) {
-  const count = model.instances.length;
-  const width = Math.max(760, options.width || 980);
-  const nodePadding = Number(options.nodePadding ?? 54);
-  const labelPadding = Number(options.labelPadding ?? 70);
-  const positions = { scheduler: { x: width / 2, y: 64 }, proxy: { x: width / 2, y: 178 } };
-  const cols = count === 0 ? 0 : (count <= 4 ? count : count <= 8 ? 4 : count <= 20 ? 5 : 6);
-  const rowGap = count <= 8 ? 130 : 118;
-  const startY = 314;
-  model.instances.forEach((instance, index) => {
-    const row = Math.floor(index / cols);
-    const col = index % cols;
-    const rowCount = Math.min(cols, count - row * cols);
-    const gapX = (width - nodePadding * 2) / Math.max(1, rowCount + 1);
-    positions[`instance:${instance.instance_id || 'unknown'}`] = {
-      x: nodePadding + gapX * (col + 1),
-      y: startY + row * rowGap,
-    };
+function topologySignature(model) {
+  return model.nodes.map((node) => node.id).sort().join('|');
+}
+
+function stableHash(value) {
+  let hash = 2166136261;
+  const text = String(value ?? '');
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function seededUnitValue(seed, salt = '') {
+  return stableHash(`${seed}:${salt}`) / 4294967295;
+}
+
+function normalizeVector(dx, dy) {
+  const length = Math.hypot(dx, dy);
+  if (!length) return { x: 1, y: 0, length: 0 };
+  return { x: dx / length, y: dy / length, length };
+}
+
+function topologyBounds(options = {}) {
+  const width = Math.max(720, Number(options.width) || 980);
+  const height = Math.max(360, Number(options.height) || 560);
+  const nodePadding = Number(options.nodePadding ?? 58);
+  const labelPadding = Number(options.labelPadding ?? 78);
+  return { width, height, nodePadding, labelPadding };
+}
+
+function preferredInstanceRadius(count) {
+  return Math.min(330, 145 + Math.sqrt(Math.max(1, count)) * 34 + Math.max(0, count - 12) * 2.4);
+}
+
+
+function normalizeAngle(angle) {
+  let value = angle;
+  while (value <= -Math.PI) value += Math.PI * 2;
+  while (value > Math.PI) value -= Math.PI * 2;
+  return value;
+}
+
+function angularDistance(a, b) {
+  return Math.abs(normalizeAngle(a - b));
+}
+
+function preferredTopologyAngle(node, model) {
+  const schedulerAngle = -2.35;
+  if (node.type === 'scheduler') return schedulerAngle;
+  if (node.type === 'proxy') return 0;
+  const instanceNodes = model.nodes.filter((item) => item.type === 'instance');
+  const index = Math.max(0, instanceNodes.findIndex((item) => item.id === node.id));
+  const smallAngles = {
+    1: [0.22],
+    2: [0.18, 1.72],
+    3: [0.05, 1.52, -0.82],
+  };
+  if (smallAngles[instanceNodes.length]) return smallAngles[instanceNodes.length][index];
+  const reserved = 0.72;
+  const oppositeScheduler = normalizeAngle(schedulerAngle + Math.PI);
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  let angle = normalizeAngle(index * golden + seededUnitValue(node.id, 'preferred-angle') * Math.PI * 2);
+  if (angularDistance(angle, schedulerAngle) < reserved) angle = normalizeAngle(schedulerAngle + reserved + seededUnitValue(node.id, 'reserved-side') * 0.6);
+  if (instanceNodes.length <= 2 && angularDistance(angle, oppositeScheduler) < 0.45) angle = normalizeAngle(oppositeScheduler + 0.55);
+  return angle;
+}
+
+function triangleArea(a, b, c) {
+  return Math.abs((a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y)) / 2);
+}
+
+function applyAngularForce(model, positions, velocities) {
+  const proxy = positions.proxy;
+  if (!proxy) return;
+  const radius = preferredInstanceRadius(model.instances.length);
+  model.nodes.filter((node) => node.type !== 'proxy').forEach((node) => {
+    const angle = preferredTopologyAngle(node, model);
+    const nodeRadius = node.type === 'scheduler' ? Math.min(250, radius * 0.86) : radius * (0.82 + seededUnitValue(node.id, 'angular-radius') * 0.22);
+    const target = { x: proxy.x + Math.cos(angle) * nodeRadius, y: proxy.y + Math.sin(angle) * nodeRadius * 0.84 };
+    const strength = node.type === 'scheduler' ? 0.028 : (model.instances.length <= 3 ? 0.024 : 0.011);
+    velocities[node.id].x += (target.x - positions[node.id].x) * strength;
+    velocities[node.id].y += (target.y - positions[node.id].y) * strength;
   });
-  const xs = Object.values(positions).map((pos) => pos.x);
-  const ys = Object.values(positions).map((pos) => pos.y);
-  const minX = Math.min(...xs) - nodePadding;
-  const maxX = Math.max(...xs) + nodePadding;
-  if (minX < 0 || maxX > width) {
-    Object.values(positions).forEach((pos) => {
-      pos.x = Math.max(nodePadding, Math.min(width - nodePadding, pos.x));
+}
+
+function clampTopologyPosition(pos, bounds) {
+  return {
+    x: Math.max(bounds.nodePadding, Math.min(bounds.width - bounds.nodePadding, pos.x)),
+    y: Math.max(bounds.nodePadding, Math.min(bounds.height - bounds.labelPadding, pos.y)),
+  };
+}
+
+function createInitialTopologyPositions(model, options = {}, existing = {}) {
+  const bounds = topologyBounds(options);
+  const center = { x: bounds.width / 2, y: bounds.height / 2 + 12 };
+  const count = model.instances.length;
+  const radius = preferredInstanceRadius(count);
+  const positions = {};
+  const keep = options.preserveExisting !== false;
+  model.nodes.forEach((node, index) => {
+    if (keep && existing[node.id]) {
+      positions[node.id] = clampTopologyPosition(existing[node.id], bounds);
+      return;
+    }
+    if (node.type === 'proxy') {
+      positions[node.id] = clampTopologyPosition({ x: center.x + (seededUnitValue(node.id, 'jx') - 0.5) * 18, y: center.y + (seededUnitValue(node.id, 'jy') - 0.5) * 18 }, bounds);
+    } else if (node.type === 'scheduler') {
+      const angle = preferredTopologyAngle(node, model);
+      positions[node.id] = clampTopologyPosition({ x: center.x + Math.cos(angle) * Math.min(250, radius * 0.9), y: center.y + Math.sin(angle) * Math.min(210, radius * 0.76) }, bounds);
+    } else {
+      const idx = Math.max(0, model.instances.findIndex((item) => `instance:${item.instance_id || 'unknown'}` === node.id));
+      const golden = Math.PI * (3 - Math.sqrt(5));
+      const angle = count <= 3 ? preferredTopologyAngle(node, model) : idx * golden + seededUnitValue(`${node.type}:${node.id}`, 'angle') * 0.9;
+      const r = radius * (0.72 + seededUnitValue(node.id, 'radius') * 0.36);
+      positions[node.id] = clampTopologyPosition({
+        x: center.x + Math.cos(angle) * r + (seededUnitValue(node.id, 'x') - 0.5) * 42,
+        y: center.y + Math.sin(angle) * r * 0.82 + (seededUnitValue(node.id, 'y') - 0.5) * 42,
+      }, bounds);
+    }
+    if (!positions[node.id]) positions[node.id] = clampTopologyPosition({ x: center.x + index * 4, y: center.y }, bounds);
+  });
+  return positions;
+}
+
+function applyRepulsion(nodes, positions, velocities, strength = 7200) {
+  for (let i = 0; i < nodes.length; i += 1) {
+    for (let j = i + 1; j < nodes.length; j += 1) {
+      const a = nodes[i]; const b = nodes[j];
+      const delta = normalizeVector(positions[a.id].x - positions[b.id].x, positions[a.id].y - positions[b.id].y);
+      const distance = Math.max(32, delta.length);
+      const force = strength / (distance * distance);
+      velocities[a.id].x += delta.x * force; velocities[a.id].y += delta.y * force;
+      velocities[b.id].x -= delta.x * force; velocities[b.id].y -= delta.y * force;
+    }
+  }
+}
+
+function applySpringForces(links, positions, velocities, model) {
+  const count = model.instances.length;
+  links.forEach((link) => {
+    const a = positions[link.source]; const b = positions[link.target];
+    if (!a || !b) return;
+    const delta = normalizeVector(b.x - a.x, b.y - a.y);
+    const wanted = link.id === 'scheduler-proxy' ? 210 : Math.min(360, preferredInstanceRadius(count) * 0.88);
+    const force = (delta.length - wanted) * (link.id === 'scheduler-proxy' ? 0.018 : 0.014);
+    velocities[link.source].x += delta.x * force; velocities[link.source].y += delta.y * force;
+    velocities[link.target].x -= delta.x * force; velocities[link.target].y -= delta.y * force;
+  });
+}
+
+function applyRadialForce(model, positions, velocities) {
+  const proxy = positions.proxy;
+  if (!proxy) return;
+  const radius = preferredInstanceRadius(model.instances.length);
+  model.nodes.filter((node) => node.type === 'instance').forEach((node) => {
+    const pos = positions[node.id];
+    const delta = normalizeVector(pos.x - proxy.x, pos.y - proxy.y);
+    const wanted = radius * (0.78 + seededUnitValue(node.id, 'radial') * 0.32);
+    const force = (delta.length - wanted) * 0.01;
+    velocities[node.id].x -= delta.x * force;
+    velocities[node.id].y -= delta.y * force;
+  });
+}
+
+function resolveCollisions(nodes, positions, bounds, minSpacing = 92, pinnedNodeIds = new Set()) {
+  for (let i = 0; i < nodes.length; i += 1) {
+    for (let j = i + 1; j < nodes.length; j += 1) {
+      const nodeA = nodes[i];
+      const nodeB = nodes[j];
+      const a = positions[nodeA.id];
+      const b = positions[nodeB.id];
+      const delta = normalizeVector(b.x - a.x, b.y - a.y);
+      const overlap = minSpacing - Math.max(1, delta.length);
+      if (overlap <= 0) continue;
+      const aPinned = pinnedNodeIds.has(nodeA.id);
+      const bPinned = pinnedNodeIds.has(nodeB.id);
+      if (aPinned && bPinned) continue;
+      if (aPinned) {
+        b.x += delta.x * overlap;
+        b.y += delta.y * overlap;
+      } else if (bPinned) {
+        a.x -= delta.x * overlap;
+        a.y -= delta.y * overlap;
+      } else {
+        b.x += delta.x * overlap * 0.5;
+        b.y += delta.y * overlap * 0.5;
+        a.x -= delta.x * overlap * 0.5;
+        a.y -= delta.y * overlap * 0.5;
+      }
+    }
+  }
+  nodes.forEach((node) => {
+    if (!pinnedNodeIds.has(node.id)) {
+      positions[node.id] = clampTopologyPosition(positions[node.id], bounds);
+    }
+  });
+}
+
+function relaxTopologyLayout(model, positions, options = {}) {
+  const bounds = topologyBounds(options);
+  const pinned = options.pinnedNodeIds || new Set();
+  const iterations = Math.max(1, Math.min(150, Number(options.iterations) || 110));
+  const nodes = model.nodes;
+  const center = { x: bounds.width / 2, y: bounds.height / 2 };
+  const result = Object.fromEntries(Object.entries(positions).map(([id, pos]) => [id, { ...pos }]));
+  for (let tick = 0; tick < iterations; tick += 1) {
+    const velocities = Object.fromEntries(nodes.map((node) => [node.id, { x: 0, y: 0 }]));
+    applyRepulsion(nodes, result, velocities, 8200);
+    applySpringForces(model.links, result, velocities, model);
+    applyRadialForce(model, result, velocities);
+    applyAngularForce(model, result, velocities);
+    nodes.forEach((node) => {
+      if (pinned.has(node.id)) return;
+      const pos = result[node.id];
+      velocities[node.id].x += (center.x - pos.x) * 0.004;
+      velocities[node.id].y += (center.y - pos.y) * 0.004;
+      pos.x += Math.max(-18, Math.min(18, velocities[node.id].x)) * 0.82;
+      pos.y += Math.max(-18, Math.min(18, velocities[node.id].y)) * 0.82;
+      result[node.id] = clampTopologyPosition(pos, bounds);
+    });
+    resolveCollisions(nodes, result, bounds, 92, pinned);
+  }
+  return result;
+}
+
+function computeTopologyLayout(model, options = {}) {
+  const bounds = topologyBounds({ width: options.width, height: options.height || Math.max(520, 420 + Math.sqrt(model.instances.length) * 56) });
+  const initial = createInitialTopologyPositions(model, bounds, options.existingPositions || {});
+  const positions = relaxTopologyLayout(model, initial, { ...bounds, pinnedNodeIds: options.pinnedNodeIds || new Set(), iterations: options.iterations || 110 });
+  return { ...bounds, positions, nodePadding: bounds.nodePadding, labelPadding: bounds.labelPadding };
+}
+
+function deterministicLinkCurvature(linkId) {
+  const direction = seededUnitValue(linkId, 'curve') < 0.5 ? -1 : 1;
+  const magnitude = 26 + seededUnitValue(linkId, 'curve-size') * 34;
+  return direction * magnitude;
+}
+
+function edgePoint(source, target, radius = 42) {
+  const delta = normalizeVector(target.x - source.x, target.y - source.y);
+  return { x: source.x + delta.x * radius, y: source.y + delta.y * radius };
+}
+
+function computeLinkPath(link, positions, radii = {}) {
+  const a = positions[link.source]; const b = positions[link.target];
+  if (!a || !b) return '';
+  const sourceRadius = radii[link.source] || 42;
+  const targetRadius = radii[link.target] || 42;
+  const start = edgePoint(a, b, sourceRadius);
+  const end = edgePoint(b, a, targetRadius);
+  const delta = normalizeVector(end.x - start.x, end.y - start.y);
+  const curve = deterministicLinkCurvature(link.id) * (link.id === 'scheduler-proxy' ? 1.25 : 1);
+  const cx = (start.x + end.x) / 2 + -delta.y * curve;
+  const cy = (start.y + end.y) / 2 + delta.x * curve;
+  return `M ${start.x.toFixed(2)} ${start.y.toFixed(2)} Q ${cx.toFixed(2)} ${cy.toFixed(2)} ${end.x.toFixed(2)} ${end.y.toFixed(2)}`;
+}
+
+function computeHoverRelationships(model, activeNodeId) {
+  const nodeIds = new Set(model.nodes.map((node) => node.id));
+  const relatedNodes = new Set();
+  const relatedLinks = new Set();
+  if (!activeNodeId || !nodeIds.has(activeNodeId)) return { activeNodeId: null, relatedNodes, relatedLinks, dimmedNodes: new Set(), dimmedLinks: new Set() };
+  relatedNodes.add(activeNodeId);
+  if (activeNodeId === 'proxy') {
+    model.nodes.forEach((node) => relatedNodes.add(node.id));
+    model.links.forEach((link) => relatedLinks.add(link.id));
+  } else {
+    model.links.forEach((link) => {
+      if (link.source === activeNodeId || link.target === activeNodeId) {
+        relatedLinks.add(link.id);
+        relatedNodes.add(link.source);
+        relatedNodes.add(link.target);
+      }
     });
   }
-  const height = Math.max(360, Math.max(...ys) + labelPadding);
-  return { width, height, positions, nodePadding, labelPadding };
+  return {
+    activeNodeId,
+    relatedNodes,
+    relatedLinks,
+    dimmedNodes: new Set([...nodeIds].filter((id) => !relatedNodes.has(id))),
+    dimmedLinks: new Set(model.links.map((link) => link.id).filter((id) => !relatedLinks.has(id))),
+  };
+}
+
+function clampZoom(value) {
+  return Math.max(0.45, Math.min(2.5, finiteNumber(value) ?? 1));
+}
+
+function dragExceededThreshold(dx, dy, threshold = 5) {
+  return Math.hypot(dx, dy) >= threshold;
+}
+
+function fitTopologyToView(positions, viewport, padding = 60) {
+  const nodes = Object.values(positions || {});
+  const width = Math.max(1, viewport.width || 980);
+  const height = Math.max(1, viewport.height || 560);
+  if (!nodes.length) return { zoom: 1, panX: 0, panY: 0 };
+  const minX = Math.min(...nodes.map((p) => p.x)) - padding;
+  const maxX = Math.max(...nodes.map((p) => p.x)) + padding;
+  const minY = Math.min(...nodes.map((p) => p.y)) - padding;
+  const maxY = Math.max(...nodes.map((p) => p.y)) + padding + 28;
+  const graphWidth = Math.max(1, maxX - minX);
+  const graphHeight = Math.max(1, maxY - minY);
+  const zoom = clampZoom(Math.min(width / graphWidth, height / graphHeight));
+  return { zoom, panX: (width - graphWidth * zoom) / 2 - minX * zoom, panY: (height - graphHeight * zoom) / 2 - minY * zoom };
+}
+
+
+function pruneTopologyMapByIds(map, validIds) {
+  Object.keys(map || {}).forEach((id) => {
+    if (!validIds.has(id)) delete map[id];
+  });
+}
+
+function pruneTopologyState(model) {
+  const validNodeIds = new Set(model.nodes.map((node) => node.id));
+  const validLinkIds = new Set(model.links.map((link) => link.id));
+  pruneTopologyMapByIds(state.topology.positions, validNodeIds);
+  pruneTopologyMapByIds(state.topology.previousPositions, validNodeIds);
+  pruneTopologyMapByIds(state.topology.linkPaths, validLinkIds);
+  [...state.topology.pinnedNodeIds].forEach((id) => { if (!validNodeIds.has(id)) state.topology.pinnedNodeIds.delete(id); });
+  if (state.topology.hoveredNodeId && !validNodeIds.has(state.topology.hoveredNodeId)) {
+    state.topology.hoveredNodeId = null;
+  }
+  if (state.topology.suppressedClick && !validNodeIds.has(state.topology.suppressedClick.nodeId)) {
+    state.topology.suppressedClick = null;
+  }
+}
+
+function cleanPositionsForModel(positions, model) {
+  const validNodeIds = new Set(model.nodes.map((node) => node.id));
+  return Object.fromEntries(Object.entries(positions || {}).filter(([id]) => validNodeIds.has(id)));
+}
+
+function shouldAnimateTopologyParticles() {
+  return !(typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches);
+}
+
+function setSuppressedTopologyClick(nodeId, instanceId, pointerId, ttlMs = 450) {
+  state.topology.suppressedClick = { nodeId, instanceId: instanceId || null, pointerId, expiresAt: Date.now() + ttlMs };
+}
+
+function clearSuppressedTopologyClick() {
+  state.topology.suppressedClick = null;
+}
+
+function shouldSuppressTopologyClick(target, now = Date.now()) {
+  const suppressed = state.topology.suppressedClick;
+  if (!suppressed) return false;
+  if (now > suppressed.expiresAt) {
+    clearSuppressedTopologyClick();
+    return false;
+  }
+  const node = target?.closest?.('.topology-svg-node[data-node-id]');
+  if (!node || node.dataset.nodeId !== suppressed.nodeId) return false;
+  clearSuppressedTopologyClick();
+  return true;
+}
+
+function tooltipValue(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  if (typeof value === 'boolean' || Array.isArray(value) || typeof value === 'object') return '—';
+  return String(value);
 }
 
 function nodeTooltip(node) {
+  return buildTooltipModel(node).rows.map((row) => `${row.label}: ${row.value}`).join('\n');
+}
+
+function buildTooltipModel(node, model = state.topology.model) {
   const raw = node.raw || {};
   const resource = raw.resource || {};
-  const address = raw.host ? `${raw.host}:${raw.port ?? '—'}` : (node.type === 'proxy' ? String(node.status) : '—');
-  const cpu = resource.cpu_util !== null && resource.cpu_util !== undefined ? `CPU ${fmt(resource.cpu_util)}%` : null;
-  const gpu = resource.gpu_util_avg !== null && resource.gpu_util_avg !== undefined ? `GPU ${fmt(resource.gpu_util_avg)}%` : null;
-  return [`Type: ${node.type}`, `ID: ${node.instanceId || node.label}`, `Address: ${address}`, `State: ${node.status}`, `Last seen: ${formatTimestamp(raw.last_seen_at)}`, cpu, gpu].filter(Boolean).join('\n');
+  const load = node.type === 'instance' ? mergedInstanceLoad(raw) : {};
+  const fmtPercent = (value) => finiteNumber(value) === null ? '—' : `${fmt(value)}%`;
+  const fmtMb = (used, total) => `${displayNumber(used)} / ${displayNumber(total)} MB`;
+  if (node.type === 'instance') {
+    return { title: `Instance ${tooltipValue(node.instanceId)}`, rows: [
+      ['Instance ID', node.instanceId], ['Host and port', raw.host ? `${raw.host}:${raw.port ?? '—'}` : ''], ['State', node.status],
+      ['CPU utilization', fmtPercent(resource.cpu_util)], ['System memory', fmtMb(resource.memory_used_mb, resource.memory_total_mb)],
+      ['GPU utilization', fmtPercent(aggregateGpuUtilization(raw, load, hardwareDetails(raw)))], ['GPU memory', fmtMb(resource.gpu_mem_used_mb, resource.gpu_mem_total_mb)],
+      ['Inflight', load.inflight], ['QPS 1m', load.qps_1m], ['Prepare queue depth', load.prepare_queue_depth], ['Ready queue depth', load.ready_queue_depth],
+      ['Active prepare', load.active_prepare], ['Active ready', load.active_ready], ['Least-load score', nestedNumber(load, 'least_load_score.total')],
+      ['Last seen age', formatAge(raw.last_seen_at)], ['Resource report age', formatAge(resource.resource_reported_at)],
+    ].map(([label, value]) => ({ label, value: tooltipValue(value) })) };
+  }
+  if (node.type === 'proxy') {
+    const instances = model?.instances || [];
+    const total = instances.length;
+    const alive = instances.filter((item) => item.is_alive === true).length;
+    const stale = instances.filter((item) => item.is_alive === false).length;
+    const unknown = total - alive - stale;
+    return { title: 'Proxy', rows: [
+      ['Proxy ID', model?.proxyId || raw.proxy_id || node.status], ['Health state', raw.ok === false ? 'error' : 'ok'], ['TTL', raw.ttl_s ?? raw.ttl_seconds ?? raw.ttl],
+      ['Alive Instance count', alive], ['Total Instance count', total], ['Stale Instance count', stale], ['Unknown Instance count', unknown],
+      ['Resource report count', instances.filter(hasResourceReport).length], ['Topology link count', model?.links?.length],
+    ].map(([label, value]) => ({ label, value: tooltipValue(value) })) };
+  }
+  return { title: 'Scheduler', rows: [
+    ['Registration state', node.status], ['Configured Proxy ID', state.config?.proxy_id || model?.proxyId],
+    ['Scheduler response state', raw.ok === false ? 'error' : raw.ok === true ? 'ok' : raw.error],
+    ['Last known Proxy registration', raw.proxy_id || raw.registered_proxy_id || raw.proxy || raw.data?.proxy_id],
+  ].map(([label, value]) => ({ label, value: tooltipValue(value) })) };
+}
+
+function tooltipHtml(node) {
+  const model = buildTooltipModel(node);
+  return `<div class="topology-tooltip-title">${escapeHtml(model.title)}</div><dl>${model.rows.map((row) => `<div><dt>${escapeHtml(row.label)}</dt><dd>${escapeHtml(row.value)}</dd></div>`).join('')}</dl>`;
+}
+
+function topologyViewportSize(container) {
+  const rect = container?.getBoundingClientRect?.() || { width: 980, height: 560 };
+  return { width: Math.max(720, Math.round(rect.width || 980)), height: Math.max(420, Math.round((rect.height && rect.height > 120 ? rect.height : 560))) };
+}
+
+function ensureTopologyShell(container) {
+  if (container.querySelector?.('.topology-svg')) return;
+  container.innerHTML = `<div class="topology-toolbar topology-controls" aria-label="Topology controls">
+    <button type="button" data-topology-action="zoom-in" aria-label="Zoom in topology">+</button>
+    <button type="button" data-topology-action="zoom-out" aria-label="Zoom out topology">−</button>
+    <button type="button" data-topology-action="fit" aria-label="Fit topology to view">Fit</button>
+    <button type="button" data-topology-action="reset" aria-label="Reset topology layout">Reset</button>
+  </div><div class="topology-scroll"><div class="topology-tooltip hidden" role="tooltip"></div><svg class="topology-svg" tabindex="0" aria-labelledby="topologyTitle topologyDesc">
+    <title id="topologyTitle">CacheRoute Proxy topology</title><desc id="topologyDesc">Interactive Scheduler, Proxy, and Instance network topology.</desc>
+    <defs>
+      <symbol id="icon-scheduler" viewBox="0 0 48 48"><rect x="8" y="10" width="32" height="22" rx="5"></rect><path d="M16 38h16M24 32v6M16 18h16M16 25h10"></path></symbol>
+      <symbol id="icon-proxy" viewBox="0 0 48 48"><path d="M8 24h32M24 8v32M13 13l22 22M35 13L13 35"></path><circle cx="24" cy="24" r="15"></circle></symbol>
+      <symbol id="icon-instance" viewBox="0 0 48 48"><rect x="10" y="8" width="28" height="32" rx="4"></rect><path d="M16 17h16M16 25h16M16 33h10"></path><circle cx="33" cy="33" r="2"></circle></symbol>
+      <filter id="particleGlow"><feGaussianBlur stdDeviation="2" result="blur"></feGaussianBlur><feMerge><feMergeNode in="blur"></feMergeNode><feMergeNode in="SourceGraphic"></feMergeNode></feMerge></filter>
+    </defs><rect class="topology-bg" x="0" y="0" width="100%" height="100%"></rect><g class="topology-viewport"><g class="topology-links"></g><g class="topology-particles"></g><g class="topology-nodes"></g></g>
+  </svg></div><div class="topology-empty empty-state compact hidden">No connected instances reported.</div>`;
+  installTopologyHandlers(container);
+}
+
+function renderTopologyStructure(container, model) {
+  const linksGroup = container.querySelector('.topology-links');
+  const nodesGroup = container.querySelector('.topology-nodes');
+  const particlesGroup = container.querySelector('.topology-particles');
+  const existingNodes = new Set([...nodesGroup.querySelectorAll('.topology-svg-node')].map((el) => el.dataset.nodeId));
+  model.links.forEach((link) => {
+    if (!linksGroup.querySelector(`[data-link-id="${CSS.escape(link.id)}"]`)) {
+      linksGroup.insertAdjacentHTML('beforeend', `<path id="topology-path-${escapeHtml(link.id)}" class="topology-link" data-link-id="${escapeHtml(link.id)}"><title></title></path>`);
+    }
+  });
+  [...linksGroup.querySelectorAll('.topology-link')].forEach((el) => { if (!model.links.some((l) => l.id === el.dataset.linkId)) el.remove(); });
+  [...particlesGroup.querySelectorAll('.topology-particle')].forEach((el) => { if (!model.links.some((l) => l.id === el.dataset.linkId)) el.remove(); });
+  model.nodes.forEach((node) => {
+    if (existingNodes.has(node.id)) return;
+    const isInstance = node.type === 'instance';
+    nodesGroup.insertAdjacentHTML('beforeend', `<g class="topology-svg-node ${escapeHtml(node.type)}" data-node-id="${escapeHtml(node.id)}" ${isInstance ? `role="button" tabindex="0" data-instance-id="${escapeHtml(node.instanceId)}"` : 'tabindex="0"'}><title></title><g class="topology-node-visual"><circle class="node-halo" r="38"></circle><use href="#icon-${escapeHtml(node.type)}" x="-20" y="-24" width="40" height="40"></use><text class="node-label" y="32"></text><text class="node-status" y="48"></text></g></g>`);
+  });
+  [...nodesGroup.querySelectorAll('.topology-svg-node')].forEach((el) => { if (!model.nodes.some((n) => n.id === el.dataset.nodeId)) el.remove(); });
+}
+
+
+function createTopologyParticle(particlesGroup, link) {
+  if (!shouldAnimateTopologyParticles()) return;
+  if (particlesGroup.querySelector(`[data-link-id="${CSS.escape(link.id)}"]`)) return;
+  particlesGroup.insertAdjacentHTML('beforeend', `<circle r="4" class="topology-particle active" data-link-id="${escapeHtml(link.id)}"><animateMotion dur="3s" repeatCount="indefinite" rotate="auto"><mpath href="#topology-path-${escapeHtml(link.id)}"></mpath></animateMotion></circle>`);
+}
+
+function syncTopologyParticles(container, model) {
+  const particlesGroup = container.querySelector('.topology-particles');
+  if (!particlesGroup) return;
+  const activeLinkIds = new Set(model.links.filter((link) => link.status === 'active').map((link) => link.id));
+  [...particlesGroup.querySelectorAll('.topology-particle')].forEach((el) => {
+    if (!activeLinkIds.has(el.dataset.linkId) || !shouldAnimateTopologyParticles()) el.remove();
+  });
+  if (!shouldAnimateTopologyParticles()) return;
+  model.links.filter((link) => link.status === 'active').forEach((link) => createTopologyParticle(particlesGroup, link));
+}
+
+function updateTopologyMetrics(container, model) {
+  model.nodes.forEach((node) => {
+    const el = container.querySelector(`.topology-svg-node[data-node-id="${CSS.escape(node.id)}"]`);
+    if (!el) return;
+    el.className.baseVal = `topology-svg-node ${node.type} ${node.tone}`;
+    el.setAttribute('aria-label', `${node.type} ${node.instanceId || node.label} ${node.status}`);
+    el.querySelector('title').textContent = nodeTooltip(node);
+    el.querySelector('.node-label').textContent = shortText(node.label, 18);
+    el.querySelector('.node-status').textContent = shortText(node.status, 22);
+  });
+  model.links.forEach((link) => {
+    const el = container.querySelector(`.topology-link[data-link-id="${CSS.escape(link.id)}"]`);
+    const particle = container.querySelector(`.topology-particle[data-link-id="${CSS.escape(link.id)}"]`);
+    if (el) { el.className.baseVal = `topology-link ${link.status}`; el.querySelector('title').textContent = `${link.source} to ${link.target}: ${link.status}`; }
+    if (particle) particle.className.baseVal = `topology-particle active`;
+  });
+}
+
+function updateTopologyTransforms(container) {
+  const viewport = container.querySelector('.topology-viewport');
+  if (viewport) viewport.setAttribute('transform', `translate(${state.topology.panX} ${state.topology.panY}) scale(${state.topology.zoom})`);
+}
+
+function updateTopologyLinkPaths(container, model) {
+  state.topology.linkPaths = {};
+  model.links.forEach((link) => {
+    const d = computeLinkPath(link, state.topology.positions);
+    state.topology.linkPaths[link.id] = d;
+    const el = container.querySelector(`.topology-link[data-link-id="${CSS.escape(link.id)}"]`);
+    if (el) el.setAttribute('d', d);
+  });
+}
+
+function applyTopologyPositions(container) {
+  Object.entries(state.topology.positions).forEach(([id, pos]) => {
+    const el = container.querySelector(`.topology-svg-node[data-node-id="${CSS.escape(id)}"]`);
+    if (el) el.setAttribute('transform', `translate(${pos.x.toFixed(2)} ${pos.y.toFixed(2)})`);
+  });
+  updateTopologyLinkPaths(container, state.topology.model);
+}
+
+function animateTopologyPositions(container, nextPositions) {
+  const reduced = typeof matchMedia !== 'undefined' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+  if (reduced) { state.topology.positions = cleanPositionsForModel(nextPositions, state.topology.model); applyTopologyPositions(container); return; }
+  const start = { ...state.topology.positions };
+  const started = performance.now();
+  cancelAnimationFrame(state.topology.animationFrame);
+  function frame(now) {
+    const t = Math.min(1, (now - started) / 260);
+    const eased = 1 - Math.pow(1 - t, 3);
+    Object.entries(nextPositions).forEach(([id, next]) => {
+      const prev = start[id] || next;
+      state.topology.positions[id] = { x: prev.x + (next.x - prev.x) * eased, y: prev.y + (next.y - prev.y) * eased };
+    });
+    applyTopologyPositions(container);
+    if (t < 1) state.topology.animationFrame = requestAnimationFrame(frame);
+    else state.topology.positions = cleanPositionsForModel(nextPositions, state.topology.model);
+  }
+  state.topology.animationFrame = requestAnimationFrame(frame);
+}
+
+function applyTopologyHover(container, nodeId) {
+  state.topology.hoveredNodeId = nodeId || null;
+  const rel = computeHoverRelationships(state.topology.model || { nodes: [], links: [] }, nodeId);
+  container.querySelectorAll('.topology-svg-node').forEach((el) => {
+    const id = el.dataset.nodeId;
+    el.classList.toggle('is-hovered', id === nodeId);
+    el.classList.toggle('is-neighbor', nodeId && rel.relatedNodes.has(id) && id !== nodeId);
+    el.classList.toggle('is-dimmed', rel.dimmedNodes.has(id));
+  });
+  container.querySelectorAll('.topology-link, .topology-particle').forEach((el) => {
+    const id = el.dataset.linkId;
+    el.classList.toggle('is-related', rel.relatedLinks.has(id));
+    el.classList.toggle('is-dimmed', rel.dimmedLinks.has(id));
+  });
+}
+
+function showTopologyTooltip(container, nodeId, event) {
+  const node = state.topology.model?.nodes.find((item) => item.id === nodeId);
+  const tooltip = container.querySelector('.topology-tooltip');
+  if (!node || !tooltip) return;
+  tooltip.innerHTML = tooltipHtml(node);
+  tooltip.classList.remove('hidden');
+  positionTopologyTooltip(container, event || { clientX: 0, clientY: 0 });
+}
+
+function positionTopologyTooltip(container, event) {
+  const tooltip = container.querySelector('.topology-tooltip');
+  const scroll = container.querySelector('.topology-scroll');
+  if (!tooltip || tooltip.classList.contains('hidden') || !scroll?.getBoundingClientRect) return;
+  const rect = scroll.getBoundingClientRect();
+  const tip = tooltip.getBoundingClientRect();
+  const x = Math.max(8, Math.min(rect.width - tip.width - 8, (event.clientX || rect.left + 12) - rect.left + 16));
+  const y = Math.max(8, Math.min(rect.height - tip.height - 8, (event.clientY || rect.top + 12) - rect.top + 16));
+  tooltip.style.transform = `translate(${x}px, ${y}px)`;
+}
+
+function hideTopologyTooltip(container) {
+  container.querySelector('.topology-tooltip')?.classList.add('hidden');
+}
+
+function topologyNodeFromEventTarget(target) {
+  return target?.closest?.('.topology-svg-node[data-node-id]') || null;
+}
+
+function handleTopologyPointerOut(container, event) {
+  const fromNode = topologyNodeFromEventTarget(event.target);
+  if (!fromNode) return null;
+  const toNode = topologyNodeFromEventTarget(event.relatedTarget);
+  if (fromNode === toNode) return fromNode.dataset.nodeId;
+  if (toNode) {
+    applyTopologyHover(container, toNode.dataset.nodeId);
+    showTopologyTooltip(container, toNode.dataset.nodeId, event);
+    return toNode.dataset.nodeId;
+  }
+  applyTopologyHover(container, null);
+  hideTopologyTooltip(container);
+  return null;
+}
+
+function cleanupTopologyDrag(container, options = {}) {
+  const drag = state.topology.dragging;
+  if (!drag) return false;
+  if (drag.active && options.pinDraggedNode) {
+    state.topology.pinnedNodeIds.add(drag.nodeId);
+    setSuppressedTopologyClick(drag.nodeId, drag.node?.dataset?.instanceId, drag.pointerId);
+  }
+  drag.node?.classList?.remove('is-dragging');
+  if (typeof document !== 'undefined') document.body?.classList?.remove('topology-no-select');
+  drag.node?.releasePointerCapture?.(drag.pointerId);
+  state.topology.dragging = null;
+  return Boolean(drag.active);
+}
+
+function cleanupTopologyPan(container) {
+  const pan = state.topology.panning;
+  const wasPanning = Boolean(pan);
+  pan?.svg?.releasePointerCapture?.(pan.pointerId);
+  state.topology.panning = null;
+  container?.classList?.remove('is-panning');
+  return wasPanning;
+}
+
+function cleanupTopologyPointerState(container) {
+  cleanupTopologyDrag(container, { pinDraggedNode: false });
+  cleanupTopologyPan(container);
+  clearSuppressedTopologyClick();
+}
+
+
+function installTopologyHandlers(container) {
+  if (state.topology.handlersInstalled) return;
+  state.topology.handlersInstalled = true;
+  container.addEventListener('pointerover', (event) => {
+    const node = topologyNodeFromEventTarget(event.target);
+    if (!node || state.topology.dragging) return;
+    applyTopologyHover(container, node.dataset.nodeId); showTopologyTooltip(container, node.dataset.nodeId, event);
+  });
+  container.addEventListener('pointermove', (event) => {
+    if (state.topology.dragging) {
+      const drag = state.topology.dragging; const dx = (event.clientX - drag.startX) / state.topology.zoom; const dy = (event.clientY - drag.startY) / state.topology.zoom;
+      if (!drag.active && dragExceededThreshold(event.clientX - drag.startX, event.clientY - drag.startY)) { drag.active = true; drag.node.classList.add('is-dragging'); document.body.classList.add('topology-no-select'); }
+      if (drag.active) { state.topology.positions[drag.nodeId] = clampTopologyPosition({ x: drag.nodeStart.x + dx, y: drag.nodeStart.y + dy }, topologyBounds({ width: drag.width, height: drag.height })); applyTopologyPositions(container); }
+      return;
+    }
+    if (state.topology.panning) {
+      const pan = state.topology.panning; state.topology.panX = pan.startPanX + event.clientX - pan.startX; state.topology.panY = pan.startPanY + event.clientY - pan.startY; updateTopologyTransforms(container); return;
+    }
+    positionTopologyTooltip(container, event);
+  });
+  container.addEventListener('pointerout', (event) => {
+    handleTopologyPointerOut(container, event);
+  });
+  container.addEventListener('focusin', (event) => { const node = topologyNodeFromEventTarget(event.target); if (node) { applyTopologyHover(container, node.dataset.nodeId); showTopologyTooltip(container, node.dataset.nodeId, event); } });
+  container.addEventListener('focusout', () => { applyTopologyHover(container, null); hideTopologyTooltip(container); });
+  container.addEventListener('pointerdown', (event) => {
+    const svg = container.querySelector('.topology-svg'); const viewport = topologyViewportSize(container);
+    const node = topologyNodeFromEventTarget(event.target);
+    if (node) { const pos = state.topology.positions[node.dataset.nodeId]; state.topology.dragging = { node, nodeId: node.dataset.nodeId, startX: event.clientX, startY: event.clientY, nodeStart: { ...pos }, pointerId: event.pointerId, active: false, width: viewport.width, height: viewport.height }; node.setPointerCapture?.(event.pointerId); return; }
+    if (event.target.closest?.('.topology-bg, .topology-svg')) { state.topology.panning = { startX: event.clientX, startY: event.clientY, startPanX: state.topology.panX, startPanY: state.topology.panY, svg, pointerId: event.pointerId }; svg?.setPointerCapture?.(event.pointerId); container.classList.add('is-panning'); }
+  });
+  container.addEventListener('pointerup', (event) => {
+    const dragged = cleanupTopologyDrag(container, { pinDraggedNode: true });
+    cleanupTopologyPan(container);
+    if (dragged) event.preventDefault();
+  });
+  container.addEventListener('pointercancel', () => cleanupTopologyPointerState(container));
+  container.addEventListener('lostpointercapture', () => cleanupTopologyPointerState(container));
+  if (typeof window !== 'undefined' && !state.topology.windowCleanupInstalled) {
+    state.topology.windowCleanupInstalled = true;
+    window.addEventListener('blur', () => cleanupTopologyPointerState(container));
+  }
+  container.addEventListener('wheel', (event) => { event.preventDefault(); zoomTopology(container, event.deltaY < 0 ? 1.12 : 0.88, event); }, { passive: false });
+  container.addEventListener('click', (event) => {
+    const action = event.target.closest?.('[data-topology-action]')?.dataset.topologyAction;
+    if (!action) return;
+    if (action === 'zoom-in') zoomTopology(container, 1.18);
+    if (action === 'zoom-out') zoomTopology(container, 0.84);
+    if (action === 'fit') applyFitToView(container);
+    if (action === 'reset') { state.topology.pinnedNodeIds.clear(); state.topology.positions = {}; state.topology.previousPositions = {}; state.topology.linkPaths = {}; clearSuppressedTopologyClick(); state.topology.signature = ''; state.topology.fitRequested = true; renderSystemTopology(Array.isArray(state.latest.instances) ? state.latest.instances : [], state.latest.scheduler); }
+  });
+}
+
+function zoomTopology(container, factor, event) {
+  const scroll = container.querySelector('.topology-scroll'); const rect = scroll?.getBoundingClientRect?.() || { left: 0, top: 0, width: 980, height: 560 };
+  const old = state.topology.zoom; const next = clampZoom(old * factor);
+  const px = event ? event.clientX - rect.left : rect.width / 2; const py = event ? event.clientY - rect.top : rect.height / 2;
+  state.topology.panX = px - ((px - state.topology.panX) / old) * next;
+  state.topology.panY = py - ((py - state.topology.panY) / old) * next;
+  state.topology.zoom = next; updateTopologyTransforms(container);
+}
+
+function applyFitToView(container) {
+  const viewport = topologyViewportSize(container);
+  const fit = fitTopologyToView(state.topology.positions, viewport, 70);
+  Object.assign(state.topology, fit); updateTopologyTransforms(container);
+}
+
+function renderSystemTopology(instances, scheduler) {
+  const container = $('systemTopology');
+  if (!container) return;
+  ensureTopologyShell(container);
+  const model = buildTopologyModel(instances, scheduler, state.latest.status || {});
+  state.topology.model = model;
+  const hoveredBeforePrune = state.topology.hoveredNodeId;
+  pruneTopologyState(model);
+  if (hoveredBeforePrune && !state.topology.hoveredNodeId) hideTopologyTooltip(container);
+  const viewport = topologyViewportSize(container);
+  const signature = topologySignature(model);
+  const viewportSignature = `${Math.round(viewport.width / 40)}x${Math.round(viewport.height / 40)}`;
+  renderTopologyStructure(container, model);
+  const missing = model.nodes.some((node) => !state.topology.positions[node.id]);
+  const changed = signature !== state.topology.signature || viewportSignature !== state.topology.viewportSignature || missing;
+  if (changed) {
+    const oldPositions = state.topology.positions || {};
+    const layout = computeTopologyLayout(model, { ...viewport, existingPositions: oldPositions, pinnedNodeIds: state.topology.pinnedNodeIds, preserveExisting: true });
+    state.topology.previousPositions = oldPositions;
+    state.topology.signature = signature;
+    state.topology.viewportSignature = viewportSignature;
+    animateTopologyPositions(container, layout.positions);
+  } else {
+    applyTopologyPositions(container);
+  }
+  updateTopologyMetrics(container, model);
+  syncTopologyParticles(container, model);
+  updateTopologyTransforms(container);
+  applyTopologyHover(container, state.topology.hoveredNodeId);
+  container.classList.toggle('paused', state.paused);
+  container.querySelector('.topology-empty')?.classList.toggle('hidden', model.instances.length > 0);
+  if (state.topology.fitRequested) { state.topology.fitRequested = false; setTimeout(() => applyFitToView(container), 0); }
 }
 
 function renderMetricBar({ label, value, max = 100, unit = '', tone = 'accent', secondaryText = '' }) {
@@ -583,6 +1293,54 @@ function renderDonutChart({ label, used, total, unit = '' }) {
   const free = Math.max(0, rawTotal - safeUsed);
   const dash = `${percent.toFixed(2)} ${Math.max(0, 100 - percent).toFixed(2)}`;
   return `<article class="donut-card" aria-label="${escapeHtml(label)} used ${percent.toFixed(1)} percent"><h3>${escapeHtml(label)}</h3><svg class="donut" viewBox="0 0 42 42" role="img"><title>${escapeHtml(label)}: ${displayNumber(rawUsed, 1)} / ${displayNumber(rawTotal, 1)} ${unit}</title><circle class="donut-free" cx="21" cy="21" r="15.9155"></circle><circle class="donut-used" cx="21" cy="21" r="15.9155" stroke-dasharray="${dash}"></circle><text x="21" y="22">${percent.toFixed(0)}%</text></svg><p><span class="dot used"></span> used ${escapeHtml(displayNumber(rawUsed, 1))}${escapeHtml(unit)} · <span class="dot free"></span> free ${escapeHtml(displayNumber(free, 1))}${escapeHtml(unit)}</p></article>`;
+}
+
+
+function renderUtilizationDonutChart({ label, value, detail = '' }) {
+  const util = clampPercent(value);
+  if (util === null) {
+    return `<article class="donut-card utilization-donut"><h3>${escapeHtml(label)}</h3><div class="empty-state compact">No data</div>${detail ? `<p>${escapeHtml(detail)}</p>` : ''}</article>`;
+  }
+  const idle = Math.max(0, 100 - util);
+  const dash = `${util.toFixed(2)} ${idle.toFixed(2)}`;
+  const text = `${util.toFixed(0)}%`;
+  return `<article class="donut-card utilization-donut" aria-label="${escapeHtml(label)} utilized ${util.toFixed(1)} percent"><h3>${escapeHtml(label)}</h3><svg class="donut" viewBox="0 0 42 42" role="img"><title>${escapeHtml(label)}: utilized ${util.toFixed(1)} percent</title><circle class="donut-free" cx="21" cy="21" r="15.9155"></circle><circle class="donut-used" cx="21" cy="21" r="15.9155" stroke-dasharray="${dash}"></circle><text x="21" y="22">${escapeHtml(text)}</text></svg><p><span class="dot used"></span> Utilized ${util.toFixed(0)}% · <span class="dot free"></span> Idle ${idle.toFixed(0)}%</p>${detail ? `<small>${escapeHtml(detail)}</small>` : ''}</article>`;
+}
+
+function gpuUtilizationDetailText(result) {
+  if (!result || result.value === null) return `No valid GPU utilization sample · ${result?.quality || 'unavailable'}`;
+  const windowText = result.windowMs ? `${(result.windowMs / 1000).toFixed(0)}s average` : 'average';
+  const age = finiteNumber(result.sampleAgeMs);
+  return `Source: ${result.source || '—'} · Current ${displayNumber(result.current, 1)}% · ${windowText} ${displayNumber(result.average, 1)}% · maximum ${displayNumber(result.maximum, 1)}% · ${displayNumber(result.sampleCount, 0)} samples${age === null ? '' : ` · last sample ${displayNumber(age, 0)} ms ago`} · quality ${result.quality || '—'}`;
+}
+
+function resolveGpuUtilizationForDevice(gpu) {
+  if (!gpuSampleOk(gpu)) return { value: null, source: gpu.utilization_source || 'per-gpu', quality: gpu.utilization_sample_quality || gpu.utilization_error || 'unavailable', current: null, average: null, maximum: null, sampleCount: finiteNumber(gpu.utilization_sample_count), windowMs: finiteNumber(gpu.utilization_window_ms), sampleAgeMs: null };
+  const averageValue = finiteNumber(gpu.utilization_pct_avg ?? gpu.utilization_pct ?? gpu.utilization_gpu_pct ?? gpu.gpu_util ?? gpu.util);
+  return { value: averageValue, source: gpu.utilization_source || 'per-gpu', quality: gpu.utilization_sample_quality || (gpu.utilization_sample_ok === true ? 'ok' : 'unknown'), current: finiteNumber(gpu.utilization_pct_current), average: averageValue, maximum: finiteNumber(gpu.utilization_pct_max), sampleCount: finiteNumber(gpu.utilization_sample_count), windowMs: finiteNumber(gpu.utilization_window_ms), sampleAgeMs: null };
+}
+
+function renderGpuUtilizationDonuts(instance, aggregateGpuResult) {
+  const aggregateGpuUtil = typeof aggregateGpuResult === 'object' && aggregateGpuResult !== null ? aggregateGpuResult.value : aggregateGpuResult;
+  const aggregateDetail = typeof aggregateGpuResult === 'object' && aggregateGpuResult !== null ? gpuUtilizationDetailText(aggregateGpuResult) : 'Instance-level scheduling signal';
+  const hw = hardwareDetails(instance);
+  const sortedGpus = [...hw.gpus].sort((a, b) => (finiteNumber(a.index) ?? 0) - (finiteNumber(b.index) ?? 0));
+  const deviceCards = sortedGpus.map((gpu, order) => {
+    const resolved = resolveGpuUtilizationForDevice(gpu);
+    const util = resolved.value;
+    if (util === null) return '';
+    const index = gpu.index ?? order;
+    const name = gpuName(gpu);
+    const details = [
+      gpu.uuid ? `UUID ${gpu.uuid}` : null,
+      gpu.temperature_c !== undefined ? `${displayNumber(gpu.temperature_c, 1)}°C` : null,
+      gpu.power_w !== undefined ? `${displayNumber(gpu.power_w, 1)} W` : null,
+      finiteNumber(gpu.memory_used_mb) !== null && finiteNumber(gpu.memory_total_mb) !== null ? `memory ${displayNumber(gpu.memory_used_mb, 0)}/${displayNumber(gpu.memory_total_mb, 0)} MB` : null,
+    ].filter(Boolean).join(' · ');
+    const detail = [gpuUtilizationDetailText(resolved), details].filter(Boolean).join(' · ');
+    return renderUtilizationDonutChart({ label: `GPU #${index} ${name} utilization`, value: util, detail });
+  }).filter(Boolean);
+  return `<section><h3>GPU utilization</h3><div class="donut-grid gpu-utilization-grid">${renderUtilizationDonutChart({ label: 'Aggregate GPU utilization', value: aggregateGpuUtil, detail: aggregateDetail })}${deviceCards.length ? deviceCards.join('') : '<div class="empty-state compact">No per-GPU utilization data is exposed by the current resource snapshot.</div>'}</div></section>`;
 }
 
 function extractQueueMetrics(instance) {
@@ -669,6 +1427,12 @@ function applyPausedTopologyState() {
   const container = typeof document !== 'undefined' ? $('systemTopology') : null;
   if (container) {
     container.classList.toggle('paused', state.paused);
+    const svg = container.querySelector?.('.topology-svg');
+    if (state.paused) {
+      svg?.pauseAnimations?.();
+    } else {
+      svg?.unpauseAnimations?.();
+    }
   }
 }
 
@@ -680,44 +1444,57 @@ function gpuUtil(gpu) {
   return finiteNumber(gpu.utilization_pct ?? gpu.utilization_gpu_pct ?? gpu.gpu_util ?? gpu.util);
 }
 
-function nicName(nic) {
-  return firstString(nic.iface, nic.interface, nic.name, nic.model) || 'NIC';
+
+function gpuSampleFresh(sampledAt, sampleAgeMs, maxAgeMs = 10000) {
+  const explicitAge = finiteNumber(sampleAgeMs);
+  if (explicitAge !== null) return explicitAge <= maxAgeMs;
+  const sampled = finiteNumber(sampledAt);
+  if (sampled === null) return true;
+  const ms = sampled > 1e12 ? sampled : sampled * 1000;
+  return Math.max(0, Date.now() - ms) <= maxAgeMs;
 }
 
-function renderSystemTopology(instances, scheduler) {
-  const model = buildTopologyModel(instances, scheduler, state.latest.status || {});
-  const layout = computeTopologyLayout(model);
-  const linkHtml = model.links.map((link) => {
-    const a = layout.positions[link.source];
-    const b = layout.positions[link.target];
-    if (!a || !b) return '';
-    const midY = (a.y + b.y) / 2;
-    const d = `M ${a.x} ${a.y + 28} C ${a.x} ${midY}, ${b.x} ${midY}, ${b.x} ${b.y - 30}`;
-    return `<path class="topology-link ${escapeHtml(link.status)}" d="${d}"><title>${escapeHtml(link.source)} to ${escapeHtml(link.target)}: ${escapeHtml(link.status)}</title></path>`;
-  }).join('');
-  const nodeHtml = model.nodes.map((node) => {
-    const pos = layout.positions[node.id];
-    if (!pos) return '';
-    const isInstance = node.type === 'instance';
-    const aria = `${node.type} ${node.instanceId || node.label} ${node.status}`;
-    return `<g class="topology-svg-node ${escapeHtml(node.type)} ${escapeHtml(node.tone)}" transform="translate(${pos.x} ${pos.y})" ${isInstance ? `role="button" tabindex="0" data-instance-id="${escapeHtml(node.instanceId)}" aria-label="${escapeHtml(aria)}"` : `aria-label="${escapeHtml(aria)}"`}>
-      <title>${escapeHtml(nodeTooltip(node))}</title>
-      <circle class="node-halo" r="38"></circle>
-      <use href="#icon-${escapeHtml(node.type)}" x="-20" y="-24" width="40" height="40"></use>
-      <text class="node-label" y="32">${escapeHtml(shortText(node.label, 18))}</text>
-      <text class="node-status" y="48">${escapeHtml(shortText(node.status, 22))}</text>
-    </g>`;
-  }).join('');
-  $('systemTopology').classList.toggle('paused', state.paused);
-  $('systemTopology').innerHTML = `<div class="topology-scroll"><svg class="topology-svg" viewBox="0 0 ${layout.width} ${layout.height}" aria-labelledby="topologyTitle topologyDesc">
-    <title id="topologyTitle">CacheRoute Proxy topology</title><desc id="topologyDesc">Scheduler, local Proxy, and registered Instance nodes. Instance nodes are keyboard selectable.</desc>
-    <defs>
-      <symbol id="icon-scheduler" viewBox="0 0 48 48"><rect x="8" y="10" width="32" height="22" rx="5"></rect><path d="M16 38h16M24 32v6M16 18h16M16 25h10"></path></symbol>
-      <symbol id="icon-proxy" viewBox="0 0 48 48"><path d="M8 24h32M24 8v32M13 13l22 22M35 13L13 35"></path><circle cx="24" cy="24" r="15"></circle></symbol>
-      <symbol id="icon-instance" viewBox="0 0 48 48"><rect x="10" y="8" width="28" height="32" rx="4"></rect><path d="M16 17h16M16 25h16M16 33h10"></path><circle cx="33" cy="33" r="2"></circle></symbol>
-    </defs>
-    <g class="topology-links">${linkHtml}</g><g class="topology-nodes">${nodeHtml}</g>
-  </svg></div>${model.instances.length ? '' : '<div class="empty-state compact">No connected instances reported.</div>'}`;
+function gpuSampleOk(payload = {}) {
+  const quality = String(payload.gpu_sample_quality ?? payload.utilization_sample_quality ?? '').toLowerCase();
+  if (payload.gpu_sample_ok === false || payload.utilization_sample_ok === false) return false;
+  if (['invalid', 'failed', 'error', 'command_error', 'parse_error', 'unsupported', 'stale'].includes(quality)) return false;
+  return true;
+}
+
+function resolveAggregateGpuUtilization(instance, load = mergedInstanceLoad(instance), hardware = hardwareDetails(instance)) {
+  const resource = instance?.resource || {};
+  const sampledAt = resource.resource_report_wall_time_ms ?? resource.resource_ts_ms ?? resource.resource_reported_at;
+  const sampleAgeMs = resource.gpu_sample_age_ms;
+  const resourceAverage = finiteNumber(resource.gpu_util_avg);
+  const resourceCurrent = finiteNumber(resource.gpu_util_current);
+  const resourceMax = finiteNumber(resource.gpu_util_max);
+  const resourcePayload = { ...resource, gpu_sample_ok: resource.gpu_sample_quality ? resource.gpu_sample_quality === 'ok' : undefined };
+  if (resourceAverage !== null && gpuSampleOk(resourcePayload) && gpuSampleFresh(sampledAt, sampleAgeMs)) {
+    return { value: resourceAverage, source: resource.gpu_sample_source || 'resource-agent', quality: resource.gpu_sample_quality || 'ok', sampledAt, sampleAgeMs, current: resourceCurrent, average: resourceAverage, maximum: resourceMax, sampleCount: finiteNumber(resource.gpu_sample_count), windowMs: finiteNumber(resource.gpu_sample_window_ms) };
+  }
+  const heartbeat = finiteNumber(load?.gpu_util);
+  if (heartbeat !== null && gpuSampleFresh(load?.sampled_at ?? load?.timestamp_ms ?? instance?.last_seen_at, load?.gpu_sample_age_ms)) {
+    return { value: heartbeat, source: 'heartbeat', quality: 'ok', sampledAt: load?.sampled_at ?? load?.timestamp_ms ?? instance?.last_seen_at, sampleAgeMs: load?.gpu_sample_age_ms, current: heartbeat, average: heartbeat, maximum: heartbeat, sampleCount: null, windowMs: null };
+  }
+  const validGpuValues = Array.isArray(hardware?.gpus) ? hardware.gpus.map((gpu) => {
+    const average = finiteNumber(gpu.utilization_pct_avg ?? gpu.utilization_pct ?? gpu.utilization_gpu_pct ?? gpu.gpu_util ?? gpu.util);
+    if (average === null || !gpuSampleOk(gpu) || !gpuSampleFresh(gpu.utilization_sample_timestamp_ms, gpu.gpu_sample_age_ms)) return null;
+    return { average, current: finiteNumber(gpu.utilization_pct_current), maximum: finiteNumber(gpu.utilization_pct_max), source: gpu.utilization_source || 'per-gpu', quality: gpu.utilization_sample_quality || (gpu.utilization_sample_ok === true ? 'ok' : 'unknown'), sampledAt: gpu.utilization_sample_timestamp_ms, sampleCount: finiteNumber(gpu.utilization_sample_count), windowMs: finiteNumber(gpu.utilization_window_ms) };
+  }).filter(Boolean) : [];
+  if (validGpuValues.length) {
+    const value = average(validGpuValues.map((item) => item.average));
+    return { value, source: validGpuValues[0].source, quality: validGpuValues.every((item) => item.quality === 'ok') ? 'ok' : validGpuValues[0].quality, sampledAt: validGpuValues[0].sampledAt, sampleAgeMs: null, current: average(validGpuValues.map((item) => item.current)), average: value, maximum: Math.max(...validGpuValues.map((item) => item.maximum ?? item.average)), sampleCount: validGpuValues.reduce((sum, item) => sum + (item.sampleCount || 0), 0) || null, windowMs: Math.max(...validGpuValues.map((item) => item.windowMs || 0)) || null };
+  }
+  const failed = resource.gpu_sample_quality || hardware?.gpus?.find?.((gpu) => gpu.utilization_error)?.utilization_error;
+  return { value: null, source: 'unavailable', quality: failed || 'missing', sampledAt: null, sampleAgeMs: null, current: null, average: null, maximum: null, sampleCount: null, windowMs: null };
+}
+
+function aggregateGpuUtilization(instance, load = mergedInstanceLoad(instance), hardware = hardwareDetails(instance)) {
+  return resolveAggregateGpuUtilization(instance, load, hardware).value;
+}
+
+function nicName(nic) {
+  return firstString(nic.iface, nic.interface, nic.name, nic.model) || 'NIC';
 }
 
 function renderInstanceDetail(instances) {
@@ -733,6 +1510,8 @@ function renderInstanceDetail(instances) {
   const load = mergedInstanceLoad(instance);
   const memPercent = percentOf(resource.memory_used_mb, resource.memory_total_mb);
   const gpuMemPercent = percentOf(resource.gpu_mem_used_mb, resource.gpu_mem_total_mb);
+  const gpuUtilResolved = resolveAggregateGpuUtilization(instance, load, hardwareDetails(instance));
+  const aggregateGpuUtil = gpuUtilResolved.value;
   const networkMax = Math.max(finiteNumber(resource.network_rx_mbps) || 0, finiteNumber(resource.network_tx_mbps) || 0, 1);
   const loadMetrics = explicitLoadMetrics(load);
   const queues = queueMetricsForInstance(instance);
@@ -742,11 +1521,12 @@ function renderInstanceDetail(instances) {
   panel.classList.remove('hidden');
   panel.innerHTML = `<div class="panel-heading detail-header"><div><h2>Instance Detail: ${escapeHtml(instance.instance_id)}</h2><p>${escapeHtml(instance.host || '—')}:${escapeHtml(instance.port || '—')} · ${instanceStateBadge(instance)}</p>${staleNote}</div><button id="backToOverviewBtn">← Back to overview</button></div>
     <div class="kpi-grid">
-      ${[['Status', stateLabel(instance)], ['Instance ID', instance.instance_id], ['Host:port', `${instance.host || '—'}:${instance.port || '—'}`], ['Admission', resource.admission_state || '—'], ['Registered', formatTimestamp(instance.registered_at)], ['Last seen age', formatAge(instance.last_seen_at)], ['Resource age', formatAge(resource.resource_reported_at)], ['Inflight', displayNumber(load.inflight, 0)], ['QPS 1m', displayNumber(load.qps_1m, 2)], ['GPU util', displayNumber(load.gpu_util, 1)], ['Least-load score', displayNumber(nestedNumber(load, 'least_load_score.total'), 2)]].map(([k,v]) => `<article class="kpi-card"><span>${escapeHtml(k)}</span><strong>${escapeHtml(v)}</strong></article>`).join('')}
+      ${[['Status', stateLabel(instance)], ['Instance ID', instance.instance_id], ['Host:port', `${instance.host || '—'}:${instance.port || '—'}`], ['Admission', resource.admission_state || '—'], ['Registered', formatTimestamp(instance.registered_at)], ['Last seen age', formatAge(instance.last_seen_at)], ['Resource age', formatAge(resource.resource_reported_at)], ['Inflight', displayNumber(load.inflight, 0)], ['QPS 1m', displayNumber(load.qps_1m, 2)], ['GPU util', displayNumber(aggregateGpuUtil, 1)], ['Least-load score', displayNumber(nestedNumber(load, 'least_load_score.total'), 2)]].map(([k,v]) => `<article class="kpi-card"><span>${escapeHtml(k)}</span><strong>${escapeHtml(v)}</strong></article>`).join('')}
     </div>
     <div class="detail-grid visual-detail">
-      <section><h3>Resource utilization</h3>${renderMetricBar({ label:'CPU utilization', value:resource.cpu_util, max:100, unit:'%', secondaryText:'reported resource.cpu_util' })}${renderMetricBar({ label:'System memory', value:resource.memory_used_mb, max:resource.memory_total_mb, unit:' MB', secondaryText:`${displayNumber(resource.memory_used_mb,0)} / ${displayNumber(resource.memory_total_mb,0)} MB (${memPercent === null ? '—' : memPercent.toFixed(1)+'%'})` })}${renderMetricBar({ label:'GPU utilization', value:resource.gpu_util_avg, max:100, unit:'%', secondaryText:'reported resource.gpu_util_avg' })}${renderMetricBar({ label:'GPU memory', value:resource.gpu_mem_used_mb, max:resource.gpu_mem_total_mb, unit:' MB', secondaryText:`${displayNumber(resource.gpu_mem_used_mb,0)} / ${displayNumber(resource.gpu_mem_total_mb,0)} MB (${gpuMemPercent === null ? '—' : gpuMemPercent.toFixed(1)+'%'})` })}${renderMetricBar({ label:'Network RX', value:resource.network_rx_mbps, max:networkMax, unit:' Mbps', secondaryText:'relative to current RX/TX max' })}${renderMetricBar({ label:'Network TX', value:resource.network_tx_mbps, max:networkMax, unit:' Mbps', secondaryText:'relative to current RX/TX max' })}</section>
-      <section><h3>Resource composition</h3><div class="donut-grid">${renderDonutChart({ label:'System memory', used:resource.memory_used_mb, total:resource.memory_total_mb, unit:' MB' })}${renderDonutChart({ label:'GPU memory', used:resource.gpu_mem_used_mb, total:resource.gpu_mem_total_mb, unit:' MB' })}</div></section>
+      <section><h3>Resource utilization</h3>${renderMetricBar({ label:'CPU utilization', value:resource.cpu_util, max:100, unit:'%', secondaryText:'reported resource.cpu_util' })}${renderMetricBar({ label:'System memory', value:resource.memory_used_mb, max:resource.memory_total_mb, unit:' MB', secondaryText:`${displayNumber(resource.memory_used_mb,0)} / ${displayNumber(resource.memory_total_mb,0)} MB (${memPercent === null ? '—' : memPercent.toFixed(1)+'%'})` })}${renderMetricBar({ label:'GPU utilization', value:aggregateGpuUtil, max:100, unit:'%', secondaryText:'aggregateGpuUtilization priority: resource, load, per-GPU average' })}${renderMetricBar({ label:'GPU memory', value:resource.gpu_mem_used_mb, max:resource.gpu_mem_total_mb, unit:' MB', secondaryText:`${displayNumber(resource.gpu_mem_used_mb,0)} / ${displayNumber(resource.gpu_mem_total_mb,0)} MB (${gpuMemPercent === null ? '—' : gpuMemPercent.toFixed(1)+'%'})` })}${renderMetricBar({ label:'Network RX', value:resource.network_rx_mbps, max:networkMax, unit:' Mbps', secondaryText:'relative to current RX/TX max' })}${renderMetricBar({ label:'Network TX', value:resource.network_tx_mbps, max:networkMax, unit:' Mbps', secondaryText:'relative to current RX/TX max' })}</section>
+      <section><h3>Resource composition</h3><div class="donut-grid">${renderDonutChart({ label:'System memory', used:resource.memory_used_mb, total:resource.memory_total_mb, unit:' MB' })}${renderDonutChart({ label:'Aggregate GPU memory', used:resource.gpu_mem_used_mb, total:resource.gpu_mem_total_mb, unit:' MB' })}</div></section>
+      ${renderGpuUtilizationDonuts(instance, gpuUtilResolved)}
       <section><h3>Load metrics</h3>${loadMetrics.length ? loadMetrics.map((metric) => `<article class="kpi-card inline-kpi"><span>${escapeHtml(metric.label)}</span><strong>${escapeHtml(displayNumber(metric.value, 2))}</strong><small>${escapeHtml(metric.key)}</small></article>`).join('') : '<div class="empty-state compact">No load metrics are exposed by the current Instance load snapshot.</div>'}</section>
       <section><h3>Detailed queue counters</h3>${queues.length ? queues.map((q) => renderMetricBar({ label:q.label, value:q.value, max:maxQueue, unit:'', secondaryText:q.key })).join('') : '<div class="empty-state compact">No detailed queue counters are exposed by the current Instance load snapshot.</div>'}</section>
       <section><h3>Hardware</h3><div class="hardware-grid"><article><h4>CPU</h4><p>${escapeHtml(firstString(hw.cpu.model, hw.cpu.model_name, hw.cpu.name, instance.meta?.cpu_model) || 'No CPU details')}</p>${hw.cpu.cores || hw.cpu.logical_cpus ? `<small>${escapeHtml(`cores ${hw.cpu.cores || '—'} · logical ${hw.cpu.logical_cpus || '—'}`)}</small>` : ''}</article><article><h4>GPU</h4>${hw.gpus.length ? hw.gpus.map((gpu, i) => `<p>${escapeHtml(`#${gpu.index ?? i} ${gpuName(gpu) || 'GPU'}`)}${gpu.uuid ? ` · ${escapeHtml(gpu.uuid)}` : ''} · mem ${escapeHtml(displayNumber(gpu.memory_used_mb,0))}/${escapeHtml(displayNumber(gpu.memory_total_mb,0))} MB${gpu.memory_free_mb !== undefined ? ` · free ${escapeHtml(displayNumber(gpu.memory_free_mb,0))} MB` : ''} · util ${escapeHtml(displayNumber(gpuUtil(gpu),1))}%${gpu.temperature_c !== undefined ? ` · ${escapeHtml(displayNumber(gpu.temperature_c,1))}°C` : ''}${gpu.power_w !== undefined ? ` · ${escapeHtml(displayNumber(gpu.power_w,1))} W` : ''}</p>`).join('') : '<p>No GPU details</p>'}</article><article><h4>NIC</h4>${hw.nics.length ? hw.nics.map((nic) => `<p>${escapeHtml(nicName(nic) || 'NIC')}${nic.driver ? ` · ${escapeHtml(nic.driver)}` : ''}${nic.speed_mbps ? ` · ${escapeHtml(displayNumber(nic.speed_mbps,0))} Mbps` : (nic.speed ? ` · ${escapeHtml(nic.speed)}` : '')}${nic.rx_mbps !== undefined ? ` · RX ${escapeHtml(displayNumber(nic.rx_mbps,2))} Mbps` : ''}${nic.tx_mbps !== undefined ? ` · TX ${escapeHtml(displayNumber(nic.tx_mbps,2))} Mbps` : ''}</p>`).join('') : '<p>No NIC details</p>'}</article></div></section>
@@ -859,7 +1639,7 @@ function renderCharts() {
 
 function renderApiSummary() {
   const config = state.config || {};
-  $('apiSummary').textContent = `Proxy CP ${config.proxy_cp_url || 'unknown'} · Scheduler CP ${config.scheduler_cp_url || 'unknown'} · poll ${state.intervalMs / 1000}s`;
+  $('apiSummary').textContent = `Proxy CP ${config.proxy_cp_url || 'unknown'} · Scheduler CP ${config.scheduler_cp_url || 'unknown'} · poll ${state.intervalMs / 1000}s · build ${PROXY_UI_BUILD}`;
   if (config.proxy_cp_url) {
     $('proxyApiLink').href = `${config.proxy_cp_url}/debug/status`;
   }
@@ -992,6 +1772,7 @@ function setupEventHandlers() {
     tab.addEventListener('click', () => activateTab(tab.dataset.tab));
   });
   document.addEventListener('click', (event) => {
+    if (shouldSuppressTopologyClick(event.target)) { event.preventDefault(); return; }
     const card = event.target.closest('.instance-card[data-instance-id], .topology-svg-node[data-instance-id]');
     if (card) {
       window.location.hash = `#/instances/${encodeURIComponent(card.dataset.instanceId)}`;
@@ -1061,7 +1842,7 @@ async function copyText(text) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { buildTopologyModel, computeTopologyLayout, renderMetricBar, renderDonutChart, extractQueueMetrics, queueMetricsForInstance, computeMetrics, hasResourceReport, finiteNumber, clampPercent, percentOf, fmt, stateLabel, hardwareDetails, mergedInstanceLoad, applyPausedTopologyState, renderInstanceDetail, renderSystemTopology, state };
+  module.exports = { PROXY_UI_BUILD, buildTopologyModel, topologySignature, stableHash, seededUnitValue, preferredTopologyAngle, triangleArea, applyAngularForce, createInitialTopologyPositions, pruneTopologyState, cleanPositionsForModel, resolveCollisions, relaxTopologyLayout, clampTopologyPosition, normalizeVector, edgePoint, deterministicLinkCurvature, computeLinkPath, computeHoverRelationships, shouldAnimateTopologyParticles, shouldSuppressTopologyClick, setSuppressedTopologyClick, clearSuppressedTopologyClick, handleTopologyPointerOut, cleanupTopologyDrag, cleanupTopologyPan, cleanupTopologyPointerState, buildTooltipModel, fitTopologyToView, clampZoom, dragExceededThreshold, computeTopologyLayout, renderMetricBar, renderDonutChart, renderUtilizationDonutChart, renderGpuUtilizationDonuts, resolveAggregateGpuUtilization, resolveGpuUtilizationForDevice, aggregateGpuUtilization, extractQueueMetrics, queueMetricsForInstance, computeMetrics, hasResourceReport, finiteNumber, clampPercent, percentOf, fmt, stateLabel, hardwareDetails, mergedInstanceLoad, applyPausedTopologyState, renderInstanceDetail, renderSystemTopology, state };
 } else {
   setTheme(state.theme);
   setupEventHandlers();

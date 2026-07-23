@@ -26,6 +26,13 @@ class InstanceResource:
     memory_free_mb: Optional[float] = None
     memory_free_ratio: Optional[float] = None
     gpu_util_avg: Optional[float] = None
+    gpu_util_current: Optional[float] = None
+    gpu_util_max: Optional[float] = None
+    gpu_sample_count: Optional[int] = None
+    gpu_sample_age_ms: Optional[int] = None
+    gpu_sample_source: Optional[str] = None
+    gpu_sample_quality: Optional[str] = None
+    gpu_sample_window_ms: Optional[int] = None
     gpu_mem_used_mb: Optional[float] = None
     gpu_mem_total_mb: Optional[float] = None
     network_rx_mbps: Optional[float] = None
@@ -409,9 +416,17 @@ def _quality(populated: int, expected: int) -> str:
 
 def _as_float(value: Any) -> Optional[float]:
     try:
-        if value is None:
+        if value is None or isinstance(value, bool) or isinstance(value, (list, dict)):
             return None
-        return float(value)
+        if isinstance(value, str):
+            text = value.strip()
+            if not text or text.lower() in {"n/a", "[n/a]", "not supported", "[not supported]"}:
+                return None
+            value = text
+        number = float(value)
+        if number != number or number in (float("inf"), float("-inf")):
+            return None
+        return number
     except (TypeError, ValueError):
         return None
 
@@ -425,6 +440,30 @@ def _as_int(value: Any) -> Optional[int]:
         return None
 
 
+
+def _first_float(payload: Dict[str, Any], keys: List[str]) -> Optional[float]:
+    for key in keys:
+        value = _as_float(payload.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _gpu_sample_valid(gpu: Dict[str, Any]) -> bool:
+    ok = gpu.get("utilization_sample_ok")
+    quality = str(gpu.get("utilization_sample_quality") or gpu.get("gpu_sample_quality") or "").lower()
+    if ok is False or quality in {"invalid", "failed", "error", "command_error", "parse_error", "unsupported"}:
+        return False
+    return True
+
+
+def _gpu_sample_source(gpu: Dict[str, Any]) -> Optional[str]:
+    for key in ("utilization_source", "gpu_sample_source", "source"):
+        value = gpu.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
 def _resource_from_snapshot(snapshot: Dict[str, Any], reported_at: int, metadata: Dict[str, Any]) -> InstanceResource:
     devices = snapshot.get("devices") if isinstance(snapshot, dict) else {}
     devices = devices if isinstance(devices, dict) else {}
@@ -434,14 +473,44 @@ def _resource_from_snapshot(snapshot: Dict[str, Any], reported_at: int, metadata
 
     gpus = devices.get("gpu") if isinstance(devices.get("gpu"), list) else []
     gpu_utils: List[float] = []
+    gpu_currents: List[float] = []
+    gpu_maxes: List[float] = []
+    gpu_counts: List[int] = []
+    gpu_window_ms: List[int] = []
+    gpu_sources: List[str] = []
+    gpu_qualities: List[str] = []
+    gpu_sample_ts: List[int] = []
     gpu_mem_used = 0.0
     gpu_mem_total = 0.0
+    snapshot_ts = _as_int(snapshot.get("timestamp_ms"))
     for gpu in gpus:
         if not isinstance(gpu, dict):
             continue
-        util = _as_float(gpu.get("utilization_pct"))
-        if util is not None:
-            gpu_utils.append(util)
+        sample_valid = _gpu_sample_valid(gpu)
+        util_avg = _first_float(gpu, ["utilization_pct_avg", "utilization_pct", "utilization_gpu_pct", "gpu_util", "util"])
+        util_current = _first_float(gpu, ["utilization_pct_current", "utilization_current", "gpu_util_current"])
+        util_max = _first_float(gpu, ["utilization_pct_max", "gpu_util_max"])
+        if sample_valid and util_avg is not None:
+            gpu_utils.append(util_avg)
+        if sample_valid and util_current is not None:
+            gpu_currents.append(util_current)
+        if sample_valid and util_max is not None:
+            gpu_maxes.append(util_max)
+        count = _as_int(gpu.get("utilization_sample_count") or gpu.get("gpu_sample_count"))
+        if count is not None:
+            gpu_counts.append(count)
+        window = _as_int(gpu.get("utilization_window_ms") or gpu.get("gpu_sample_window_ms"))
+        if window is not None:
+            gpu_window_ms.append(window)
+        source = _gpu_sample_source(gpu)
+        if source:
+            gpu_sources.append(source)
+        quality = gpu.get("utilization_sample_quality") or ("ok" if gpu.get("utilization_sample_ok") is True else None)
+        if quality is not None:
+            gpu_qualities.append(str(quality))
+        sample_ts = _as_int(gpu.get("utilization_sample_timestamp_ms"))
+        if sample_ts is not None:
+            gpu_sample_ts.append(sample_ts)
         gpu_mem_used += _as_float(gpu.get("memory_used_mb")) or 0.0
         gpu_mem_total += _as_float(gpu.get("memory_total_mb")) or 0.0
 
@@ -455,6 +524,13 @@ def _resource_from_snapshot(snapshot: Dict[str, Any], reported_at: int, metadata
         memory_free_mb=_as_float(memory.get("free_mb")),
         memory_free_ratio=_as_float(capacity.get("memory_free_ratio")),
         gpu_util_avg=(sum(gpu_utils) / len(gpu_utils)) if gpu_utils else None,
+        gpu_util_current=(sum(gpu_currents) / len(gpu_currents)) if gpu_currents else None,
+        gpu_util_max=max(gpu_maxes) if gpu_maxes else None,
+        gpu_sample_count=sum(gpu_counts) if gpu_counts else None,
+        gpu_sample_age_ms=(max(0, int(snapshot_ts) - max(gpu_sample_ts)) if snapshot_ts is not None and gpu_sample_ts else None),
+        gpu_sample_source=(gpu_sources[0] if gpu_sources else None),
+        gpu_sample_quality=("ok" if gpu_utils else (gpu_qualities[0] if gpu_qualities else None)),
+        gpu_sample_window_ms=(max(gpu_window_ms) if gpu_window_ms else None),
         gpu_mem_used_mb=gpu_mem_used if gpus else None,
         gpu_mem_total_mb=gpu_mem_total if gpus else None,
         network_rx_mbps=_as_float(first_net.get("rx_mbps")),

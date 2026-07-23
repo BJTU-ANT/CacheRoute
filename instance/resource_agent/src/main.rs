@@ -19,6 +19,12 @@ struct AgentState {
     snapshot: String,
 }
 
+#[derive(Clone)]
+struct GpuUtilSample { value: f64, ts_ms: u128 }
+
+#[derive(Clone, Default)]
+struct GpuUtilHistory { samples: Vec<GpuUtilSample> }
+
 fn now_ms() -> u128 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis()
 }
@@ -91,26 +97,88 @@ fn read_network(prev: &mut Option<NetSample>) -> (String, f64, f64, Option<u64>)
     (best_iface, rx_mbps, tx_mbps, speed)
 }
 
-fn gpu_json() -> String {
+
+fn json_option_f64(value: Option<f64>) -> String {
+    match value {
+        Some(v) if v.is_finite() => format!("{:.3}", v),
+        _ => "null".to_string(),
+    }
+}
+
+fn json_option_u128(value: Option<u128>) -> String {
+    match value {
+        Some(v) => v.to_string(),
+        None => "null".to_string(),
+    }
+}
+
+fn parse_optional_gpu_value(raw: &str) -> (Option<f64>, bool, String, String) {
+    let text = raw.trim();
+    if text.is_empty() || text.eq_ignore_ascii_case("N/A") || text.eq_ignore_ascii_case("[N/A]") || text.eq_ignore_ascii_case("[Not Supported]") || text.eq_ignore_ascii_case("Not Supported") {
+        return (None, false, "nvidia-smi".to_string(), text.to_string());
+    }
+    match text.parse::<f64>() {
+        Ok(v) if v.is_finite() => (Some(v), true, "nvidia-smi".to_string(), text.to_string()),
+        _ => (None, false, "nvidia-smi".to_string(), text.to_string()),
+    }
+}
+
+fn rolling_stats(history: &mut GpuUtilHistory, value: Option<f64>, ts_ms: u128, window_ms: u128, max_samples: usize) -> (Option<f64>, Option<f64>, usize) {
+    if let Some(v) = value {
+        history.samples.push(GpuUtilSample { value: v, ts_ms });
+    }
+    history.samples.retain(|sample| ts_ms.saturating_sub(sample.ts_ms) <= window_ms);
+    if history.samples.len() > max_samples {
+        let drop_count = history.samples.len() - max_samples;
+        history.samples.drain(0..drop_count);
+    }
+    if history.samples.is_empty() {
+        return (None, None, 0);
+    }
+    let sum: f64 = history.samples.iter().map(|sample| sample.value).sum();
+    let max = history.samples.iter().map(|sample| sample.value).fold(f64::NEG_INFINITY, f64::max);
+    (Some(sum / history.samples.len() as f64), Some(max), history.samples.len())
+}
+
+
+fn gpu_error_json(error: &str, ts_ms: u128, window_ms: u128) -> String {
+    format!(r#"[{{"index":null,"uuid":"unknown","name":"unknown GPU","utilization_pct":null,"utilization_pct_current":null,"utilization_pct_avg":null,"utilization_pct_max":null,"utilization_sample_count":0,"utilization_window_ms":{},"utilization_sample_ok":false,"utilization_source":"nvidia-smi","utilization_sample_timestamp_ms":{},"utilization_raw_value":null,"utilization_error":"{}","utilization_sample_quality":"command_error","memory_used_mb":null,"memory_total_mb":null,"memory_free_mb":null,"temperature_c":null,"power_w":null,"health":"error"}}]"#, window_ms, ts_ms, json_escape(error))
+}
+
+fn gpu_json(gpu_history: &mut std::collections::HashMap<String, GpuUtilHistory>, window_ms: u128, max_samples: usize) -> String {
+    let ts_ms = now_ms();
     let out = Command::new("nvidia-smi")
         .args(["--query-gpu=index,uuid,name,utilization.gpu,memory.used,memory.total,memory.free,temperature.gpu,power.draw", "--format=csv,noheader,nounits"])
         .output();
-    let Ok(out) = out else { return "[]".to_string(); };
-    if !out.status.success() { return "[]".to_string(); }
+    let out = match out {
+        Ok(output) => output,
+        Err(error) => {
+            return gpu_error_json(&error.to_string(), ts_ms, window_ms);
+        }
+    };
+    if !out.status.success() {
+        return gpu_error_json(&String::from_utf8_lossy(&out.stderr), ts_ms, window_ms);
+    }
     let text = String::from_utf8_lossy(&out.stdout);
     let mut rows = Vec::new();
     for line in text.lines() {
         let cols: Vec<&str> = line.split(',').map(|x| x.trim()).collect();
         if cols.len() < 9 { continue; }
+        let uuid = cols[1].to_string();
+        let (current, ok, source, raw_value) = parse_optional_gpu_value(cols[3]);
+        let history = gpu_history.entry(uuid.clone()).or_default();
+        let (avg, max, sample_count) = rolling_stats(history, current, ts_ms, window_ms, max_samples);
+        let quality = if ok { "ok" } else { "invalid" };
+        let error = if ok { "null".to_string() } else { format!("\"invalid utilization.gpu: {}\"", json_escape(&raw_value)) };
         rows.push(format!(
-            "{{\"index\":{},\"uuid\":\"{}\",\"name\":\"{}\",\"utilization_pct\":{},\"memory_used_mb\":{},\"memory_total_mb\":{},\"memory_free_mb\":{},\"temperature_c\":{},\"power_w\":{},\"health\":\"ok\"}}",
-            cols[0].parse::<u32>().unwrap_or(0), json_escape(cols[1]), json_escape(cols[2]), cols[3], cols[4], cols[5], cols[6], cols[7], cols[8].replace("[Not Supported]", "0")
+            "{{\"index\":{},\"uuid\":\"{}\",\"name\":\"{}\",\"utilization_pct\":{},\"utilization_pct_current\":{},\"utilization_pct_avg\":{},\"utilization_pct_max\":{},\"utilization_sample_count\":{},\"utilization_window_ms\":{},\"utilization_sample_ok\":{},\"utilization_source\":\"{}\",\"utilization_sample_timestamp_ms\":{},\"utilization_raw_value\":\"{}\",\"utilization_error\":{},\"utilization_sample_quality\":\"{}\",\"memory_used_mb\":{},\"memory_total_mb\":{},\"memory_free_mb\":{},\"temperature_c\":{},\"power_w\":{},\"health\":\"ok\"}}",
+            cols[0].parse::<u32>().unwrap_or(0), json_escape(cols[1]), json_escape(cols[2]), json_option_f64(avg), json_option_f64(current), json_option_f64(avg), json_option_f64(max), sample_count, window_ms, ok, json_escape(&source), json_option_u128(Some(ts_ms)), json_escape(&raw_value), error, quality, json_option_f64(parse_optional_gpu_value(cols[4]).0), json_option_f64(parse_optional_gpu_value(cols[5]).0), json_option_f64(parse_optional_gpu_value(cols[6]).0), json_option_f64(parse_optional_gpu_value(cols[7]).0), json_option_f64(parse_optional_gpu_value(cols[8]).0)
         ));
     }
     format!("[{}]", rows.join(","))
 }
 
-fn build_snapshot(instance_id: &str, prev_cpu: &mut Option<(u64, u64)>, prev_net: &mut Option<NetSample>) -> String {
+fn build_snapshot(instance_id: &str, prev_cpu: &mut Option<(u64, u64)>, prev_net: &mut Option<NetSample>, gpu_history: &mut std::collections::HashMap<String, GpuUtilHistory>, gpu_window_ms: u128, gpu_max_samples: usize) -> String {
     let ts = now_ms();
     let (used_mb, total_mb, free_mb) = read_meminfo();
     let (load1, load5, load15) = read_loadavg();
@@ -123,7 +191,7 @@ fn build_snapshot(instance_id: &str, prev_cpu: &mut Option<(u64, u64)>, prev_net
     }
     if let Some(v) = cpu_now { *prev_cpu = Some(v); }
     let (iface, rx_mbps, tx_mbps, speed) = read_network(prev_net);
-    let gpu = gpu_json();
+    let gpu = gpu_json(gpu_history, gpu_window_ms, gpu_max_samples);
     let mem_free_ratio = if total_mb > 0 { free_mb as f64 / total_mb as f64 } else { 0.0 };
     let admission = if mem_free_ratio < 0.05 { "rejecting" } else if cpu_util > 95.0 { "degraded" } else { "accepting" };
     format!(
@@ -155,6 +223,8 @@ fn handle_client(mut stream: TcpStream, state: Arc<Mutex<AgentState>>) {
 fn main() {
     let mut listen = String::from("127.0.0.1:9101");
     let mut interval_ms = 1000_u64;
+    let mut gpu_window_ms = 5000_u128;
+    let mut gpu_max_samples = 20_usize;
     let mut instance_id = env::var("INSTANCE_ID").unwrap_or_else(|_| "unknown".to_string());
     let args: Vec<String> = env::args().collect();
     let mut i = 1;
@@ -163,6 +233,8 @@ fn main() {
             "--listen" if i + 1 < args.len() => { listen = args[i + 1].clone(); i += 1; }
             "--sample-interval-ms" if i + 1 < args.len() => { interval_ms = args[i + 1].parse().unwrap_or(1000); i += 1; }
             "--instance-id" if i + 1 < args.len() => { instance_id = args[i + 1].clone(); i += 1; }
+            "--gpu-util-window-ms" if i + 1 < args.len() => { gpu_window_ms = args[i + 1].parse().unwrap_or(5000); i += 1; }
+            "--gpu-util-max-samples" if i + 1 < args.len() => { gpu_max_samples = args[i + 1].parse().unwrap_or(20); i += 1; }
             _ => {}
         }
         i += 1;
@@ -173,8 +245,9 @@ fn main() {
     thread::spawn(move || {
         let mut prev_cpu = None;
         let mut prev_net = None;
+        let mut gpu_history: std::collections::HashMap<String, GpuUtilHistory> = std::collections::HashMap::new();
         loop {
-            let snapshot = build_snapshot(&instance_id, &mut prev_cpu, &mut prev_net);
+            let snapshot = build_snapshot(&instance_id, &mut prev_cpu, &mut prev_net, &mut gpu_history, gpu_window_ms, gpu_max_samples);
             sampler_state.lock().unwrap().snapshot = snapshot;
             thread::sleep(Duration::from_millis(interval_ms));
         }
@@ -186,5 +259,42 @@ fn main() {
     for stream in listener.incoming().flatten() {
         let st = state.clone();
         thread::spawn(move || handle_client(stream, st));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strict_gpu_util_parsing() {
+        assert_eq!(parse_optional_gpu_value("42").0, Some(42.0));
+        assert_eq!(parse_optional_gpu_value("0").0, Some(0.0));
+        assert_eq!(parse_optional_gpu_value("N/A").0, None);
+        assert_eq!(parse_optional_gpu_value("[Not Supported]").0, None);
+        assert_eq!(parse_optional_gpu_value("bad").0, None);
+        let error = gpu_error_json("missing binary", 100, 5000);
+        assert!(error.contains("utilization_error"));
+        assert!(error.contains("command_error"));
+    }
+
+    #[test]
+    fn rolling_window_stats_are_bounded() {
+        let mut history = GpuUtilHistory::default();
+        let (avg, max, count) = rolling_stats(&mut history, Some(10.0), 1000, 1000, 3);
+        assert_eq!(avg, Some(10.0));
+        assert_eq!(max, Some(10.0));
+        assert_eq!(count, 1);
+        rolling_stats(&mut history, Some(30.0), 1200, 1000, 3);
+        let (avg, max, count) = rolling_stats(&mut history, Some(50.0), 1400, 1000, 3);
+        assert_eq!(avg, Some(30.0));
+        assert_eq!(max, Some(50.0));
+        assert_eq!(count, 3);
+        let (_, _, count) = rolling_stats(&mut history, Some(70.0), 1600, 1000, 3);
+        assert_eq!(count, 3);
+        let (avg, max, count) = rolling_stats(&mut history, None, 3000, 1000, 3);
+        assert_eq!(avg, None);
+        assert_eq!(max, None);
+        assert_eq!(count, 0);
     }
 }

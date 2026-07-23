@@ -832,3 +832,224 @@ summary {
     grid-template-columns: 1fr;
   }
 }
+
+.topology-diagram {
+  position: relative;
+}
+
+.topology-toolbar.topology-controls {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 2;
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  background: color-mix(in srgb, var(--surface) 82%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(10px);
+}
+
+.topology-controls button {
+  min-width: 34px;
+  min-height: 30px;
+  padding: 4px 8px;
+  border-radius: 9px;
+  font-weight: 900;
+}
+
+.topology-scroll {
+  position: relative;
+  overflow: hidden;
+}
+
+.topology-svg {
+  min-width: 0;
+  height: 560px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.topology-diagram.is-panning .topology-svg {
+  cursor: grabbing;
+}
+
+.topology-bg {
+  fill: transparent;
+}
+
+.topology-svg-node {
+  transition: opacity 180ms ease, color 180ms ease;
+}
+
+.topology-node-visual {
+  transform-box: fill-box;
+  transform-origin: center;
+  transition: opacity 180ms ease, filter 180ms ease, transform 180ms ease, color 180ms ease;
+}
+
+.topology-svg-node .node-halo,
+.topology-link,
+.topology-particle,
+.node-label,
+.node-status,
+.topology-svg-node use {
+  transition: opacity 180ms ease, stroke-width 180ms ease, filter 180ms ease, fill 180ms ease, stroke 180ms ease, color 180ms ease;
+}
+
+.topology-svg-node.is-hovered .topology-node-visual {
+  transform: translateY(-6px) scale(1.1);
+  filter: drop-shadow(0 0 18px color-mix(in srgb, var(--accent) 75%, transparent));
+}
+
+.topology-svg-node.is-hovered .node-halo {
+  stroke-width: 5;
+  filter: drop-shadow(0 0 14px currentColor);
+}
+
+.topology-svg-node.is-neighbor .node-halo {
+  stroke-width: 3.5;
+  filter: drop-shadow(0 0 10px currentColor);
+}
+
+.topology-svg-node.is-hovered use,
+.topology-svg-node.is-neighbor use {
+  stroke-width: 3.7;
+}
+
+.topology-svg-node.is-hovered .node-label,
+.topology-svg-node.is-neighbor .node-label {
+  fill: var(--text);
+  font-size: 14px;
+}
+
+.topology-svg-node.is-hovered .node-status,
+.topology-svg-node.is-neighbor .node-status {
+  fill: currentColor;
+}
+
+.topology-svg-node.is-dimmed,
+.topology-link.is-dimmed,
+.topology-particle.is-dimmed {
+  opacity: 0.22;
+}
+
+.topology-link.is-related {
+  stroke-width: 5;
+  opacity: 1;
+  stroke-dasharray: 13 6;
+  filter: drop-shadow(0 0 8px color-mix(in srgb, var(--accent) 72%, transparent));
+}
+
+.topology-particle {
+  fill: var(--accent);
+  opacity: 0;
+  filter: url(#particleGlow);
+}
+
+.topology-particle.active {
+  opacity: 0.74;
+}
+
+.topology-particle.stale,
+.topology-particle.inactive,
+.topology-particle.unknown {
+  opacity: 0;
+}
+
+.topology-particle.is-related.active {
+  fill: var(--ok);
+  opacity: 1;
+}
+
+.topology-diagram.paused .topology-particle,
+.topology-diagram.paused .topology-particle animateMotion {
+  animation-play-state: paused;
+}
+
+.topology-svg-node.is-dragging {
+  cursor: grabbing;
+  opacity: 1;
+  filter: drop-shadow(0 0 18px color-mix(in srgb, var(--warn) 80%, transparent));
+}
+
+.topology-no-select {
+  user-select: none;
+}
+
+.topology-tooltip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 3;
+  width: min(330px, calc(100% - 20px));
+  padding: 12px;
+  color: var(--text);
+  pointer-events: none;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line));
+  border-radius: 14px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(14px);
+  opacity: 1;
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+
+.topology-tooltip.hidden {
+  opacity: 0;
+}
+
+.topology-tooltip-title {
+  margin-bottom: 8px;
+  color: var(--accent);
+  font-weight: 900;
+}
+
+.topology-tooltip dl,
+.topology-tooltip div {
+  margin: 0;
+}
+
+.topology-tooltip dl div {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(80px, 1fr);
+  gap: 10px;
+  padding: 3px 0;
+  border-top: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+}
+
+.topology-tooltip dt {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.topology-tooltip dd {
+  margin: 0;
+  text-align: right;
+  word-break: break-word;
+}
+
+.topology-svg-node:focus-visible .node-halo {
+  stroke-width: 5;
+  filter: drop-shadow(0 0 14px var(--accent));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .topology-svg-node,
+  .topology-node-visual,
+  .topology-svg-node .node-halo,
+  .topology-link,
+  .topology-particle,
+  .topology-tooltip,
+  .node-label,
+  .node-status,
+  .topology-svg-node use {
+    transition: none !important;
+    animation: none !important;
+  }
+  .topology-particle {
+    display: none;
+  }
+}
