@@ -99,12 +99,58 @@ class QueueManager:
 
 
     def queue_depth_snapshot(self) -> Dict[str, Any]:
-        """Return coarse queue depths without exposing task payloads.
+        """Return queue pressure without exposing task payloads.
 
-        Scheduler-facing pool_resource uses only the global totals. The per-instance
-        section stays Proxy-local for debugging.
+        Scheduler-facing pool_resource uses only the global instantaneous totals.
+        The per-instance section stays Proxy-local for debugging and Instance
+        selection. It combines instantaneous queue depths with predicted pressure
+        derived from reservation timelines.
+        """
+        return self.queue_pressure_snapshot()
+
+    def queue_pressure_snapshot(self) -> Dict[str, Any]:
+        """Return per-instance instantaneous and predicted queue pressure.
+
+        The snapshot intentionally exposes only aggregate numeric fields. It never
+        includes task payloads, request bodies, prompts, or knowledge content.
         """
         per_instance = self._qmap.snapshot_depths()
+        now_s = time.time()
+
+        instance_ids = set(per_instance.keys())
+        instance_ids.update(self._instance_pending_tasks.keys())
+        instance_ids.update(self._instance_decode_tasks.keys())
+        instance_ids.update(self._instance_slot_free_ts_s.keys())
+        instance_ids.update(self._instance_prefill_free_ts_s.keys())
+
+        for instance_id in instance_ids:
+            item = per_instance.setdefault(
+                instance_id,
+                {
+                    "prepare_queue_depth": 0,
+                    "ready_queue_depth": 0,
+                    "active_prepare": 0,
+                    "active_ready": 0,
+                },
+            )
+            slot_free_ts = self._instance_slot_free_ts_s.get(instance_id) or []
+            next_slot_ready_in_ms = 0.0
+            if slot_free_ts:
+                next_slot_ready_in_ms = max(0.0, min(slot_free_ts) - now_s) * 1000.0
+            prefill_free_in_ms = max(
+                0.0,
+                float(self._instance_prefill_free_ts_s.get(instance_id, now_s)) - now_s,
+            ) * 1000.0
+            item.update(
+                {
+                    "pending_prefill_count": int(len(self._instance_pending_tasks.get(instance_id, []))),
+                    "active_decode_count": int(len(self._instance_decode_tasks.get(instance_id, []))),
+                    "next_slot_ready_in_ms": float(next_slot_ready_in_ms),
+                    "prefill_free_in_ms": float(prefill_free_in_ms),
+                    "predicted_total_backlog_ms": float(max(next_slot_ready_in_ms, prefill_free_in_ms)),
+                }
+            )
+
         prepare_total = sum(item["prepare_queue_depth"] for item in per_instance.values())
         ready_total = sum(item["ready_queue_depth"] for item in per_instance.values())
         return {
@@ -701,15 +747,39 @@ class QueueManager:
             ]
         await self._recompute_pending_from_now(instance_id, now_s=now_s)
 
+    def _remove_task_from_prediction_state(self, task: ProxyTask, instance_id: str) -> bool:
+        """Remove a completed/failed task from prediction state.
+
+        The caller must hold the per-instance reservation lock. The helper is
+        idempotent so final cleanup is safe after streaming first-token handling
+        already moved the task from pending prefill into active decode.
+        """
+        pending_before = len(self._instance_pending_tasks.get(instance_id, []))
+        decode_before = len(self._instance_decode_tasks.get(instance_id, []))
+        self._instance_pending_tasks[instance_id] = [
+            t for t in self._instance_pending_tasks.get(instance_id, [])
+            if t is not task
+        ]
+        self._instance_decode_tasks[instance_id] = [
+            t for t in self._instance_decode_tasks.get(instance_id, [])
+            if t is not task
+        ]
+        return len(self._instance_pending_tasks[instance_id]) != pending_before or len(
+            self._instance_decode_tasks[instance_id]
+        ) != decode_before
+
     async def _mark_task_decode_end(self, task: ProxyTask, instance_id: str) -> None:
+        removed_from_pending = False
         lock = self._get_reservation_lock(instance_id)
         async with lock:
             self._ensure_instance_reservation_state(instance_id)
             task.trace["decode_end_ms"] = int(task.trace.get("forward_end_ms", _now_ms()))
-            self._instance_decode_tasks[instance_id] = [
-                t for t in self._instance_decode_tasks[instance_id]
-                if t is not task
-            ]
+            pending_before = len(self._instance_pending_tasks.get(instance_id, []))
+            self._remove_task_from_prediction_state(task, instance_id)
+            removed_from_pending = len(self._instance_pending_tasks.get(instance_id, [])) != pending_before
+
+        if removed_from_pending:
+            await self._recompute_pending_from_now(instance_id)
 
     async def _wait_dispatch_turn(self, task: ProxyTask, instance_id: str) -> None:
         """

@@ -164,13 +164,19 @@ GET  /debug/instance_resources
 GET  /debug/instance_loads
 ```
 
-Use `/debug/instance_loads` to inspect Proxy-maintained per-Instance `inflight` counters, `qps_1m` when present, queue-depth hints when the queue snapshot provider is available, and the queue-aware `least_load` score used for Instance selection.
+Use `/debug/instance_loads` to inspect Proxy-maintained per-Instance `inflight` counters, `qps_1m` when present, queue-pressure hints when the queue snapshot provider is available, and the queue-aware `least_load` score used for Instance selection.
 
 ```bash
 curl -sS http://127.0.0.1:8002/debug/instance_loads | python3 -m json.tool
 ```
 
-`least_load` uses a conservative deterministic score. `load.inflight` remains the primary signal with implicit weight `1.0`. When queue hints are available, the strategy also adds per-Instance active prepare work, active ready work, prepare queue depth, and ready queue depth. `qps_1m` from Instance heartbeats is supported but disabled by default with weight `0.0`. Missing metrics remain unavailable; they are not converted to measured zeroes, and the strategy falls back to round-robin if no load signal is known. Ties at the minimum score are also broken by round-robin.
+`least_load` uses a conservative deterministic score with three load-signal layers:
+
+1. Proxy lifecycle pressure: `inflight`.
+2. Instantaneous queue pressure: `active_prepare`, `active_ready`, `prepare_queue_depth`, and `ready_queue_depth`.
+3. Predicted reservation pressure from QueueManager timelines: `pending_prefill_count`, `active_decode_count`, and `predicted_total_backlog_ms`.
+
+`load.inflight` remains the primary signal with implicit weight `1.0`. Queue hints add per-Instance active prepare work, active ready work, prepare queue depth, ready queue depth, pending prefill reservations, active decode reservations, and predicted backlog time. `qps_1m` from Instance heartbeats is supported but disabled by default with weight `0.0`. Missing predicted fields remain unavailable and fall back to the instantaneous queue-aware behavior; missing queue hints fall back to inflight-only scoring. If no load signal is known for any candidate, selection falls back to round-robin. Ties at the minimum score are also broken by round-robin.
 
 Default `least_load` weights are:
 
@@ -181,9 +187,12 @@ Default `least_load` weights are:
 | `active_ready` | `1.0` | Proxy queue manager per-Instance snapshot |
 | `prepare_queue_depth` | `0.25` | Proxy queue manager per-Instance snapshot |
 | `ready_queue_depth` | `0.25` | Proxy queue manager per-Instance snapshot |
+| `pending_prefill_count` | `1.0` | Proxy QueueManager reservation snapshot |
+| `active_decode_count` | `0.5` | Proxy QueueManager reservation snapshot |
+| `predicted_total_backlog_ms` | `0.001` | Proxy QueueManager reservation snapshot |
 | `qps_1m` | `0.0` | Instance heartbeat |
 
-The debug response includes `least_load_score.total`, raw `least_load_score.components`, weighted components, metric sources, queue source availability, and the weights used to compute the score.
+The debug response includes the raw pressure fields (`pending_prefill_count`, `active_decode_count`, `next_slot_ready_in_ms`, `prefill_free_in_ms`, and `predicted_total_backlog_ms`) plus `least_load_score.total`, raw `least_load_score.components`, weighted components, metric sources, queue source availability, and the weights used to compute the score.
 
 The reporting path is:
 

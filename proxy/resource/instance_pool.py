@@ -206,6 +206,11 @@ class InstancePool:
                 "ready_queue_depth": queue_item.get("ready_queue_depth"),
                 "active_prepare": queue_item.get("active_prepare"),
                 "active_ready": queue_item.get("active_ready"),
+                "pending_prefill_count": queue_item.get("pending_prefill_count"),
+                "active_decode_count": queue_item.get("active_decode_count"),
+                "next_slot_ready_in_ms": queue_item.get("next_slot_ready_in_ms"),
+                "prefill_free_in_ms": queue_item.get("prefill_free_in_ms"),
+                "predicted_total_backlog_ms": queue_item.get("predicted_total_backlog_ms"),
                 "least_load_score": least_load_score,
             })
 

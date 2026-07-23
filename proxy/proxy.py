@@ -96,7 +96,7 @@ async def _build_proxy_topology_meta() -> Dict[str, Any]:
 
 def _build_pool_resource_snapshot(app: FastAPI) -> Dict[str, Any]:
     pool: InstancePool = app.state.instance_pool  # type: ignore
-    queue_depths = queue_mgr.queue_depth_snapshot()
+    queue_depths = queue_mgr.queue_pressure_snapshot()
     return pool.build_pool_resource_snapshot(
         proxy_id=PROXY_ID,
         capacity=PROXY_MAX_CAPACITY,
@@ -134,7 +134,7 @@ async def lifespan(app: FastAPI):
     app.state.instance_pool = InstancePool(ttl_s=ttl_s)  # type: ignore
     p_control_plane.set_pool(app.state.instance_pool)  # type: ignore
     p_control_plane.set_pool_resource_context(PROXY_ID, PROXY_MAX_CAPACITY)
-    p_control_plane.set_queue_snapshot_provider(lambda: queue_mgr.queue_depth_snapshot())
+    p_control_plane.set_queue_snapshot_provider(lambda: queue_mgr.queue_pressure_snapshot())
 
     # --- Load the proxy scheduling strategy for the data plane ---
     strategy_name = os.environ.get("PROXY_INSTANCE_STRATEGY", "round_robin")
@@ -453,7 +453,7 @@ def select_instance(app: FastAPI, req_obj: SchedulerRequest):
 
     hint = {"request": req_obj}
     try:
-        hint["queue_depths"] = queue_mgr.queue_depth_snapshot()
+        hint["queue_depths"] = queue_mgr.queue_pressure_snapshot()
     except Exception:
         logger.warning(
             "[Proxy] queue snapshot failed during instance select; least_load will use inflight-only metrics",
