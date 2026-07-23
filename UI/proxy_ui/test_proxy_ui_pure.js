@@ -31,7 +31,7 @@ function testNullSemantics() {
 
 function testComputeMetricsNullAverages() {
   let metrics = ui.computeMetrics([
-    inst('missing', true, { resource: { cpu_util: null, gpu_util_avg: null, network_rx_mbps: null, network_tx_mbps: null, memory_used_mb: null, memory_total_mb: null } }),
+    inst('missing', true, { load: { gpu_util: null }, resource: { cpu_util: null, gpu_util_avg: null, network_rx_mbps: null, network_tx_mbps: null, memory_used_mb: null, memory_total_mb: null } }),
     inst('valid', true, { resource: { cpu_util: 80, gpu_util_avg: 60, network_rx_mbps: 10, network_tx_mbps: 5, memory_used_mb: 50, memory_total_mb: 100 } }),
   ]);
   assert.strictEqual(metrics.cpu, 80);
@@ -41,8 +41,8 @@ function testComputeMetricsNullAverages() {
   assert.strictEqual(metrics.memory, 50);
 
   metrics = ui.computeMetrics([
-    inst('all-null-a', true, { resource: { cpu_util: null, gpu_util_avg: null, network_rx_mbps: null, network_tx_mbps: null, memory_used_mb: null, memory_total_mb: null } }),
-    inst('all-null-b', true, { resource: { cpu_util: '', gpu_util_avg: undefined, network_rx_mbps: false, network_tx_mbps: {}, memory_used_mb: 1, memory_total_mb: 0 } }),
+    inst('all-null-a', true, { load: { gpu_util: null }, resource: { cpu_util: null, gpu_util_avg: null, network_rx_mbps: null, network_tx_mbps: null, memory_used_mb: null, memory_total_mb: null } }),
+    inst('all-null-b', true, { load: { gpu_util: null }, resource: { cpu_util: '', gpu_util_avg: undefined, network_rx_mbps: false, network_tx_mbps: {}, memory_used_mb: 1, memory_total_mb: 0 } }),
   ]);
   assert.strictEqual(metrics.cpu, null);
   assert.strictEqual(metrics.gpu, null);
@@ -517,4 +517,84 @@ function testPruneTopologyStateAndParticleLifecycle() {
 
 testScopedSuppressedClick();
 testPruneTopologyStateAndParticleLifecycle();
+
+function topologyLayoutForCount(count) {
+  const model = ui.buildTopologyModel(Array.from({ length: count }, (_, i) => inst(`small-${i}`, true)), { ok: true }, { ok: true, proxy_id: 'proxy-a' });
+  return { model, layout: ui.computeTopologyLayout(model, { width: 980, height: 560 }) };
+}
+
+function angleOf(pos, proxy) {
+  return Math.atan2(pos.y - proxy.y, pos.x - proxy.x);
+}
+
+function testSmallTopologyAnglesAndNonCollinearity() {
+  assert.strictEqual(ui.preferredTopologyAngle({ type: 'scheduler', id: 'scheduler' }, { nodes: [], instances: [] }), ui.preferredTopologyAngle({ type: 'scheduler', id: 'scheduler' }, { nodes: [], instances: [] }));
+  for (const count of [0, 1, 2, 3]) {
+    const first = topologyLayoutForCount(count);
+    const second = topologyLayoutForCount(count);
+    assert.deepStrictEqual(first.layout.positions, second.layout.positions, `count ${count} deterministic`);
+    assert(first.layout.positions.scheduler.x < first.layout.positions.proxy.x - 50, `count ${count} scheduler x separation`);
+    assert(first.layout.positions.scheduler.y < first.layout.positions.proxy.y, `count ${count} scheduler upper-left`);
+  }
+  const one = topologyLayoutForCount(1);
+  const p = one.layout.positions;
+  const area = ui.triangleArea(p.scheduler, p.proxy, p['instance:small-0']);
+  assert(area > one.layout.width * one.layout.height * 0.012, `one-instance triangle area too small: ${area}`);
+  assert(Math.abs(p.scheduler.x - p.proxy.x) > 50);
+  assert(Math.abs(p['instance:small-0'].x - p.proxy.x) > 60);
+  const schedulerAngle = ui.preferredTopologyAngle({ type: 'scheduler', id: 'scheduler' }, one.model);
+  const instanceAngle = ui.preferredTopologyAngle(one.model.nodes.find((node) => node.id === 'instance:small-0'), one.model);
+  assert(ui.triangleArea(p.scheduler, p.proxy, p['instance:small-0']) > 5000, 'one-instance topology is not collinear');
+  assert(Math.abs(Math.abs(schedulerAngle - instanceAngle) - Math.PI) > 0.35, 'instance avoids opposite scheduler ray');
+  const two = topologyLayoutForCount(2);
+  const twoAngles = ['instance:small-0', 'instance:small-1'].map((id) => angleOf(two.layout.positions[id], two.layout.positions.proxy));
+  assert(Math.abs(twoAngles[0] - twoAngles[1]) > 0.75, 'two instances have angular separation');
+  const three = topologyLayoutForCount(3);
+  const threeAngles = ['instance:small-0', 'instance:small-1', 'instance:small-2'].map((id) => angleOf(three.layout.positions[id], three.layout.positions.proxy)).sort((a, b) => a - b);
+  const gaps = [threeAngles[1] - threeAngles[0], threeAngles[2] - threeAngles[1], (threeAngles[0] + Math.PI * 2) - threeAngles[2]];
+  assert(Math.min(...gaps) > 0.45, 'three instances have angular separation');
+  const reservedSchedulerCone = Math.abs(ui.preferredTopologyAngle({ type: 'scheduler', id: 'scheduler' }, three.model) - ui.preferredTopologyAngle(three.model.nodes.find((node) => node.id === 'instance:small-0'), three.model));
+  assert(reservedSchedulerCone > 0.72, 'instance avoids reserved scheduler cone');
+}
+
+function testGpuUtilizationAggregationAndDonuts() {
+  const gpuHardware = { gpus: [{ index: 1, name: 'NVIDIA H100', utilization_pct: 20 }, { index: 0, name: 'NVIDIA H100', utilization_gpu_pct: 60, uuid: 'GPU-0', temperature_c: 55, power_w: 250, memory_used_mb: 1024, memory_total_mb: 2048 }] };
+  assert.strictEqual(ui.aggregateGpuUtilization(inst('resource', true, { resource: { gpu_util_avg: 68 } }), { gpu_util: 22 }, gpuHardware), 68);
+  assert.strictEqual(ui.aggregateGpuUtilization(inst('load', true, { resource: { gpu_util_avg: null } }), { gpu_util: 44 }, gpuHardware), 44);
+  assert.strictEqual(ui.aggregateGpuUtilization(inst('devices', true, { resource: { gpu_util_avg: null } }), { gpu_util: null }, gpuHardware), 40);
+  assert.strictEqual(ui.aggregateGpuUtilization(inst('none', true, { resource: { gpu_util_avg: null } }), { gpu_util: null }, { gpus: [{ index: 0 }] }), null);
+  const donut = ui.renderUtilizationDonutChart({ label: 'Aggregate GPU utilization', value: 68, detail: 'detail' });
+  assert(donut.includes('68%'));
+  assert(donut.includes('Utilized 68%'));
+  assert(donut.includes('Idle 32%'));
+  assert(!/used 68|free 32/i.test(donut), 'utilization donut should not use memory wording');
+  assert(ui.renderUtilizationDonutChart({ label: 'Aggregate GPU utilization', value: null }).includes('No data'));
+  const multi = inst('multi-gpu', true, { resource: { raw_resource: { devices: { gpu: [{ index: 1, name: 'GPU B', utilization_pct: 80 }, { index: 0, name: 'GPU A', util: 50 }, { index: 2, name: 'GPU C' }] } } } });
+  const html = ui.renderGpuUtilizationDonuts(multi, 65);
+  assert(html.includes('Aggregate GPU utilization'));
+  assert(html.includes('GPU #0 GPU A utilization'));
+  assert(html.includes('GPU #1 GPU B utilization'));
+  assert(!html.includes('GPU #2 GPU C utilization'), 'missing per-GPU utilization omits device donut');
+  assert(html.indexOf('GPU #0 GPU A utilization') < html.indexOf('GPU #1 GPU B utilization'), 'GPUs sorted by index');
+  const missing = ui.renderGpuUtilizationDonuts(inst('missing-gpu', true, { resource: { raw_resource: { devices: { gpu: [{ index: 0, name: 'No util' }] } } } }), null);
+  assert(missing.includes('No per-GPU utilization data is exposed'));
+  const consistent = inst('consistent', true, { resource: { gpu_util_avg: 72 } });
+  const value = ui.aggregateGpuUtilization(consistent, { gpu_util: 15 }, { gpus: [{ util: 33 }] });
+  assert(ui.renderMetricBar({ label: 'GPU utilization', value, max: 100, unit: '%' }).includes('72'));
+  assert(ui.renderUtilizationDonutChart({ label: 'Aggregate GPU utilization', value }).includes('72%'));
+}
+
+function testProxyUiBuildMarker() {
+  assert.strictEqual(ui.PROXY_UI_BUILD, 'force-topology-v2');
+  const fs = require('fs');
+  const source = fs.readFileSync(require('path').join(__dirname, 'static/app.js'), 'utf8');
+  const html = fs.readFileSync(require('path').join(__dirname, 'static/index.html'), 'utf8');
+  assert(source.includes('window.PROXY_UI_BUILD'));
+  assert(html.includes('name="proxy-ui-build"'));
+  assert(source.includes('[Proxy UI] build='));
+}
+
+testSmallTopologyAnglesAndNonCollinearity();
+testGpuUtilizationAggregationAndDonuts();
+testProxyUiBuildMarker();
 console.log('proxy-ui pure function tests passed');
