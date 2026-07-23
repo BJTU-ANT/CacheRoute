@@ -655,19 +655,38 @@ function applyRadialForce(model, positions, velocities) {
   });
 }
 
-function resolveCollisions(nodes, positions, bounds, minSpacing = 92) {
+function resolveCollisions(nodes, positions, bounds, minSpacing = 92, pinnedNodeIds = new Set()) {
   for (let i = 0; i < nodes.length; i += 1) {
     for (let j = i + 1; j < nodes.length; j += 1) {
-      const a = positions[nodes[i].id]; const b = positions[nodes[j].id];
+      const nodeA = nodes[i];
+      const nodeB = nodes[j];
+      const a = positions[nodeA.id];
+      const b = positions[nodeB.id];
       const delta = normalizeVector(b.x - a.x, b.y - a.y);
       const overlap = minSpacing - Math.max(1, delta.length);
-      if (overlap > 0) {
-        b.x += delta.x * overlap * 0.5; b.y += delta.y * overlap * 0.5;
-        a.x -= delta.x * overlap * 0.5; a.y -= delta.y * overlap * 0.5;
+      if (overlap <= 0) continue;
+      const aPinned = pinnedNodeIds.has(nodeA.id);
+      const bPinned = pinnedNodeIds.has(nodeB.id);
+      if (aPinned && bPinned) continue;
+      if (aPinned) {
+        b.x += delta.x * overlap;
+        b.y += delta.y * overlap;
+      } else if (bPinned) {
+        a.x -= delta.x * overlap;
+        a.y -= delta.y * overlap;
+      } else {
+        b.x += delta.x * overlap * 0.5;
+        b.y += delta.y * overlap * 0.5;
+        a.x -= delta.x * overlap * 0.5;
+        a.y -= delta.y * overlap * 0.5;
       }
     }
   }
-  nodes.forEach((node) => { positions[node.id] = clampTopologyPosition(positions[node.id], bounds); });
+  nodes.forEach((node) => {
+    if (!pinnedNodeIds.has(node.id)) {
+      positions[node.id] = clampTopologyPosition(positions[node.id], bounds);
+    }
+  });
 }
 
 function relaxTopologyLayout(model, positions, options = {}) {
@@ -691,7 +710,7 @@ function relaxTopologyLayout(model, positions, options = {}) {
       pos.y += Math.max(-18, Math.min(18, velocities[node.id].y)) * 0.82;
       result[node.id] = clampTopologyPosition(pos, bounds);
     });
-    resolveCollisions(nodes.filter((node) => !pinned.has(node.id)), result, bounds, 92);
+    resolveCollisions(nodes, result, bounds, 92, pinned);
   }
   return result;
 }
@@ -805,12 +824,15 @@ function buildTooltipModel(node, model = state.topology.model) {
     ].map(([label, value]) => ({ label, value: tooltipValue(value) })) };
   }
   if (node.type === 'proxy') {
-    const total = model?.instances?.length ?? 0;
-    const alive = model?.instances?.filter((item) => item.is_alive === true).length ?? 0;
+    const instances = model?.instances || [];
+    const total = instances.length;
+    const alive = instances.filter((item) => item.is_alive === true).length;
+    const stale = instances.filter((item) => item.is_alive === false).length;
+    const unknown = total - alive - stale;
     return { title: 'Proxy', rows: [
-      ['Proxy ID', model?.proxyId || raw.proxy_id || node.status], ['Health state', raw.ok === false ? 'error' : 'ok'], ['TTL', raw.ttl_seconds ?? raw.ttl],
-      ['Alive Instance count', alive], ['Total Instance count', total], ['Stale Instance count', Math.max(0, total - alive)],
-      ['Resource report count', (model?.instances || []).filter(hasResourceReport).length], ['Topology link count', model?.links?.length],
+      ['Proxy ID', model?.proxyId || raw.proxy_id || node.status], ['Health state', raw.ok === false ? 'error' : 'ok'], ['TTL', raw.ttl_s ?? raw.ttl_seconds ?? raw.ttl],
+      ['Alive Instance count', alive], ['Total Instance count', total], ['Stale Instance count', stale], ['Unknown Instance count', unknown],
+      ['Resource report count', instances.filter(hasResourceReport).length], ['Topology link count', model?.links?.length],
     ].map(([label, value]) => ({ label, value: tooltipValue(value) })) };
   }
   return { title: 'Scheduler', rows: [
@@ -865,7 +887,7 @@ function renderTopologyStructure(container, model) {
   model.nodes.forEach((node) => {
     if (existingNodes.has(node.id)) return;
     const isInstance = node.type === 'instance';
-    nodesGroup.insertAdjacentHTML('beforeend', `<g class="topology-svg-node ${escapeHtml(node.type)}" data-node-id="${escapeHtml(node.id)}" ${isInstance ? `role="button" tabindex="0" data-instance-id="${escapeHtml(node.instanceId)}"` : 'tabindex="0"'}><title></title><circle class="node-halo" r="38"></circle><use href="#icon-${escapeHtml(node.type)}" x="-20" y="-24" width="40" height="40"></use><text class="node-label" y="32"></text><text class="node-status" y="48"></text></g>`);
+    nodesGroup.insertAdjacentHTML('beforeend', `<g class="topology-svg-node ${escapeHtml(node.type)}" data-node-id="${escapeHtml(node.id)}" ${isInstance ? `role="button" tabindex="0" data-instance-id="${escapeHtml(node.instanceId)}"` : 'tabindex="0"'}><title></title><g class="topology-node-visual"><circle class="node-halo" r="38"></circle><use href="#icon-${escapeHtml(node.type)}" x="-20" y="-24" width="40" height="40"></use><text class="node-label" y="32"></text><text class="node-status" y="48"></text></g></g>`);
   });
   [...nodesGroup.querySelectorAll('.topology-svg-node')].forEach((el) => { if (!model.nodes.some((n) => n.id === el.dataset.nodeId)) el.remove(); });
 }
@@ -970,11 +992,59 @@ function hideTopologyTooltip(container) {
   container.querySelector('.topology-tooltip')?.classList.add('hidden');
 }
 
+function topologyNodeFromEventTarget(target) {
+  return target?.closest?.('.topology-svg-node[data-node-id]') || null;
+}
+
+function handleTopologyPointerOut(container, event) {
+  const fromNode = topologyNodeFromEventTarget(event.target);
+  if (!fromNode) return null;
+  const toNode = topologyNodeFromEventTarget(event.relatedTarget);
+  if (fromNode === toNode) return fromNode.dataset.nodeId;
+  if (toNode) {
+    applyTopologyHover(container, toNode.dataset.nodeId);
+    showTopologyTooltip(container, toNode.dataset.nodeId, event);
+    return toNode.dataset.nodeId;
+  }
+  applyTopologyHover(container, null);
+  hideTopologyTooltip(container);
+  return null;
+}
+
+function cleanupTopologyDrag(container, options = {}) {
+  const drag = state.topology.dragging;
+  if (!drag) return false;
+  if (drag.active && options.pinDraggedNode) {
+    state.topology.pinnedNodeIds.add(drag.nodeId);
+    state.topology.suppressNextClick = true;
+  }
+  drag.node?.classList?.remove('is-dragging');
+  if (typeof document !== 'undefined') document.body?.classList?.remove('topology-no-select');
+  drag.node?.releasePointerCapture?.(drag.pointerId);
+  state.topology.dragging = null;
+  return Boolean(drag.active);
+}
+
+function cleanupTopologyPan(container) {
+  const pan = state.topology.panning;
+  const wasPanning = Boolean(pan);
+  pan?.svg?.releasePointerCapture?.(pan.pointerId);
+  state.topology.panning = null;
+  container?.classList?.remove('is-panning');
+  return wasPanning;
+}
+
+function cleanupTopologyPointerState(container) {
+  cleanupTopologyDrag(container, { pinDraggedNode: false });
+  cleanupTopologyPan(container);
+}
+
+
 function installTopologyHandlers(container) {
   if (state.topology.handlersInstalled) return;
   state.topology.handlersInstalled = true;
   container.addEventListener('pointerover', (event) => {
-    const node = event.target.closest?.('.topology-svg-node[data-node-id]');
+    const node = topologyNodeFromEventTarget(event.target);
     if (!node || state.topology.dragging) return;
     applyTopologyHover(container, node.dataset.nodeId); showTopologyTooltip(container, node.dataset.nodeId, event);
   });
@@ -991,21 +1061,27 @@ function installTopologyHandlers(container) {
     positionTopologyTooltip(container, event);
   });
   container.addEventListener('pointerout', (event) => {
-    const node = event.target.closest?.('.topology-svg-node[data-node-id]');
-    if (node && !container.contains(event.relatedTarget)) { applyTopologyHover(container, null); hideTopologyTooltip(container); }
+    handleTopologyPointerOut(container, event);
   });
-  container.addEventListener('focusin', (event) => { const node = event.target.closest?.('.topology-svg-node[data-node-id]'); if (node) { applyTopologyHover(container, node.dataset.nodeId); showTopologyTooltip(container, node.dataset.nodeId, event); } });
+  container.addEventListener('focusin', (event) => { const node = topologyNodeFromEventTarget(event.target); if (node) { applyTopologyHover(container, node.dataset.nodeId); showTopologyTooltip(container, node.dataset.nodeId, event); } });
   container.addEventListener('focusout', () => { applyTopologyHover(container, null); hideTopologyTooltip(container); });
   container.addEventListener('pointerdown', (event) => {
     const svg = container.querySelector('.topology-svg'); const viewport = topologyViewportSize(container);
-    const node = event.target.closest?.('.topology-svg-node[data-node-id]');
-    if (node) { const pos = state.topology.positions[node.dataset.nodeId]; state.topology.dragging = { node, nodeId: node.dataset.nodeId, startX: event.clientX, startY: event.clientY, nodeStart: { ...pos }, active: false, width: viewport.width, height: viewport.height }; node.setPointerCapture?.(event.pointerId); return; }
-    if (event.target.closest?.('.topology-bg, .topology-svg')) { state.topology.panning = { startX: event.clientX, startY: event.clientY, startPanX: state.topology.panX, startPanY: state.topology.panY }; svg?.setPointerCapture?.(event.pointerId); container.classList.add('is-panning'); }
+    const node = topologyNodeFromEventTarget(event.target);
+    if (node) { const pos = state.topology.positions[node.dataset.nodeId]; state.topology.dragging = { node, nodeId: node.dataset.nodeId, startX: event.clientX, startY: event.clientY, nodeStart: { ...pos }, pointerId: event.pointerId, active: false, width: viewport.width, height: viewport.height }; node.setPointerCapture?.(event.pointerId); return; }
+    if (event.target.closest?.('.topology-bg, .topology-svg')) { state.topology.panning = { startX: event.clientX, startY: event.clientY, startPanX: state.topology.panX, startPanY: state.topology.panY, svg, pointerId: event.pointerId }; svg?.setPointerCapture?.(event.pointerId); container.classList.add('is-panning'); }
   });
   container.addEventListener('pointerup', (event) => {
-    if (state.topology.dragging) { const drag = state.topology.dragging; if (drag.active) { state.topology.pinnedNodeIds.add(drag.nodeId); state.topology.suppressNextClick = true; event.preventDefault(); } drag.node.classList.remove('is-dragging'); document.body.classList.remove('topology-no-select'); state.topology.dragging = null; }
-    if (state.topology.panning) { state.topology.panning = null; container.classList.remove('is-panning'); }
+    const dragged = cleanupTopologyDrag(container, { pinDraggedNode: true });
+    cleanupTopologyPan(container);
+    if (dragged) event.preventDefault();
   });
+  container.addEventListener('pointercancel', () => cleanupTopologyPointerState(container));
+  container.addEventListener('lostpointercapture', () => cleanupTopologyPointerState(container));
+  if (typeof window !== 'undefined' && !state.topology.windowCleanupInstalled) {
+    state.topology.windowCleanupInstalled = true;
+    window.addEventListener('blur', () => cleanupTopologyPointerState(container));
+  }
   container.addEventListener('wheel', (event) => { event.preventDefault(); zoomTopology(container, event.deltaY < 0 ? 1.12 : 0.88, event); }, { passive: false });
   container.addEventListener('click', (event) => {
     const action = event.target.closest?.('[data-topology-action]')?.dataset.topologyAction;
@@ -1168,6 +1244,12 @@ function applyPausedTopologyState() {
   const container = typeof document !== 'undefined' ? $('systemTopology') : null;
   if (container) {
     container.classList.toggle('paused', state.paused);
+    const svg = container.querySelector?.('.topology-svg');
+    if (state.paused) {
+      svg?.pauseAnimations?.();
+    } else {
+      svg?.unpauseAnimations?.();
+    }
   }
 }
 
@@ -1181,42 +1263,6 @@ function gpuUtil(gpu) {
 
 function nicName(nic) {
   return firstString(nic.iface, nic.interface, nic.name, nic.model) || 'NIC';
-}
-
-function renderSystemTopology(instances, scheduler) {
-  const model = buildTopologyModel(instances, scheduler, state.latest.status || {});
-  const layout = computeTopologyLayout(model);
-  const linkHtml = model.links.map((link) => {
-    const a = layout.positions[link.source];
-    const b = layout.positions[link.target];
-    if (!a || !b) return '';
-    const midY = (a.y + b.y) / 2;
-    const d = `M ${a.x} ${a.y + 28} C ${a.x} ${midY}, ${b.x} ${midY}, ${b.x} ${b.y - 30}`;
-    return `<path class="topology-link ${escapeHtml(link.status)}" d="${d}"><title>${escapeHtml(link.source)} to ${escapeHtml(link.target)}: ${escapeHtml(link.status)}</title></path>`;
-  }).join('');
-  const nodeHtml = model.nodes.map((node) => {
-    const pos = layout.positions[node.id];
-    if (!pos) return '';
-    const isInstance = node.type === 'instance';
-    const aria = `${node.type} ${node.instanceId || node.label} ${node.status}`;
-    return `<g class="topology-svg-node ${escapeHtml(node.type)} ${escapeHtml(node.tone)}" transform="translate(${pos.x} ${pos.y})" ${isInstance ? `role="button" tabindex="0" data-instance-id="${escapeHtml(node.instanceId)}" aria-label="${escapeHtml(aria)}"` : `aria-label="${escapeHtml(aria)}"`}>
-      <title>${escapeHtml(nodeTooltip(node))}</title>
-      <circle class="node-halo" r="38"></circle>
-      <use href="#icon-${escapeHtml(node.type)}" x="-20" y="-24" width="40" height="40"></use>
-      <text class="node-label" y="32">${escapeHtml(shortText(node.label, 18))}</text>
-      <text class="node-status" y="48">${escapeHtml(shortText(node.status, 22))}</text>
-    </g>`;
-  }).join('');
-  $('systemTopology').classList.toggle('paused', state.paused);
-  $('systemTopology').innerHTML = `<div class="topology-scroll"><svg class="topology-svg" viewBox="0 0 ${layout.width} ${layout.height}" aria-labelledby="topologyTitle topologyDesc">
-    <title id="topologyTitle">CacheRoute Proxy topology</title><desc id="topologyDesc">Scheduler, local Proxy, and registered Instance nodes. Instance nodes are keyboard selectable.</desc>
-    <defs>
-      <symbol id="icon-scheduler" viewBox="0 0 48 48"><rect x="8" y="10" width="32" height="22" rx="5"></rect><path d="M16 38h16M24 32v6M16 18h16M16 25h10"></path></symbol>
-      <symbol id="icon-proxy" viewBox="0 0 48 48"><path d="M8 24h32M24 8v32M13 13l22 22M35 13L13 35"></path><circle cx="24" cy="24" r="15"></circle></symbol>
-      <symbol id="icon-instance" viewBox="0 0 48 48"><rect x="10" y="8" width="28" height="32" rx="4"></rect><path d="M16 17h16M16 25h16M16 33h10"></path><circle cx="33" cy="33" r="2"></circle></symbol>
-    </defs>
-    <g class="topology-links">${linkHtml}</g><g class="topology-nodes">${nodeHtml}</g>
-  </svg></div>${model.instances.length ? '' : '<div class="empty-state compact">No connected instances reported.</div>'}`;
 }
 
 function renderInstanceDetail(instances) {
@@ -1561,7 +1607,7 @@ async function copyText(text) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { buildTopologyModel, topologySignature, stableHash, seededUnitValue, createInitialTopologyPositions, relaxTopologyLayout, clampTopologyPosition, normalizeVector, edgePoint, deterministicLinkCurvature, computeLinkPath, computeHoverRelationships, buildTooltipModel, fitTopologyToView, clampZoom, dragExceededThreshold, computeTopologyLayout, renderMetricBar, renderDonutChart, extractQueueMetrics, queueMetricsForInstance, computeMetrics, hasResourceReport, finiteNumber, clampPercent, percentOf, fmt, stateLabel, hardwareDetails, mergedInstanceLoad, applyPausedTopologyState, renderInstanceDetail, renderSystemTopology, state };
+  module.exports = { buildTopologyModel, topologySignature, stableHash, seededUnitValue, createInitialTopologyPositions, resolveCollisions, relaxTopologyLayout, clampTopologyPosition, normalizeVector, edgePoint, deterministicLinkCurvature, computeLinkPath, computeHoverRelationships, handleTopologyPointerOut, cleanupTopologyDrag, cleanupTopologyPan, buildTooltipModel, fitTopologyToView, clampZoom, dragExceededThreshold, computeTopologyLayout, renderMetricBar, renderDonutChart, extractQueueMetrics, queueMetricsForInstance, computeMetrics, hasResourceReport, finiteNumber, clampPercent, percentOf, fmt, stateLabel, hardwareDetails, mergedInstanceLoad, applyPausedTopologyState, renderInstanceDetail, renderSystemTopology, state };
 } else {
   setTheme(state.theme);
   setupEventHandlers();

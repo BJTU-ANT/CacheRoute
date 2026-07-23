@@ -881,6 +881,10 @@ summary {
 }
 
 .topology-svg-node {
+  transition: opacity 180ms ease, color 180ms ease;
+}
+
+.topology-node-visual {
   transform-box: fill-box;
   transform-origin: center;
   transition: opacity 180ms ease, filter 180ms ease, transform 180ms ease, color 180ms ease;
@@ -895,7 +899,7 @@ summary {
   transition: opacity 180ms ease, stroke-width 180ms ease, filter 180ms ease, fill 180ms ease, stroke 180ms ease, color 180ms ease;
 }
 
-.topology-svg-node.is-hovered {
+.topology-svg-node.is-hovered .topology-node-visual {
   transform: translateY(-6px) scale(1.1);
   filter: drop-shadow(0 0 18px color-mix(in srgb, var(--accent) 75%, transparent));
 }
@@ -1034,6 +1038,7 @@ summary {
 
 @media (prefers-reduced-motion: reduce) {
   .topology-svg-node,
+  .topology-node-visual,
   .topology-svg-node .node-halo,
   .topology-link,
   .topology-particle,

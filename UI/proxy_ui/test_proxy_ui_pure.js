@@ -233,4 +233,218 @@ function testLinkHoverTooltipFitZoomDragHelpers() {
 
 testForceTopologyPureHelpers();
 testLinkHoverTooltipFitZoomDragHelpers();
+
+function testSingleRenderSystemTopologyDeclaration() {
+  const fs = require('fs');
+  const source = fs.readFileSync(require('path').join(__dirname, 'static/app.js'), 'utf8');
+  const matches = source.match(/function\s+renderSystemTopology\s*\(/g) || [];
+  assert.strictEqual(matches.length, 1, 'exactly one renderSystemTopology declaration should exist');
+}
+
+function fakeClassList(owner) {
+  return {
+    add(cls) { owner.classes.add(cls); },
+    remove(cls) { owner.classes.delete(cls); },
+    contains(cls) { return owner.classes.has(cls); },
+    toggle(cls, on) { const yes = on === undefined ? !owner.classes.has(cls) : Boolean(on); if (yes) owner.classes.add(cls); else owner.classes.delete(cls); },
+  };
+}
+
+class FakeElement {
+  constructor(tag = 'div', className = '') {
+    this.tag = tag;
+    this.classes = new Set(className ? className.split(/\s+/).filter(Boolean) : []);
+    this.classList = fakeClassList(this);
+    this.dataset = {};
+    this.children = [];
+    this.attributes = {};
+    this.style = {};
+    this.textContent = '';
+    this.className = { baseVal: className };
+  }
+  append(child) { child.parent = this; this.children.push(child); return child; }
+  setAttribute(name, value) { this.attributes[name] = String(value); if (name === 'transform') this.transform = String(value); }
+  getAttribute(name) { return this.attributes[name]; }
+  remove() { if (this.parent) this.parent.children = this.parent.children.filter((item) => item !== this); }
+  closest(selector) {
+    const cls = selector.match(/\.([\w-]+)/)?.[1];
+    let cur = this;
+    while (cur) { if (!cls || cur.classes.has(cls)) return cur; cur = cur.parent; }
+    return null;
+  }
+  getBoundingClientRect() { return { left: 0, top: 0, width: 980, height: 560 }; }
+  addEventListener(type, handler) { this.handlers = this.handlers || {}; this.handlers[type] = this.handlers[type] || []; this.handlers[type].push(handler); }
+  querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
+  querySelectorAll(selector) {
+    const all = [];
+    const visit = (node) => { all.push(node); node.children.forEach(visit); };
+    this.children.forEach(visit);
+    const dataLink = selector.match(/\[data-link-id="([^"]+)"\]/)?.[1];
+    const dataNode = selector.match(/\[data-node-id="([^"]+)"\]/)?.[1];
+    const classes = [...selector.matchAll(/\.([\w-]+)/g)].map((m) => m[1]);
+    const tags = selector.split(',').map((part) => part.trim()).filter((part) => /^[a-z]+$/i.test(part));
+    return all.filter((node) => {
+      if (dataLink && node.dataset.linkId !== dataLink) return false;
+      if (dataNode && node.dataset.nodeId !== dataNode) return false;
+      if (classes.length && !classes.some((cls) => node.classes.has(cls))) return false;
+      if (tags.length && !tags.includes(node.tag)) return false;
+      return true;
+    });
+  }
+  insertAdjacentHTML(_where, html) {
+    if (html.includes('topology-link')) {
+      const link = this.append(new FakeElement('path', 'topology-link'));
+      link.dataset.linkId = html.match(/data-link-id="([^"]+)"/)?.[1];
+      link.id = html.match(/id="([^"]+)"/)?.[1];
+      link.append(new FakeElement('title'));
+      return;
+    }
+    if (html.includes('topology-particle')) {
+      const particle = this.append(new FakeElement('circle', 'topology-particle'));
+      particle.dataset.linkId = html.match(/data-link-id="([^"]+)"/)?.[1];
+      return;
+    }
+    if (html.includes('topology-svg-node')) {
+      const node = this.append(new FakeElement('g', html.match(/class="([^"]+)"/)?.[1] || 'topology-svg-node'));
+      node.dataset.nodeId = html.match(/data-node-id="([^"]+)"/)?.[1];
+      const instance = html.match(/data-instance-id="([^"]+)"/)?.[1];
+      if (instance) node.dataset.instanceId = instance;
+      node.append(new FakeElement('title'));
+      const visual = node.append(new FakeElement('g', 'topology-node-visual'));
+      visual.append(new FakeElement('circle', 'node-halo'));
+      visual.append(new FakeElement('use'));
+      visual.append(new FakeElement('text', 'node-label'));
+      visual.append(new FakeElement('text', 'node-status'));
+    }
+  }
+  set innerHTML(value) {
+    this._innerHTML = value;
+    this.children = [];
+    if (!String(value).includes('topology-svg')) return;
+    this.append(new FakeElement('div', 'topology-toolbar topology-controls'));
+    const scroll = this.append(new FakeElement('div', 'topology-scroll'));
+    scroll.append(new FakeElement('div', 'topology-tooltip hidden'));
+    const svg = scroll.append(new FakeElement('svg', 'topology-svg'));
+    svg.pauseAnimations = () => { svg.paused = true; };
+    svg.unpauseAnimations = () => { svg.unpaused = true; };
+    svg.append(new FakeElement('rect', 'topology-bg'));
+    const viewport = svg.append(new FakeElement('g', 'topology-viewport'));
+    viewport.append(new FakeElement('g', 'topology-links'));
+    viewport.append(new FakeElement('g', 'topology-particles'));
+    viewport.append(new FakeElement('g', 'topology-nodes'));
+    this.append(new FakeElement('div', 'topology-empty hidden'));
+  }
+  get innerHTML() { return this._innerHTML || ''; }
+}
+
+function withTopologyDom(fn) {
+  const originalDocument = global.document;
+  const originalCss = global.CSS;
+  const originalRaf = global.requestAnimationFrame;
+  const originalCancel = global.cancelAnimationFrame;
+  const originalMatchMedia = global.matchMedia;
+  const container = new FakeElement('div', 'topology-diagram');
+  global.document = { getElementById: (id) => (id === 'systemTopology' ? container : null), body: new FakeElement('body') };
+  global.CSS = { escape: (value) => String(value).replace(/"/g, '\\"') };
+  global.requestAnimationFrame = (cb) => { cb(Date.now() + 300); return 1; };
+  global.cancelAnimationFrame = () => {};
+  global.matchMedia = () => ({ matches: true });
+  try { fn(container); } finally { global.document = originalDocument; global.CSS = originalCss; global.requestAnimationFrame = originalRaf; global.cancelAnimationFrame = originalCancel; global.matchMedia = originalMatchMedia; }
+}
+
+function testRenderSystemTopologyEffectiveShell() {
+  withTopologyDom((container) => {
+    ui.state.latest.status = { ok: true, proxy_id: 'proxy-a', ttl_s: 10 };
+    ui.state.topology.positions = {};
+    ui.state.topology.signature = '';
+    ui.state.topology.handlersInstalled = false;
+    ui.renderSystemTopology([inst('dom-a', true), inst('dom-b', false)], { ok: true });
+    ['.topology-controls', '.topology-tooltip', '.topology-viewport', '.topology-links', '.topology-particles', '.topology-nodes'].forEach((selector) => assert(container.querySelector(selector), `missing ${selector}`));
+    assert.strictEqual(container.querySelectorAll('.topology-svg-node').length, 4);
+    assert(container.querySelector('.topology-node-visual'));
+    const transform = container.querySelector('.topology-svg-node').getAttribute('transform');
+    container.querySelector('.topology-svg-node').classList.add('is-hovered');
+    assert.strictEqual(container.querySelector('.topology-svg-node').getAttribute('transform'), transform, 'hover must not replace outer translate transform');
+    const shell = container.querySelector('.topology-svg');
+    const handlers = container.handlers?.pointerover?.length || 0;
+    const oldPositions = { ...ui.state.topology.positions };
+    ui.renderSystemTopology([inst('dom-a', true, { resource: { cpu_util: 99 } }), inst('dom-b', false)], { ok: true });
+    assert.strictEqual(container.querySelector('.topology-svg'), shell, 'metric-only render reuses shell');
+    assert.strictEqual(container.handlers.pointerover.length, handlers, 'handlers are not installed twice');
+    assert.deepStrictEqual(ui.state.topology.positions, oldPositions, 'metric-only changes preserve positions');
+    assert(container.querySelectorAll('.topology-particle').some((item) => item.className.baseVal.includes('active')));
+    assert(container.querySelectorAll('.topology-particle').some((item) => item.className.baseVal.includes('stale')));
+    ui.renderSystemTopology([inst('dom-a', true)], { ok: true });
+    assert(!container.querySelector('.topology-svg-node[data-node-id="instance:dom-b"]'), 'removed nodes are removed');
+  });
+}
+
+function testPauseAnimationsDomFixture() {
+  withTopologyDom((container) => {
+    ui.renderSystemTopology([inst('pause-a', true)], { ok: true });
+    const svg = container.querySelector('.topology-svg');
+    ui.state.paused = true;
+    ui.applyPausedTopologyState();
+    assert.strictEqual(svg.paused, true);
+    ui.state.paused = false;
+    ui.applyPausedTopologyState();
+    assert.strictEqual(svg.unpaused, true);
+  });
+}
+
+function testHoverLifecycleHelpers() {
+  const container = new FakeElement('div', 'topology-diagram');
+  const nodeA = container.append(new FakeElement('g', 'topology-svg-node'));
+  nodeA.dataset.nodeId = 'instance:a';
+  const childA = nodeA.append(new FakeElement('circle', 'node-halo'));
+  const nodeB = container.append(new FakeElement('g', 'topology-svg-node'));
+  nodeB.dataset.nodeId = 'instance:b';
+  let hover = 'instance:a';
+  const originalHover = ui.state.topology.hoveredNodeId;
+  const originalModel = ui.state.topology.model;
+  ui.state.topology.model = ui.buildTopologyModel([inst('a', true), inst('b', true)], { ok: true }, { ok: true });
+  ui.state.topology.hoveredNodeId = hover;
+  ui.handleTopologyPointerOut(container, { target: childA, relatedTarget: nodeA });
+  assert.strictEqual(ui.state.topology.hoveredNodeId, hover, 'child movement keeps hover');
+  ui.handleTopologyPointerOut(container, { target: childA, relatedTarget: nodeB });
+  assert.strictEqual(ui.state.topology.hoveredNodeId, 'instance:b', 'node-to-node switches hover');
+  ui.state.topology.hoveredNodeId = 'instance:a';
+  ui.handleTopologyPointerOut(container, { target: childA, relatedTarget: container });
+  assert.strictEqual(ui.state.topology.hoveredNodeId, null, 'node-to-background clears hover');
+  ui.state.topology.hoveredNodeId = 'instance:a';
+  ui.handleTopologyPointerOut(container, { target: childA, relatedTarget: null });
+  assert.strictEqual(ui.state.topology.hoveredNodeId, null, 'node-to-outside clears hover');
+  ui.state.topology.hoveredNodeId = originalHover;
+  ui.state.topology.model = originalModel;
+}
+
+function testProxyTooltipCountsAndPinnedCollisions() {
+  const model = ui.buildTopologyModel([inst('alive', true), inst('stale', false), inst('unknown', undefined)], { ok: true }, { ok: true, proxy_id: 'proxy-a', ttl_s: 7 });
+  const rows = ui.buildTooltipModel(model.nodes.find((n) => n.id === 'proxy'), model).rows;
+  const byLabel = Object.fromEntries(rows.map((row) => [row.label, row.value]));
+  assert.strictEqual(byLabel.TTL, '7');
+  assert.strictEqual(byLabel['Alive Instance count'], '1');
+  assert.strictEqual(byLabel['Stale Instance count'], '1');
+  assert.strictEqual(byLabel['Unknown Instance count'], '1');
+  const fallback = ui.buildTooltipModel({ type: 'proxy', raw: { ttl_seconds: 9 }, status: '' }, { instances: [], links: [] }).rows;
+  assert.strictEqual(fallback.find((row) => row.label === 'TTL').value, '9');
+  assert.strictEqual(ui.buildTooltipModel({ type: 'proxy', raw: { ttl_s: null }, status: '' }, { instances: [], links: [] }).rows.find((row) => row.label === 'TTL').value, '—');
+  const bounds = { width: 400, height: 300, nodePadding: 10, labelPadding: 10 };
+  let positions = { pinned: { x: 100, y: 100 }, free: { x: 110, y: 100 } };
+  ui.resolveCollisions([{ id: 'pinned' }, { id: 'free' }], positions, bounds, 80, new Set(['pinned']));
+  assert.deepStrictEqual(positions.pinned, { x: 100, y: 100 });
+  assert(Math.hypot(positions.free.x - positions.pinned.x, positions.free.y - positions.pinned.y) >= 79);
+  positions = { a: { x: 100, y: 100 }, b: { x: 110, y: 100 } };
+  ui.resolveCollisions([{ id: 'a' }, { id: 'b' }], positions, bounds, 80, new Set(['a', 'b']));
+  assert.deepStrictEqual(positions, { a: { x: 100, y: 100 }, b: { x: 110, y: 100 } });
+  positions = { a: { x: 100, y: 100 }, b: { x: 110, y: 100 } };
+  ui.resolveCollisions([{ id: 'a' }, { id: 'b' }], positions, bounds, 80, new Set());
+  assert(positions.a.x < 100 && positions.b.x > 110, 'unpinned collision moves both nodes');
+}
+
+testSingleRenderSystemTopologyDeclaration();
+testRenderSystemTopologyEffectiveShell();
+testPauseAnimationsDomFixture();
+testHoverLifecycleHelpers();
+testProxyTooltipCountsAndPinnedCollisions();
 console.log('proxy-ui pure function tests passed');
