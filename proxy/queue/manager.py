@@ -747,15 +747,39 @@ class QueueManager:
             ]
         await self._recompute_pending_from_now(instance_id, now_s=now_s)
 
+    def _remove_task_from_prediction_state(self, task: ProxyTask, instance_id: str) -> bool:
+        """Remove a completed/failed task from prediction state.
+
+        The caller must hold the per-instance reservation lock. The helper is
+        idempotent so final cleanup is safe after streaming first-token handling
+        already moved the task from pending prefill into active decode.
+        """
+        pending_before = len(self._instance_pending_tasks.get(instance_id, []))
+        decode_before = len(self._instance_decode_tasks.get(instance_id, []))
+        self._instance_pending_tasks[instance_id] = [
+            t for t in self._instance_pending_tasks.get(instance_id, [])
+            if t is not task
+        ]
+        self._instance_decode_tasks[instance_id] = [
+            t for t in self._instance_decode_tasks.get(instance_id, [])
+            if t is not task
+        ]
+        return len(self._instance_pending_tasks[instance_id]) != pending_before or len(
+            self._instance_decode_tasks[instance_id]
+        ) != decode_before
+
     async def _mark_task_decode_end(self, task: ProxyTask, instance_id: str) -> None:
+        removed_from_pending = False
         lock = self._get_reservation_lock(instance_id)
         async with lock:
             self._ensure_instance_reservation_state(instance_id)
             task.trace["decode_end_ms"] = int(task.trace.get("forward_end_ms", _now_ms()))
-            self._instance_decode_tasks[instance_id] = [
-                t for t in self._instance_decode_tasks[instance_id]
-                if t is not task
-            ]
+            pending_before = len(self._instance_pending_tasks.get(instance_id, []))
+            self._remove_task_from_prediction_state(task, instance_id)
+            removed_from_pending = len(self._instance_pending_tasks.get(instance_id, [])) != pending_before
+
+        if removed_from_pending:
+            await self._recompute_pending_from_now(instance_id)
 
     async def _wait_dispatch_turn(self, task: ProxyTask, instance_id: str) -> None:
         """
