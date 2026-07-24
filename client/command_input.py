@@ -10,14 +10,9 @@ from urllib.parse import urlparse
 
 
 _LINE_CONTINUATION_RE = re.compile(r"\\[ \t]*\r?\n")
-_SMART_QUOTES = {
-    "\u2018": "'",
-    "\u2019": "'",
-    "\u201c": '"',
-    "\u201d": '"',
-    "\uff02": '"',
-    "\uff07": "'",
-}
+_SMART_SHELL_QUOTE_RE = re.compile(
+    r"(?:^|\s)(?:-H|--header|-d|--data|--data-raw)\s*([\u2018\u2019\u201c\u201d\uff02\uff07])"
+)
 
 
 @dataclass
@@ -59,14 +54,13 @@ def command_needs_continuation(text: str) -> bool:
     return False
 
 
-def _raise_for_smart_quotes(text: str) -> None:
-    found = sorted({ch for ch in text if ch in _SMART_QUOTES})
-    if not found:
+def _raise_for_smart_shell_quotes(text: str) -> None:
+    match = _SMART_SHELL_QUOTE_RE.search(text)
+    if match is None:
         return
-    rendered = " ".join(repr(ch) for ch in found)
     raise ValueError(
-        "typographic/full-width quote detected "
-        f"({rendered}); replace it with ASCII single or double quotes"
+        "typographic/full-width quote used as a shell argument delimiter; "
+        "replace the outer quote after -H/-d with an ASCII single or double quote"
     )
 
 
@@ -87,13 +81,13 @@ def parse_curl_like_command(text: str) -> ParsedRequest:
     if not normalized:
         raise ValueError("input is empty")
 
-    _raise_for_smart_quotes(normalized)
+    _raise_for_smart_shell_quotes(normalized)
 
     try:
         tokens = shlex.split(normalized, posix=True)
     except ValueError as exc:
         raise ValueError(
-            f"failed to parse command line: {exc}; check that all quotes are ASCII and closed"
+            f"failed to parse command line: {exc}; check that all shell quotes are ASCII and closed"
         ) from exc
 
     if not tokens:
