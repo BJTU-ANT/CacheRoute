@@ -5,8 +5,18 @@ Scheduler_v1 startup demo:
   - Start the HTTP service with uvicorn
 """
 import argparse
-import os, logging
+import logging
+import os
+import sys
+from pathlib import Path
+
 import uvicorn
+
+# Allow direct execution from test/ while importing project packages from the
+# repository root, consistent with the other demo entrypoints.
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from scheduler import scheduler
 from core import config
@@ -23,6 +33,7 @@ SCHEDULER_CACHEROUTE_KDN_PENDING_OVERLOAD_TH = config.SCHEDULER_CACHEROUTE_KDN_P
 SCHEDULER_CACHEROUTE_KDN_ACTIVE_OVERLOAD_TH = config.SCHEDULER_CACHEROUTE_KDN_ACTIVE_OVERLOAD_TH
 SCHEDULER_CACHEROUTE_KDN_QUEUE_MS_OVERLOAD_TH = config.SCHEDULER_CACHEROUTE_KDN_QUEUE_MS_OVERLOAD_TH
 SCHEDULER_CACHEROUTE_LOG_DECISION = config.SCHEDULER_CACHEROUTE_LOG_DECISION
+
 
 def main():
     # logging configuration
@@ -69,8 +80,8 @@ def main():
     os.environ["SCHEDULER_CACHEROUTE_LOG_DECISION"] = str(args.cacheroute_log_decision)
 
     # Configure uvicorn.Server
-    config = uvicorn.Config(scheduler, host=dp_host, port=dp_port, reload=False)
-    server = uvicorn.Server(config)
+    server_config = uvicorn.Config(scheduler, host=dp_host, port=dp_port, reload=False)
+    server = uvicorn.Server(server_config)
     server.run()
     print("[DEMO] Scheduler stopped, demo exit.")
 
