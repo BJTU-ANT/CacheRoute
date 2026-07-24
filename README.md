@@ -196,22 +196,292 @@ sudo docker run --gpus all -it \
   bash
 ```
 
-Use [`env/README.md`](env/README.md) when:
+Use [`env/README.md`](env/README.md) when building the image, installing PyTorch/vLLM/LMCache from source, enabling Tkinter/X11, repairing an older image, or recreating a deleted container.
 
-- building the CUDA/Python/Rust/Tkinter base image;
-- installing PyTorch, vLLM, or LMCache from source;
-- enabling the Tkinter desktop dashboard through X11;
-- starting Redis and configuring LMCache;
-- repairing an older custom image;
-- recreating a deleted container with the correct mounts and runtime settings.
+<details>
+<summary><b>Full single-machine run: Redis → vLLM → Scheduler → KDN → Proxy → Instance → Client</b></summary>
 
-After configuring `core/config.py` and starting vLLM + LMCache, start CacheRoute in this order:
+The commands below assume:
 
-```text
-Scheduler -> KDN Server -> Proxy -> Instance -> Client
+- the complete image and `cacheroute-main` container already exist;
+- the repository is mounted at `/workspace/llm-stack/CacheRoute`;
+- all CacheRoute components use host networking and loopback addresses;
+- the example model is served as `llama3-70b`;
+- each long-running service is started in a separate terminal with `sudo docker exec -it cacheroute-main bash`.
+
+#### 1. Check the CacheRoute configuration
+
+In `core/config.py`, verify at least the following values before starting the services:
+
+```python
+DEFAULT_MODEL = "/workspace/llm-stack/models/LLM-Research/Meta-Llama-3-70B-Instruct"
+DEFAULT_MODEL_SHORTNAME = "llama3-70b"
+EMBEDDING_MODEL = "/workspace/llm-stack/CacheRoute/model/embedder/intfloat__multilingual-e5-large-instruct"
+USE_MOCK = False
 ```
 
-See [`kdn_server/README.md`](kdn_server/README.md) for KDN registration and KVCache injection, and [`core/README.md`](core/README.md) for multi-machine configuration.
+Install the CacheRoute application dependencies once inside the container:
+
+```bash
+cd /workspace/llm-stack/CacheRoute
+python3 -m pip install -r requirements.txt
+python3 -m pip check
+```
+
+#### 2. Start Redis on the host
+
+Create the Redis container the first time:
+
+```bash
+sudo docker run -d \
+  --name lmcache-redis \
+  --network host \
+  redis:7 \
+  redis-server \
+    --bind 0.0.0.0 \
+    --protected-mode no \
+    --save "" \
+    --appendonly no \
+    --maxmemory 200gb \
+    --maxmemory-policy allkeys-lru
+```
+
+For later runs, use:
+
+```bash
+sudo docker start lmcache-redis
+```
+
+Verify Redis:
+
+```bash
+sudo docker exec -it lmcache-redis redis-cli ping
+# Expected: PONG
+```
+
+#### 3. Create the LMCache configuration inside `cacheroute-main`
+
+```bash
+mkdir -p /workspace/llm-stack/config
+
+cat > /workspace/llm-stack/config/lmcache_with_redis.yaml <<'EOF'
+chunk_size: 256
+pre_caching_hash_algorithm: "sha256_cbor"
+
+local_cpu: true
+max_local_cpu_size: 80.0
+
+remote_url: "redis://127.0.0.1:6379"
+remote_serde: "cachegen"
+
+local_disk: null
+max_local_disk_size: 0
+
+save_decode_cache: false
+cache_policy: "LRU"
+numa_mode: null
+EOF
+```
+
+#### 4. Terminal 1: start vLLM with LMCache
+
+The following example uses eight GPUs for a LLaMA-70B model. Adjust `CUDA_VISIBLE_DEVICES`, tensor parallelism, model path, memory utilization, and batch limits for the actual machine.
+
+```bash
+sudo docker exec -it cacheroute-main bash
+
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export MODEL_DIR=/workspace/llm-stack/models/LLM-Research/Meta-Llama-3-70B-Instruct
+export LMCACHE_CONFIG_FILE=/workspace/llm-stack/config/lmcache_with_redis.yaml
+export PYTHONHASHSEED=0
+export OMP_NUM_THREADS=8
+
+python3 -m vllm.entrypoints.openai.api_server \
+  --model "$MODEL_DIR" \
+  --served-model-name llama3-70b \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --tensor-parallel-size 8 \
+  --gpu-memory-utilization 0.75 \
+  --dtype auto \
+  --max-model-len 4096 \
+  --max-num-seqs 8 \
+  --max-num-batched-tokens 16384 \
+  --kv-offloading-backend lmcache \
+  --kv-offloading-size 64 \
+  --disable-hybrid-kv-cache-manager \
+  --kv-cache-metrics
+```
+
+From another terminal, wait until the model endpoint is ready:
+
+```bash
+curl -sS http://127.0.0.1:8000/v1/models | python3 -m json.tool
+```
+
+#### 5. Terminal 2: start the Scheduler
+
+```bash
+sudo docker exec -it cacheroute-main bash
+cd /workspace/llm-stack/CacheRoute/test
+
+python3 demo_scheduler.py \
+  --cacheroute \
+  --kdn-pending-overload-th 8 \
+  --kdn-active-overload-th 4 \
+  --kdn-queue-ms-overload-th 30 \
+  --cacheroute-log-decision 1
+```
+
+The Scheduler service plane listens on `127.0.0.1:7001`, and its control plane listens on `127.0.0.1:7002`.
+
+#### 6. Terminal 3: start the KDN Server
+
+```bash
+sudo docker exec -it cacheroute-main bash
+cd /workspace/llm-stack/CacheRoute/test
+python3 demo_kdn.py
+```
+
+The KDN Server listens on `127.0.0.1:9101` and registers its runtime state with the Scheduler.
+
+#### 7. Terminal 4: register sample knowledge and build its KVCache
+
+Create a small knowledge file inside the shared workspace:
+
+```bash
+sudo docker exec -it cacheroute-main bash
+cd /workspace/llm-stack/CacheRoute
+mkdir -p data/quickstart
+
+cat > data/quickstart/cacheroute.txt <<'EOF'
+CacheRoute is a knowledge-oriented LLM scheduling framework. It reduces repeated prefill computation by storing and reusing KVCache blocks for frequently requested external knowledge. The Scheduler selects a KDN server and a Proxy, while the Proxy chooses between text recomputation and KVCache reuse.
+EOF
+```
+
+Start the interactive KDN CLI:
+
+```bash
+python3 kdn_server/kdn_register_cli.py
+```
+
+At the CLI prompt, register the file and build its KVCache:
+
+```text
+:buildkv_file /workspace/llm-stack/CacheRoute/data/quickstart/cacheroute.txt --api-url http://127.0.0.1:8000/v1/chat/completions --model llama3-70b
+:pool
+```
+
+The Scheduler automatically refreshes KDN knowledge metadata. With the default configuration, allow up to 30 seconds for the new item to appear. Check the Scheduler state from another terminal:
+
+```bash
+curl -sS http://127.0.0.1:7001/debug/status | python3 -m json.tool
+```
+
+#### 8. Terminal 5: start the Proxy
+
+```bash
+sudo docker exec -it cacheroute-main bash
+cd /workspace/llm-stack/CacheRoute/test
+
+python3 demo_proxy.py \
+  --strategy round_robin \
+  --injection-strategy iws \
+  --ready-release-policy text_bypass
+```
+
+The Proxy service plane listens on `127.0.0.1:8001`, its control plane listens on `127.0.0.1:8002`, and the browser observability UI is available at:
+
+```text
+http://127.0.0.1:8202
+```
+
+#### 9. Terminal 6: start the Instance
+
+```bash
+sudo docker exec -it cacheroute-main bash
+cd /workspace/llm-stack/CacheRoute/test
+
+python3 demo_instance.py \
+  --host 127.0.0.1 \
+  --port 9001 \
+  --proxy-cp-url http://127.0.0.1:8002
+```
+
+The Instance forwards inference to vLLM at `127.0.0.1:8000`. It also starts or reuses the Rust Resource Agent by default. To skip resource monitoring during a minimal functional test, add `--no-resource-monitor`.
+
+Before sending a request, confirm that the Scheduler sees the KDN and Proxy and that the Proxy sees the Instance:
+
+```bash
+curl -sS http://127.0.0.1:7001/debug/status | python3 -m json.tool
+curl -sS http://127.0.0.1:8002/v1/instance/list?include_dead=true | python3 -m json.tool
+```
+
+#### 10. Terminal 7: start the Client UI or CLI
+
+Browser UI:
+
+```bash
+sudo docker exec -it cacheroute-main bash
+cd /workspace/llm-stack/CacheRoute/test
+python3 demo_client.py --with-ui
+```
+
+Open:
+
+```text
+http://127.0.0.1:7071/ui/client
+```
+
+For terminal-only use, run:
+
+```bash
+python3 demo_client.py
+```
+
+#### 11. Send a simple end-to-end request
+
+Send the request to the Scheduler rather than directly to vLLM:
+
+```bash
+curl http://127.0.0.1:7001/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "llama3-70b",
+    "messages": [
+      {
+        "role": "user",
+        "content": "What does CacheRoute reuse to reduce repeated prefill computation?"
+      }
+    ],
+    "temperature": 0,
+    "max_tokens": 64,
+    "stream": false,
+    "RAG": true
+  }'
+```
+
+Inspect the most recent routing decision:
+
+```bash
+curl -sS http://127.0.0.1:7001/debug/strategy | python3 -m json.tool
+```
+
+The expected request path is:
+
+```text
+Client/curl
+  -> Scheduler :7001
+  -> selected Proxy :8001
+  -> Instance :9001
+  -> vLLM + LMCache :8000
+  -> response returned through the same chain
+```
+
+</details>
+
+See [`kdn_server/README.md`](kdn_server/README.md) for detailed knowledge registration and KVCache injection commands, and [`core/README.md`](core/README.md) for multi-machine configuration.
 
 ### Optional: Instance Resource Dashboard
 
