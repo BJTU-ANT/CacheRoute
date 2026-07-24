@@ -1,14 +1,14 @@
 """Serve the CacheRoute web client UI and bridge UI actions to client.py.
 
 This FastAPI app renders the client page, parses curl-like input through the
-existing CLI parser, validates OpenAI-style payloads, and sends requests to the
-Scheduler. It can run standalone or be mounted by another CacheRoute service.
+shared command parser, validates OpenAI-style payloads, and sends requests to
+the Scheduler. It can run standalone or be mounted by another CacheRoute service.
 """
 from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 from pathlib import Path
 
 from fastapi import APIRouter, FastAPI, Request
@@ -16,8 +16,9 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-# Reuse the existing low-level capabilities from client.py.
+# Reuse the existing low-level request and response capabilities from client.py.
 from client import client as client_core
+from client.command_input import parse_curl_like_command
 
 BASE_DIR = Path(__file__).resolve().parent          # .../UI/client_ui
 TEMPLATES_DIR = BASE_DIR / "templates"
@@ -60,17 +61,17 @@ def create_client_ui_app(
     @router.post("/ui/api/parse_curl")
     async def parse_curl(payload: Dict[str, Any]):
         """
-        Input: { "line": "<curl-like line>" }
+        Input: { "line": "<single-line or multiline curl-like command>" }
         Output: { url, headers, body } or error.
         """
-        line = (payload.get("line") or "").strip()
+        line = str(payload.get("line") or "").strip()
         if not line:
-            return JSONResponse(status_code=400, content={"error": "line is empty"})
+            return JSONResponse(status_code=400, content={"error": "command is empty"})
         try:
-            parsed = client_core.parse_cli_line(line)
+            parsed = parse_curl_like_command(line)
             return {"parsed": asdict(parsed)}
-        except Exception as e:
-            return JSONResponse(status_code=400, content={"error": str(e)})
+        except Exception as exc:
+            return JSONResponse(status_code=400, content={"error": str(exc)})
 
     @router.post("/ui/api/validate")
     async def validate_req(payload: Dict[str, Any]):
@@ -86,8 +87,8 @@ def create_client_ui_app(
             )
             errors = client_core.validate_openai_like_request(parsed)
             return {"ok": len(errors) == 0, "errors": errors}
-        except Exception as e:
-            return JSONResponse(status_code=400, content={"ok": False, "errors": [str(e)]})
+        except Exception as exc:
+            return JSONResponse(status_code=400, content={"ok": False, "errors": [str(exc)]})
 
     @router.post("/ui/api/send")
     async def send_req(payload: Dict[str, Any]):
@@ -101,7 +102,7 @@ def create_client_ui_app(
         body = dict(payload.get("body") or {})
 
         # Fill Content-Type in the same way as client.py.
-        if not any(k.lower() == "content-type" for k in headers):
+        if not any(key.lower() == "content-type" for key in headers):
             headers["Content-Type"] = "application/json"
 
         parsed = client_core.ParsedRequest(url=url, headers=headers, body=body)
@@ -112,22 +113,21 @@ def create_client_ui_app(
             return JSONResponse(status_code=400, content={"error": "validation_failed", "errors": errors})
 
         try:
-            resp = client_core.send_request(parsed, timeout=timeout)
-        except Exception as e:
-            return JSONResponse(status_code=500, content={"error": str(e)})
+            response = client_core.send_request(parsed, timeout=timeout)
+        except Exception as exc:
+            return JSONResponse(status_code=500, content={"error": str(exc)})
 
-        out: Dict[str, Any] = {
-            "status_code": resp.status_code,
-            "headers": dict(resp.headers),
-            "body_text": resp.text,
+        output: Dict[str, Any] = {
+            "status_code": response.status_code,
+            "headers": dict(response.headers),
+            "body_text": response.text,
         }
-        # Try to parse the response as JSON.
         try:
-            out["body_json"] = resp.json()
+            output["body_json"] = response.json()
         except Exception:
-            out["body_json"] = None
+            output["body_json"] = None
 
-        return out
+        return output
 
     app.include_router(router)
     return app
@@ -138,9 +138,7 @@ def run_client_ui(
     port: int,
     default_scheduler_url: str,
 ) -> None:
-    """
-    Standalone entry point: python -m UI.client_ui.app.
-    """
+    """Standalone entry point: python -m UI.client_ui.app."""
     import uvicorn
 
     app = create_client_ui_app(default_scheduler_url=default_scheduler_url)
