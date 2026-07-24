@@ -77,7 +77,7 @@ loadExample();
 
 $("btn-parse-curl").addEventListener("click", async () => {
   const line = $("curlLine").value.trim();
-  if (!line) { $("curlParseMsg").textContent = "Please enter one command line"; return; }
+  if (!line) { $("curlParseMsg").textContent = "Please enter a curl-like command"; return; }
 
   const res = await apiPost("/ui/api/parse_curl", { line });
   if (!res.ok) {
