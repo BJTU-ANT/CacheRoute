@@ -37,3 +37,6 @@ tqdm~=4.67.1
 warcio~=1.7.5
 beautifulsoup4~=4.14.3
 Booktype~=1.5
+
+# Testing
+pytest~=9.1.1
