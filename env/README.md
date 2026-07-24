@@ -35,16 +35,34 @@ Rust and Cargo are required only by `instance/resource_agent`. Tkinter is requir
 
 ## 1. Prepare the Host
 
-Install Docker and the NVIDIA container runtime, then verify that Docker can access the GPUs.
+Install Docker Engine first by following the official Docker instructions for the host distribution. Then install and configure the NVIDIA Container Toolkit.
+
+For Ubuntu or Debian:
 
 ```bash
-sudo apt --fix-broken install
-sudo apt install -y docker.io apt-transport-https ca-certificates curl software-properties-common
-sudo apt install -y nvidia-container-runtime
-sudo systemctl restart docker
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends ca-certificates curl gnupg2
 
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
+  sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+
+sudo apt-get update
+sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+```
+
+Verify the host driver and container GPU access:
+
+```bash
 nvidia-smi
-sudo docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi
+sudo docker run --rm --gpus all \
+  nvidia/cuda:12.8.0-base-ubuntu22.04 \
+  nvidia-smi
 ```
 
 ---
@@ -530,7 +548,7 @@ sudo docker inspect -f '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{printl
 To preserve a manually assembled environment temporarily:
 
 ```bash
-sudo docker commit cacheroute-main cacheroute:vllm0.13-lmcache3.11-pytorch2.9.1
+sudo docker commit cacheroute-main cacheroute:local-vllm0.13-lmcache0.3.11-pytorch2.9.1
 ```
 
 `docker commit` is convenient for local snapshots but is not a reproducible build specification. For public releases, preserve system dependencies in a Dockerfile and keep Python application packages in `requirements.txt`.
