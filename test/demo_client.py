@@ -28,21 +28,16 @@ def _ensure_project_root_on_syspath() -> None:
 
 
 def run_cli() -> None:
-    """
-    CLI mode: directly reuse main() from client.py.
-    """
+    """Start the multiline-aware CacheRoute client REPL."""
     _ensure_project_root_on_syspath()
 
-    # If your client module is client/client.py, this import is recommended
-    # - If client/__init__.py already does from .client import *, direct import client also works
-    try:
-        from client.client import run_repl as client_entry  # client/ directory + client.py
-    except Exception:
-        # Fallback: if client.py is placed at the repository root as a non-package module
-        from client import run_repl as client_entry  # type: ignore
+    from client.repl import run_repl
 
-    print("[demo_client] entering REPL... (if you do not see a prompt, press Enter once)", flush=True)
-    client_entry()
+    print(
+        "[demo_client] entering REPL... (if you do not see a prompt, press Enter once)",
+        flush=True,
+    )
+    run_repl()
 
 
 def run_ui(host: str, port: int, scheduler_url: str) -> None:
