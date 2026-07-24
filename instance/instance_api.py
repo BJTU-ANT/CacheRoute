@@ -221,12 +221,17 @@ async def lifespan(app: FastAPI):
     app.state._hb_task = task # type: ignore
 
     resource_monitor = getattr(app.state, "_demo_resource_monitor", None)  # type: ignore
+    dashboard = getattr(app.state, "_demo_dashboard", None)  # type: ignore
     registration_ok = runtime_instance_id == getattr(reg, "instance_id", None) if "reg" in locals() else False
     if resource_monitor is not None:
         if registration_ok:
             await resource_monitor.start_after_registration(runtime_instance_id=runtime_instance_id, stop_event=stop, logger=logger)
         else:
             resource_monitor.skip_after_registration_failure(logger=logger)
+            if dashboard is not None and getattr(dashboard, "enabled", False):
+                await resource_monitor.ensure_agent_for_ui(runtime_instance_id=runtime_instance_id, logger=logger)
+    if dashboard is not None:
+        await dashboard.start(runtime_instance_id=runtime_instance_id, logger=logger)
 
     app.state._topology_task = asyncio.create_task(  # type: ignore
         _run_topology_discovery(client=client, instance_id=runtime_instance_id, logger=logger)
@@ -244,6 +249,12 @@ async def lifespan(app: FastAPI):
             topo_task = getattr(app.state, "_topology_task", None)  # type: ignore
             if topo_task is not None:
                 topo_task.cancel()
+        except Exception:
+            pass
+        try:
+            dashboard = getattr(app.state, "_demo_dashboard", None)  # type: ignore
+            if dashboard is not None:
+                await dashboard.stop(logger=logger)
         except Exception:
             pass
         try:

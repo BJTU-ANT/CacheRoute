@@ -127,6 +127,12 @@ INSTANCE_RESOURCE_REPORT_HZ = 1.0                               # Resource repor
 INSTANCE_RESOURCE_REPORT_INTERVAL_MS = 1000                     # Resource report interval in milliseconds.
 INSTANCE_RESOURCE_REPORT_TIMEOUT_S = 2.0                        # Timeout for sending one resource report.
 
+# Instance browser resource dashboard, disabled by default for backward-compatible demo startup.
+INSTANCE_UI_ENABLE = False                                      # Enable demo_instance.py integrated browser dashboard.
+INSTANCE_UI_LISTEN = "0.0.0.0:9202"                            # Listen address for the integrated Instance resource dashboard.
+INSTANCE_UI_OPEN_BROWSER = False                                # Open a local browser for config/env-enabled UI. Explicit --ui defaults to opening.
+INSTANCE_UI_START_TIMEOUT_S = 5.0                               # Maximum wait time for dashboard readiness.
+
 # ====================================================================#
 #                               Other                                 #
 # ====================================================================#

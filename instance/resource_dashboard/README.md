@@ -245,3 +245,41 @@ POST /api/agent/stop
 - Add richer per-Instance queue and KVCache metrics once they are exported by Instance.
 - Replace `nvidia-smi` polling with a lower-overhead GPU collector such as NVML.
 - Support multi-Instance comparison in one dashboard.
+
+## Integrated Instance Resource Dashboard
+
+`demo_instance.py` can optionally start the browser Resource Dashboard as part of the same Instance process:
+
+```bash
+python3 test/demo_instance.py --ui
+```
+
+With default settings, the Dashboard listens on `0.0.0.0:9202` and the usable local URL printed by the demo is:
+
+```text
+http://127.0.0.1:9202
+```
+
+The listen address `0.0.0.0` means the server accepts connections on all container or host interfaces. For local health checks and browser opening, `demo_instance.py` prints and opens `127.0.0.1` instead because wildcard addresses are not usable browser destinations. In containers without host networking, expose the Dashboard port, for example `-p 9202:9202`.
+
+To choose the Dashboard listen address:
+
+```bash
+python3 test/demo_instance.py \
+  --ui \
+  --ui-listen 0.0.0.0:9202
+```
+
+Explicit `--ui` opens the local default browser after the Dashboard is ready. In headless containers, remote shells, or CI, disable browser opening while still serving the Dashboard:
+
+```bash
+python3 test/demo_instance.py \
+  --ui \
+  --no-ui-open-browser
+```
+
+Use `--no-ui` to disable integrated Dashboard startup entirely, even if `INSTANCE_UI_ENABLE=1` is set. The related environment variables are `INSTANCE_UI_ENABLE`, `INSTANCE_UI_LISTEN`, `INSTANCE_UI_OPEN_BROWSER`, and `INSTANCE_UI_START_TIMEOUT_S`; explicit CLI options take precedence over environment values.
+
+Integrated mode connects the Dashboard to the same Resource Agent listen address and sample interval used by `demo_instance.py`. It always launches `instance/resource_dashboard/dashboard_server.py` with `--no-auto-start`, so `demo_instance.py` remains the only owner of the Resource Agent in the combined workflow. `demo_instance.py` also owns and cleans up only the Dashboard process it starts; if an already reachable Dashboard is reused, it is not terminated on Instance shutdown.
+
+Dashboard startup, readiness, and browser-opening failures are warnings only. They do not stop the Instance; check the `[demo_instance][ui]` log lines for the generated command, readiness timeout or early-exit reason, and bounded stdout/stderr tails.

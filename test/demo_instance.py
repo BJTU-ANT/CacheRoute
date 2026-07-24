@@ -1,5 +1,5 @@
-import uvicorn
 import argparse
+import json
 import os
 import sys
 import asyncio
@@ -8,6 +8,7 @@ import subprocess
 import shutil
 import time
 import urllib.request
+import webbrowser
 from collections import deque
 from pathlib import Path
 
@@ -15,8 +16,18 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.append(str(ROOT_DIR))
 
-from core import config
-from instance.resource_agent.proxy_reporter import report_once
+import importlib.util
+
+_config_spec = importlib.util.spec_from_file_location("cacheroute_core_config", ROOT_DIR / "core" / "config.py")
+config = importlib.util.module_from_spec(_config_spec)
+assert _config_spec.loader is not None
+_config_spec.loader.exec_module(config)
+
+_reporter_spec = importlib.util.spec_from_file_location("cacheroute_proxy_reporter", ROOT_DIR / "instance" / "resource_agent" / "proxy_reporter.py")
+_reporter = importlib.util.module_from_spec(_reporter_spec)
+assert _reporter_spec.loader is not None
+_reporter_spec.loader.exec_module(_reporter)
+report_once = _reporter.report_once
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -32,6 +43,201 @@ def _set_bool_env(name: str, enabled: bool) -> None:
 
 def _interval_from_hz(hz: float) -> int:
     return max(1, int(round(1000.0 / max(float(hz), 0.001))))
+
+
+def parse_listen(value: str) -> tuple[str, int]:
+    raw = (value or "").strip()
+    if raw.startswith("["):
+        end = raw.find("]")
+        if end < 0 or end + 1 >= len(raw) or raw[end + 1] != ":":
+            raise argparse.ArgumentTypeError(f"listen address must be host:port, got {value!r}")
+        host = raw[1:end]
+        port_s = raw[end + 2:]
+    else:
+        if ":" not in raw:
+            raise argparse.ArgumentTypeError(f"listen address must be host:port, got {value!r}")
+        host, port_s = raw.rsplit(":", 1)
+    if not host:
+        host = "0.0.0.0"
+    try:
+        port = int(port_s)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid port in {value!r}") from exc
+    if port <= 0 or port > 65535:
+        raise argparse.ArgumentTypeError(f"port out of range in {value!r}")
+    return host, port
+
+
+def _reachable_host(host: str) -> str:
+    normalized = (host or "").strip().strip("[]")
+    if normalized in {"0.0.0.0", "::", ""}:
+        return "127.0.0.1"
+    return normalized
+
+
+def _url_host(host: str) -> str:
+    if ":" in host and not host.startswith("["):
+        return f"[{host}]"
+    return host
+
+
+def dashboard_url_for_listen(listen: str) -> str:
+    host, port = parse_listen(listen)
+    return f"http://{_url_host(_reachable_host(host))}:{port}"
+
+
+def resolve_ui_options(args: argparse.Namespace) -> argparse.Namespace:
+    env_ui = _env_flag("INSTANCE_UI_ENABLE", config.INSTANCE_UI_ENABLE)
+    ui_enabled = env_ui if args.ui is None else bool(args.ui)
+
+    env_browser = _env_flag("INSTANCE_UI_OPEN_BROWSER", config.INSTANCE_UI_OPEN_BROWSER)
+    if args.ui_open_browser is None:
+        open_browser = True if args.ui is True else env_browser
+    else:
+        open_browser = bool(args.ui_open_browser)
+
+    args.ui_enabled = ui_enabled
+    args.ui_open_browser_resolved = open_browser
+    parse_listen(args.ui_listen)
+    if float(args.ui_start_timeout_s) < 0:
+        raise argparse.ArgumentTypeError("--ui-start-timeout-s must be non-negative")
+    return args
+
+
+class DemoDashboard:
+    """Own browser Dashboard lifecycle for demo_instance.py integrated UI only."""
+
+    def __init__(self, *, enabled: bool, listen: str, open_browser: bool, start_timeout_s: float, agent_listen: str, sample_interval_ms: int) -> None:
+        self.enabled = enabled
+        self.listen = listen
+        self.open_browser = open_browser
+        self.start_timeout_s = float(start_timeout_s)
+        self.agent_listen = agent_listen
+        self.sample_interval_ms = int(sample_interval_ms)
+        self._proc = None
+        self._started_dashboard = False
+        self._stdout_tail: deque[str] = deque(maxlen=20)
+        self._stderr_tail: deque[str] = deque(maxlen=20)
+
+    @property
+    def url(self) -> str:
+        return dashboard_url_for_listen(self.listen)
+
+    def build_command(self, runtime_instance_id: str) -> list[str]:
+        return [
+            sys.executable,
+            str((ROOT_DIR / "instance" / "resource_dashboard" / "dashboard_server.py").resolve()),
+            "--dashboard-listen", self.listen,
+            "--agent-listen", self.agent_listen,
+            "--sample-interval-ms", str(self.sample_interval_ms),
+            "--instance-id", runtime_instance_id,
+            "--no-auto-start",
+        ]
+
+    def _expected_agent_url(self) -> str:
+        return f"http://{self.agent_listen}"
+
+    def _compatible_health_payload(self, payload: dict, runtime_instance_id: str | None = None) -> bool:
+        if payload.get("ok") is not True or payload.get("dashboard") != "ok":
+            return False
+        agent = payload.get("agent")
+        if not isinstance(agent, dict):
+            return False
+        if agent.get("agent_url") != self._expected_agent_url():
+            return False
+        if int(agent.get("sample_interval_ms", -1)) != self.sample_interval_ms:
+            return False
+        if runtime_instance_id is not None and agent.get("instance_id") != runtime_instance_id:
+            return False
+        return True
+
+    def _health_ok(self, timeout_s: float = 0.5, runtime_instance_id: str | None = None) -> bool:
+        try:
+            req = urllib.request.Request(f"{self.url}/api/health", headers={"Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                if not (200 <= int(resp.status) < 300):
+                    return False
+                body = resp.read().decode("utf-8")
+            payload = json.loads(body) if body else {}
+            return isinstance(payload, dict) and self._compatible_health_payload(payload, runtime_instance_id)
+        except Exception:
+            return False
+
+    async def _wait_ready(self, logger, runtime_instance_id: str) -> bool:
+        deadline = time.monotonic() + max(0.0, self.start_timeout_s)
+        while time.monotonic() <= deadline:
+            if await asyncio.to_thread(self._health_ok, 0.5, runtime_instance_id):
+                logger.info("[demo_instance][ui] dashboard ready: %s", self.url)
+                return True
+            if self._proc is not None and self._proc.poll() is not None:
+                return False
+            await asyncio.sleep(0.2)
+        return False
+
+    async def _open_browser(self, logger) -> None:
+        try:
+            ok = await asyncio.to_thread(webbrowser.open, self.url)
+            if not ok:
+                logger.warning("[demo_instance][ui] browser open returned false for %s; use --no-ui-open-browser in headless environments", self.url)
+        except Exception as exc:
+            logger.warning("[demo_instance][ui] browser open failed for %s: %s", self.url, exc)
+
+    async def start(self, *, runtime_instance_id: str, logger) -> None:
+        if not self.enabled:
+            return
+        cmd = self.build_command(runtime_instance_id)
+        if await asyncio.to_thread(self._health_ok, 0.5, runtime_instance_id):
+            logger.info("[demo_instance][ui] reusing compatible reachable Dashboard: %s", self.url)
+            if self.open_browser:
+                await self._open_browser(logger)
+            return
+        logger.info("[demo_instance][ui] starting Dashboard: %s", " ".join(cmd))
+        try:
+            self._proc = subprocess.Popen(cmd, cwd=str(ROOT_DIR), stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
+            self._started_dashboard = True
+        except Exception as exc:
+            logger.warning("[demo_instance][ui] failed to start Dashboard cmd=%s err=%s", " ".join(cmd), exc)
+            return
+        asyncio.create_task(asyncio.to_thread(DemoResourceMonitor._spawn_log_reader, self._proc.stdout, self._stdout_tail))
+        asyncio.create_task(asyncio.to_thread(DemoResourceMonitor._spawn_log_reader, self._proc.stderr, self._stderr_tail))
+        if await self._wait_ready(logger, runtime_instance_id):
+            print(f"[demo_instance] Resource Dashboard URL: {self.url}", flush=True)
+            if self.open_browser:
+                await self._open_browser(logger)
+            return
+        returncode = self._proc.poll() if self._proc is not None else None
+        reason = "exited before readiness" if returncode is not None else f"readiness timeout after {self.start_timeout_s}s"
+        logger.warning(
+            "[demo_instance][ui] Dashboard startup failed: reason=%s cmd=%s returncode=%s stdout_tail=%r stderr_tail=%r",
+            reason, " ".join(cmd), returncode, DemoResourceMonitor._read_tail(self._stdout_tail), DemoResourceMonitor._read_tail(self._stderr_tail),
+        )
+
+    async def stop(self, logger) -> None:
+        if not self._started_dashboard or self._proc is None:
+            return
+        proc = self._proc
+        if proc.poll() is not None:
+            try:
+                await asyncio.to_thread(proc.wait, 0)
+            except Exception:
+                pass
+            self._started_dashboard = False
+            return
+        try:
+            logger.info("[demo_instance][ui] stopping Dashboard process group pid=%s", proc.pid)
+            os.killpg(proc.pid, signal.SIGTERM)
+            await asyncio.to_thread(proc.wait, 3)
+        except subprocess.TimeoutExpired:
+            try:
+                logger.warning("[demo_instance][ui] Dashboard did not stop after SIGTERM; sending SIGKILL pid=%s", proc.pid)
+                os.killpg(proc.pid, signal.SIGKILL)
+                await asyncio.to_thread(proc.wait, 3)
+            except Exception:
+                pass
+        except Exception as exc:
+            logger.debug("[demo_instance][ui] Dashboard cleanup ignored: %s", exc)
+        finally:
+            self._started_dashboard = False
 
 
 class DemoResourceMonitor:
@@ -217,6 +423,12 @@ class DemoResourceMonitor:
         else:
             logger.info("[demo_instance][resource] resource reporting disabled")
 
+    async def ensure_agent_for_ui(self, *, runtime_instance_id: str, logger) -> None:
+        if not self.enabled:
+            logger.warning("[demo_instance][ui] resource monitor disabled; Dashboard will reuse external agent if reachable")
+            return
+        await self._start_or_reuse_agent(runtime_instance_id, logger)
+
     def skip_after_registration_failure(self, logger) -> None:
         if self.enabled:
             logger.warning("[demo_instance][resource] reporting skipped because Instance registration to Proxy failed")
@@ -241,8 +453,7 @@ class DemoResourceMonitor:
             logger.debug("[demo_instance][resource] Resource Agent cleanup ignored: %s", exc)
 
 
-def main():
-    # ====== Start Instance service ======
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run CacheRoute Instance")
     parser.add_argument("--host", type=str, default=None, help="listen host (override config)")
     parser.add_argument("--port", type=int, default=None, help="listen port (override config)")
@@ -334,7 +545,37 @@ def main():
         help="HTTP timeout for resource reporting",
     )
     parser.add_argument("--proxy-cp-url", type=str, default=os.environ.get("PROXY_CP_URL", config.PROXY_CP_URL), help="Proxy control-plane URL for registration/reporting")
-    args = parser.parse_args()
+    parser.add_argument("--ui", dest="ui", action="store_true", default=None, help="auto-start the browser Resource Dashboard")
+    parser.add_argument("--no-ui", dest="ui", action="store_false", help="disable browser Resource Dashboard startup")
+    parser.add_argument(
+        "--ui-listen",
+        type=str,
+        default=os.environ.get("INSTANCE_UI_LISTEN", config.INSTANCE_UI_LISTEN),
+        help="Resource Dashboard listen address (host:port)",
+    )
+    parser.add_argument("--ui-open-browser", dest="ui_open_browser", action="store_true", default=None, help="open the Resource Dashboard URL after readiness")
+    parser.add_argument("--no-ui-open-browser", dest="ui_open_browser", action="store_false", help="do not open a browser for the Resource Dashboard")
+    parser.add_argument(
+        "--ui-start-timeout-s",
+        type=float,
+        default=float(os.environ.get("INSTANCE_UI_START_TIMEOUT_S", config.INSTANCE_UI_START_TIMEOUT_S)),
+        help="seconds to wait for Resource Dashboard readiness",
+    )
+    return parser
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    try:
+        return resolve_ui_options(args)
+    except argparse.ArgumentTypeError as exc:
+        parser.error(str(exc))
+
+
+def main():
+    # ====== Start Instance service ======
+    args = parse_args()
 
     # Defaults come from config/env; command-line values override them
     cfg_port = int(os.environ.get("INSTANCE_PORT", config.INSTANCE_PORT))
@@ -375,6 +616,10 @@ def main():
     os.environ["INSTANCE_RESOURCE_REPORT_HZ"] = str(args.resource_report_hz)
     os.environ["INSTANCE_RESOURCE_REPORT_INTERVAL_MS"] = str(report_interval_ms)
     os.environ["INSTANCE_RESOURCE_REPORT_TIMEOUT_S"] = str(args.resource_report_timeout_s)
+    _set_bool_env("INSTANCE_UI_ENABLE", args.ui_enabled)
+    _set_bool_env("INSTANCE_UI_OPEN_BROWSER", args.ui_open_browser_resolved)
+    os.environ["INSTANCE_UI_LISTEN"] = args.ui_listen
+    os.environ["INSTANCE_UI_START_TIMEOUT_S"] = str(args.ui_start_timeout_s)
 
     if monitor_enabled:
         print(
@@ -386,7 +631,17 @@ def main():
         )
     else:
         print("[demo_instance] resource monitor disabled", flush=True)
+    if args.ui_enabled:
+        print(
+            "[demo_instance] resource dashboard enabled: "
+            f"listen={args.ui_listen} url={dashboard_url_for_listen(args.ui_listen)} "
+            f"open_browser={args.ui_open_browser_resolved} timeout_s={args.ui_start_timeout_s}",
+            flush=True,
+        )
+    else:
+        print("[demo_instance] resource dashboard disabled", flush=True)
 
+    import uvicorn
     from instance import instance
     instance.state._demo_resource_monitor = DemoResourceMonitor(  # type: ignore
         enabled=monitor_enabled,
@@ -399,6 +654,14 @@ def main():
         report_interval_ms=report_interval_ms,
         report_timeout_s=args.resource_report_timeout_s,
         proxy_cp_url=args.proxy_cp_url,
+    )
+    instance.state._demo_dashboard = DemoDashboard(  # type: ignore
+        enabled=args.ui_enabled,
+        listen=args.ui_listen,
+        open_browser=args.ui_open_browser_resolved,
+        start_timeout_s=args.ui_start_timeout_s,
+        agent_listen=args.resource_agent_listen,
+        sample_interval_ms=args.resource_agent_sample_interval_ms,
     )
     uvicorn.run(instance, host=host, port=port, reload=False)
 
