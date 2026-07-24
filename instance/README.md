@@ -1,10 +1,8 @@
 # CacheRoute Instance
 
-The `instance/` directory contains the local serving adapter that sits between the Proxy and a real or mocked LLM backend. An Instance receives OpenAI-compatible requests from the Proxy, exposes a small control plane for KVCache injection, registers itself with the Proxy control plane, and can report local resource snapshots through the Rust Resource Agent demo path.
+The `instance/` directory contains the serving adapter between CacheRoute Proxy and a real or mocked LLM backend. An Instance receives OpenAI-compatible requests, exposes a small control plane for KVCache injection, registers with Proxy, and can optionally run local resource monitoring and a browser Resource Dashboard for debugging.
 
-The Instance is intentionally lightweight: it adapts request/response formats, maintains control-plane connectivity, and delegates model execution to vLLM or a mock backend. It does not choose global routes and it does not own Scheduler-level policy.
-
----
+The Instance remains intentionally lightweight. Global route selection, knowledge placement, and text-versus-KVCache policy belong to Scheduler and Proxy.
 
 ## Role in CacheRoute
 
@@ -16,49 +14,43 @@ Client
               -> vLLM / LMCache / Redis
 ```
 
-The Instance is the last CacheRoute component before the actual inference backend.
+The Instance is responsible for:
 
-It is responsible for:
-
-- exposing OpenAI-compatible service endpoints for the Proxy;
-- forwarding requests to vLLM when real serving is enabled;
-- providing mock responses for local control-plane validation;
-- registering, heartbeating, and unregistering with the local Proxy;
-- exposing an Instance control plane for KVCache injection acknowledgement;
+- serving Proxy-forwarded OpenAI-compatible requests;
+- forwarding to vLLM or returning mock responses;
+- registering, heartbeating, and unregistering with Proxy;
+- exposing KVCache injection acknowledgement APIs;
 - optionally probing Instance-to-KDN topology;
-- running demo-managed resource monitoring through the Rust Resource Agent path.
+- optionally starting or reusing the Rust Resource Agent;
+- optionally starting the browser Resource Dashboard;
+- cleaning up only the Agent and Dashboard processes started by the demo process.
 
 It is not responsible for:
 
-- choosing the target Proxy;
-- selecting KDN servers;
-- deciding text vs KVCache injection policy;
-- resource-aware Instance selection inside the Proxy.
+- choosing a target Proxy or KDN;
+- selecting an injection strategy;
+- global or local resource-aware scheduling policy.
 
-Those decisions live in Scheduler and Proxy layers.
-
----
-
-## Directory Structure
+## Directory structure
 
 ```text
 instance/
 ├── README.md
-├── instance_api.py                  # Instance service plane and startup lifecycle
-├── control_plane.py                 # Instance control-plane API for KVCache injection
-├── kv_service.py                    # KVCache injection / reuse helper logic
-├── mock_resp.py                     # Mock OpenAI-compatible responses for local testing
+├── instance_api.py                  # service plane and FastAPI lifespan
+├── control_plane.py                 # KVCache injection control plane
+├── kv_service.py                    # KVCache injection/reuse helpers
+├── mock_resp.py                     # mock OpenAI-compatible responses
 ├── pclient/
 │   └── proxy_client.py              # Instance -> Proxy control-plane client
 ├── resource_agent/
 │   ├── README.md
 │   ├── Cargo.toml
-│   ├── proxy_reporter.py            # Standalone snapshot reporter and shared report helper
-│   └── src/main.rs                  # Native Rust Resource Agent
+│   ├── proxy_reporter.py
+│   └── src/main.rs
 ├── resource_dashboard/
 │   ├── README.md
-│   ├── dashboard_app.py             # Tkinter local dashboard
-│   ├── dashboard_server.py          # Browser dashboard fallback
+│   ├── dashboard_app.py             # Tkinter desktop mode
+│   ├── dashboard_server.py          # browser mode
 │   └── static/
 └── TTFT_predictor/
     ├── WORKFLOW.md
@@ -68,119 +60,71 @@ instance/
     └── request_generator.py
 ```
 
----
+## Runtime planes and default ports
 
-## Runtime Planes
-
-The Instance has two HTTP planes.
-
-| Plane | Default Port | Main File | Purpose |
-|---|---:|---|---|
-| Service plane | `9001` | `instance_api.py` | Receives Proxy-forwarded OpenAI-compatible inference requests. |
-| Control plane | `9002` | `control_plane.py` | Receives KVCache injection notifications and local control requests. |
-
-The Rust Resource Agent is a separate demo-owned sidecar, not part of the normal request path.
-
-| Component | Default Port | Purpose |
+| Component | Default port | Purpose |
 |---|---:|---|
-| Rust Resource Agent | `9201` | Exposes CPU, memory, network, GPU, and admission-state snapshots. |
-| Resource Dashboard server | `9202` | Browser dashboard for local inspection. |
+| Instance service plane | `9001` | OpenAI-compatible inference endpoints. |
+| Instance control plane | `9002` | KVCache injection notifications and control requests. |
+| Rust Resource Agent | `9201` | CPU, memory, network, GPU, and admission-state snapshots. |
+| Browser Resource Dashboard | `9202` | Local browser observability UI. |
 
----
+The Resource Agent and Dashboard are auxiliary demo-owned processes. They are not in the inference request path.
 
-## Service Plane
+## Service plane
 
-`instance_api.py` exposes OpenAI-compatible endpoints:
+`instance_api.py` exposes:
 
 ```text
 POST /v1/chat/completions
 POST /v1/completions
 ```
 
-The Proxy forwards requests to these endpoints after knowledge preparation and Instance selection.
+When `USE_MOCK=True`, responses come from `mock_resp.py`. In real serving mode, the Instance forwards requests to the configured vLLM-compatible endpoint.
 
-### Chat completion
+## Startup lifecycle
 
-For `POST /v1/chat/completions`, the Instance supports both streaming and non-streaming behavior.
-
-When `USE_MOCK=True`, it returns mock responses from `mock_resp.py`. When real vLLM mode is enabled, it forwards the body to:
-
-```text
-<VLLM_BASE_URL>/v1/chat/completions
-```
-
-and streams or returns the upstream response.
-
-### Completion
-
-For `POST /v1/completions`, the Instance follows the same adapter pattern and forwards to the vLLM-compatible completion endpoint when mock mode is disabled.
-
----
-
-## Startup Lifecycle
-
-A normal demo startup uses `test/demo_instance.py`, which sets environment variables and then imports `instance.instance_api`.
+A normal demo startup uses `test/demo_instance.py`:
 
 ```text
 demo_instance.py
-  -> resolve CLI/env/config
-  -> set INSTANCE_ADVERTISE_HOST / INSTANCE_ADVERTISE_PORT
-  -> create DemoResourceMonitor if enabled
-  -> import instance_api
-  -> uvicorn.run(instance)
+  -> resolve CLI > environment > config/default values
+  -> set advertised Instance host, port, and runtime Instance ID
+  -> construct DemoResourceMonitor
+  -> construct DemoDashboard when UI is enabled
+  -> import the Instance FastAPI app
+  -> run Uvicorn
 ```
 
-During the FastAPI lifespan in `instance_api.py`, the Instance performs:
+During the FastAPI lifespan, `instance_api.py` performs:
 
 ```text
 Instance lifespan
-  -> start local Instance control plane
-  -> register with Proxy control plane
-  -> start heartbeat loop
-  -> start demo resource monitoring after successful registration
-  -> optionally run Instance-to-KDN topology discovery
+  -> start the local Instance control plane
+  -> attempt Proxy registration
+  -> start heartbeat handling
+  -> if registration succeeds:
+       start/reuse Resource Agent
+       start resource reporting when enabled
+  -> if registration fails and UI is enabled:
+       start/reuse the local Resource Agent for Dashboard use
+       skip Proxy resource reporting
+  -> start the Dashboard when enabled
+  -> optionally start topology discovery
   -> serve requests
-  -> on shutdown: stop heartbeat, unregister, close client, stop control plane, clean demo-owned agent
+  -> shutdown:
+       stop Dashboard
+       stop resource reporting
+       stop only the demo-owned Resource Agent
+       stop heartbeat/control-plane tasks and close clients
 ```
 
-The registration target is configured by:
+Important behavior:
 
-```text
-PROXY_CP_URL = http://127.0.0.1:8002
-```
-
-The advertised Instance address is controlled by:
-
-```text
-INSTANCE_ADVERTISE_HOST
-INSTANCE_ADVERTISE_PORT
-```
-
-`test/demo_instance.py` keeps the advertised address aligned with the actual bind address by default.
-
----
-
-## Proxy Registration and Heartbeat
-
-The Instance uses `instance/pclient/proxy_client.py` to call the Proxy control plane.
-
-Registration:
-
-```text
-POST /v1/instance/register
-```
-
-Heartbeat:
-
-```text
-POST /v1/instance/heartbeat
-```
-
-Unregister:
-
-```text
-POST /v1/instance/unregister
-```
+- Dashboard startup is **not gated on successful Proxy registration**.
+- Resource reporting to Proxy still requires a successfully registered Instance.
+- Dashboard, browser-opening, and Agent startup failures are logged as warnings and do not abort the Instance whenever local serving can continue.
+- Integrated Dashboard mode always passes `--no-auto-start` to `dashboard_server.py`, so `demo_instance.py` remains the Resource Agent lifecycle owner.
 
 The default runtime Instance ID is:
 
@@ -194,99 +138,9 @@ For example:
 hp_127.0.0.1:9001
 ```
 
-If Proxy registration fails, the Instance service can keep running for local debugging, but resource reporting to Proxy is skipped because the Proxy would reject reports from an unknown Instance.
+## Quick start
 
----
-
-## KVCache Injection Control Plane
-
-The Instance control plane is started automatically during `instance_api.py` lifespan.
-
-The Proxy uses this path when it decides to use KVCache injection. The high-level flow is:
-
-```text
-Proxy prepare queue
-  -> classify knowledge as kv_ready / text_only / miss
-  -> reserve KDN-to-Instance KV transfer
-  -> call Instance control plane
-      POST /v1/kv/inject_ready
-  -> wait for acknowledgement
-  -> move task to ready queue
-  -> forward request to Instance service plane
-```
-
-The Instance control plane receives metadata such as:
-
-```text
-request_id
-kdn_addr
-model
-knowledge_ids
-```
-
-`kv_service.py` contains the local helper logic for KVCache injection / reuse behavior. The exact Redis and LMCache behavior depends on the runtime environment and the downstream vLLM + LMCache setup.
-
----
-
-## Resource Monitoring Path
-
-The current resource-monitoring path was added for demo observability and later scheduling integration.
-
-The demo path is:
-
-```text
-test/demo_instance.py
-  -> start or reuse Rust Resource Agent
-  -> wait for /healthz
-  -> after Proxy registration succeeds, periodically fetch /v1/resource/snapshot
-  -> report snapshot to Proxy control plane
-  -> Proxy stores normalized fields in InstancePool.resource
-```
-
-Proxy-side APIs for inspection:
-
-```bash
-curl -sS "http://127.0.0.1:8002/debug/instance_resources" | python3 -m json.tool
-curl -sS "http://127.0.0.1:8002/v1/instance/list?include_dead=true" | python3 -m json.tool
-```
-
-The resource snapshot currently includes:
-
-- CPU utilization and load averages;
-- memory used/free/total;
-- network RX/TX throughput;
-- optional GPU utilization, memory, temperature, and power;
-- admission-state hints;
-- collection and reporting timestamps.
-
-The Proxy stores resource data for observation only. It does not yet use these fields for Instance selection.
-
-### Resource report metadata
-
-`proxy_reporter.py` includes report metadata so the Proxy can distinguish fresh data from stale data:
-
-```text
-reported_instance_id
-report_monotonic_ms
-report_wall_time_ms
-agent_snapshot_timestamp_ms
-```
-
-The Proxy normalizes these into `InstancePool.resource` fields such as:
-
-```text
-resource_ts_ms
-resource_reported_at
-resource_report_monotonic_ms
-resource_report_wall_time_ms
-reported_instance_id
-```
-
----
-
-## Quick Start
-
-Start the Proxy first:
+Start Proxy first when registration and resource reporting are part of the test:
 
 ```bash
 cd test
@@ -297,7 +151,7 @@ python3 demo_proxy.py \
   --injection-strategy iws
 ```
 
-Start one Instance:
+Start an Instance without the Dashboard:
 
 ```bash
 cd test
@@ -307,34 +161,76 @@ python3 demo_instance.py \
   --proxy-cp-url http://127.0.0.1:8002
 ```
 
-By default, `demo_instance.py` enables resource monitoring for the demo path. It starts or reuses the Rust Resource Agent at `127.0.0.1:9201`, waits for readiness, and starts reporting only after Proxy registration succeeds.
+Start the Instance and browser Resource Dashboard with one command:
 
-Disable resource monitoring when needed:
+```bash
+cd test
+python3 demo_instance.py \
+  --host 127.0.0.1 \
+  --port 9001 \
+  --proxy-cp-url http://127.0.0.1:8002 \
+  --ui
+```
+
+The default Dashboard URL is:
+
+```text
+http://127.0.0.1:9202
+```
+
+For SSH sessions, containers, CI, or machines without a usable local browser:
 
 ```bash
 python3 demo_instance.py \
   --host 127.0.0.1 \
   --port 9001 \
-  --proxy-cp-url http://127.0.0.1:8002 \
-  --no-resource-monitor
+  --ui \
+  --no-ui-open-browser
 ```
 
-Use a non-default Resource Agent port:
+`--no-ui-open-browser` does **not** disable the Dashboard. It only disables the call that opens a browser automatically. Open the printed URL manually.
+
+Disable the integrated Dashboard completely with:
 
 ```bash
-python3 demo_instance.py \
-  --host 127.0.0.1 \
-  --port 9001 \
-  --proxy-cp-url http://127.0.0.1:8002 \
-  --resource-agent-listen 127.0.0.1:19201 \
-  --resource-agent-url http://127.0.0.1:19201
+python3 demo_instance.py --no-ui
 ```
 
----
+## Remote and container access
+
+### SSH port forwarding
+
+When the Instance runs on a remote host and the Dashboard listens on loopback:
+
+```bash
+ssh -L 9202:127.0.0.1:9202 user@server
+```
+
+Then open locally:
+
+```text
+http://127.0.0.1:9202
+```
+
+### Docker without host networking
+
+Publish the Dashboard port:
+
+```bash
+-p 9202:9202
+```
+
+and listen on all container interfaces:
+
+```bash
+--ui-listen 0.0.0.0:9202
+```
+
+A wildcard listen address is converted to `127.0.0.1` only for the local health-check and browser URL. The server still listens on `0.0.0.0`.
 
 ## Configuration
 
-Most defaults are defined in `core/config.py`.
+Defaults are defined in `core/config.py`.
 
 Common Instance settings:
 
@@ -363,11 +259,18 @@ INSTANCE_RESOURCE_REPORT_INTERVAL_MS = 1000
 INSTANCE_RESOURCE_REPORT_TIMEOUT_S = 2.0
 ```
 
-`demo_instance.py` enables reporting when resource monitoring is enabled, even though the base config keeps `INSTANCE_RESOURCE_REPORT_ENABLE=False` to avoid surprising non-demo imports.
+Integrated Dashboard settings:
 
----
+```python
+INSTANCE_UI_ENABLE = False
+INSTANCE_UI_LISTEN = "0.0.0.0:9202"
+INSTANCE_UI_OPEN_BROWSER = False
+INSTANCE_UI_START_TIMEOUT_S = 5.0
+```
 
-## CLI Options in `demo_instance.py`
+Environment variables use the same names. Explicit command-line options override environment values, which override config/default values.
+
+## `demo_instance.py` CLI
 
 Common options:
 
@@ -375,29 +278,121 @@ Common options:
 |---|---|
 | `--host` | Instance service-plane bind host. |
 | `--port` | Instance service-plane bind port. |
-| `--proxy-cp-url` | Proxy control-plane URL for registration and resource reporting. |
-| `--kdn-targets` | Optional KDN targets for topology discovery. |
+| `--proxy-cp-url` | Proxy control-plane URL. |
+| `--kdn-targets` | Optional KDN topology-discovery targets. |
 
 Resource-monitoring options:
 
 | Option | Description |
 |---|---|
-| `--resource-monitor` / `--no-resource-monitor` | Enable or disable the full demo resource monitor path. |
-| `--resource-agent` / `--no-resource-agent` | Auto-start or do not auto-start the Rust Resource Agent. |
-| `--resource-report` / `--no-resource-report` | Enable or disable resource reporting to Proxy. |
-| `--resource-agent-listen` | Rust agent listen address, such as `127.0.0.1:9201`. |
-| `--resource-agent-url` | Base URL used by the reporter. |
-| `--resource-agent-sample-interval-ms` | Rust agent sampling interval. |
-| `--resource-agent-start-timeout-s` | Time to wait for `/healthz`. |
-| `--resource-report-hz` | Report frequency when interval is not explicitly set. |
-| `--resource-report-interval-ms` | Explicit report interval. Overrides Hz. |
-| `--resource-report-timeout-s` | HTTP timeout for snapshot fetch and Proxy report. |
+| `--resource-monitor` / `--no-resource-monitor` | Enable or disable the demo resource-monitor path. |
+| `--resource-agent` / `--no-resource-agent` | Enable or disable automatic Rust Agent startup. |
+| `--resource-report` / `--no-resource-report` | Enable or disable Proxy resource reporting. |
+| `--resource-agent-listen` | Resource Agent listen address. |
+| `--resource-agent-url` | Resource Agent base URL used by the reporter. |
+| `--resource-agent-sample-interval-ms` | Agent sample interval. |
+| `--resource-agent-start-timeout-s` | Agent readiness timeout. |
+| `--resource-report-hz` | Report frequency when no explicit interval is set. |
+| `--resource-report-interval-ms` | Explicit report interval; overrides Hz. |
+| `--resource-report-timeout-s` | Snapshot/report HTTP timeout. |
 
----
+Dashboard options:
 
-## Resource Agent Standalone Mode
+| Option | Description |
+|---|---|
+| `--ui` / `--no-ui` | Enable or disable integrated browser Dashboard startup. |
+| `--ui-listen` | Dashboard listen address, for example `0.0.0.0:9202`. |
+| `--ui-open-browser` / `--no-ui-open-browser` | Enable or disable automatic browser opening. |
+| `--ui-start-timeout-s` | Dashboard readiness timeout. |
 
-The Rust agent can still be run manually:
+Explicit `--ui` enables browser opening by default unless `--no-ui-open-browser` is also supplied. UI enabled only through environment/config uses `INSTANCE_UI_OPEN_BROWSER`.
+
+## Validate the integrated Dashboard
+
+Keep `demo_instance.py` running and use another terminal:
+
+```bash
+curl -fsS http://127.0.0.1:9202/api/health | python3 -m json.tool
+curl -fsS http://127.0.0.1:9202/ | head
+curl -fsS http://127.0.0.1:9201/healthz | python3 -m json.tool
+```
+
+The Dashboard health response should identify the same Agent configuration and runtime Instance ID used by `demo_instance.py`, for example:
+
+```json
+{
+  "ok": true,
+  "dashboard": "ok",
+  "agent": {
+    "agent_url": "http://127.0.0.1:9201",
+    "sample_interval_ms": 1000,
+    "instance_id": "hp_127.0.0.1:9001"
+  }
+}
+```
+
+Check the managed Dashboard command:
+
+```bash
+pgrep -af 'resource_dashboard/dashboard_server.py'
+```
+
+Integrated mode should include:
+
+```text
+--no-auto-start
+```
+
+On `Ctrl+C`, the Dashboard should stop before the demo-owned Resource Agent is cleaned up.
+
+## Proxy registration and resource reporting
+
+The Instance calls the Proxy control plane through `instance/pclient/proxy_client.py`:
+
+```text
+POST /v1/instance/register
+POST /v1/instance/heartbeat
+POST /v1/instance/unregister
+```
+
+The demo Resource Agent path is:
+
+```text
+test/demo_instance.py
+  -> start or reuse Rust Resource Agent
+  -> wait for /healthz
+  -> fetch /v1/resource/snapshot
+  -> after successful Proxy registration, report to:
+       Proxy /v1/instance/resource_snapshot
+```
+
+Inspect Proxy-side state with:
+
+```bash
+curl -sS http://127.0.0.1:8002/debug/instance_resources | python3 -m json.tool
+curl -sS 'http://127.0.0.1:8002/v1/instance/list?include_dead=true' | python3 -m json.tool
+```
+
+The Proxy currently stores this resource data for observation; it is not yet used for Instance selection.
+
+## KVCache injection control plane
+
+The Instance control plane receives KVCache injection notifications from Proxy. The high-level path is:
+
+```text
+Proxy prepare queue
+  -> classify knowledge
+  -> reserve KDN-to-Instance transfer
+  -> POST /v1/kv/inject_ready
+  -> wait for acknowledgement
+  -> forward the request to the Instance service plane
+```
+
+`kv_service.py` contains local KVCache injection/reuse helpers. Actual Redis, LMCache, and vLLM behavior depends on the deployment environment.
+
+## Standalone Resource Agent and Dashboard modes
+
+The Rust Agent can be started manually:
 
 ```bash
 cargo run --manifest-path instance/resource_agent/Cargo.toml -- \
@@ -406,73 +401,28 @@ cargo run --manifest-path instance/resource_agent/Cargo.toml -- \
   --instance-id hp_127.0.0.1:9001
 ```
 
-Validate it directly:
+The Dashboard also has standalone browser and Tkinter desktop modes. Use them for component-level debugging; use `demo_instance.py --ui` for normal integrated demos. See [`resource_dashboard/README.md`](resource_dashboard/README.md).
+
+Tkinter is required only for `dashboard_app.py`. The browser Dashboard and `demo_instance.py --ui` do not require Tkinter or X11.
+
+## TTFT predictor
+
+`instance/TTFT_predictor/` contains an experimental prefill/TTFT prediction subsystem. It is separate from the Resource Agent path:
+
+- Resource Agent observes host and device state.
+- TTFT predictor estimates model prefill latency.
+
+See `instance/TTFT_predictor/WORKFLOW.md` for call paths and warmup behavior.
+
+## Tests
+
+Focused integrated-Dashboard tests:
 
 ```bash
-curl -sS http://127.0.0.1:9201/healthz
-curl -sS http://127.0.0.1:9201/v1/resource/snapshot | python3 -m json.tool
+python3 -m pytest -q test/test_demo_instance_ui.py
 ```
 
-The standalone Python reporter remains available:
-
-```bash
-python3 instance/resource_agent/proxy_reporter.py \
-  --agent-url http://127.0.0.1:9201 \
-  --proxy-cp-url http://127.0.0.1:8002 \
-  --instance-id hp_127.0.0.1:9001 \
-  --once
-```
-
----
-
-## Resource Dashboard
-
-For local resource visualization, use:
-
-```text
-instance/resource_dashboard/
-```
-
-Two dashboard modes are available:
-
-| Mode | File | Use case |
-|---|---|---|
-| Desktop | `dashboard_app.py` | Local machine with a GUI display. |
-| Browser | `dashboard_server.py` | Containers, remote machines, and headless servers. |
-
-The dashboard is a local observability tool. It can start or connect to the Rust Resource Agent, but it is separate from Proxy resource reporting.
-
----
-
-## TTFT Predictor
-
-`instance/TTFT_predictor/` contains an experimental TTFT / prefill prediction subsystem.
-
-Main files:
-
-| File | Purpose |
-|---|---|
-| `prefill_regressor.py` | Collects warmup samples and fits the regression model. |
-| `prefill_predictor.py` | Provides async prediction and online update helpers. |
-| `prefill_prediction_server.py` | Exposes the predictor as a FastAPI service. |
-| `request_generator.py` | Generates prompts of target token lengths for warmup. |
-| `WORKFLOW.md` | Describes predictor call paths and warmup workflow. |
-
-The simplified model is based on features such as:
-
-```text
-batch_size * prompt_length
-prompt_length
-batch_size
-```
-
-This predictor is separate from the Resource Agent path. The Resource Agent observes host/device state; the TTFT predictor estimates model prefill latency.
-
----
-
-## End-to-End Resource Monitor Smoke Test
-
-Run:
+End-to-end resource-monitor smoke test:
 
 ```bash
 python3 test/demo_resource_monitor_e2e.py \
@@ -480,82 +430,55 @@ python3 test/demo_resource_monitor_e2e.py \
   --agent-url http://127.0.0.1:19201
 ```
 
-The script starts `demo_proxy.py` and `demo_instance.py`, waits until the Proxy observes resource reports, terminates the Instance, and checks that the demo-owned Resource Agent is no longer reachable.
-
-Use a non-default agent port to avoid accidentally reusing an already running agent on `9201`.
-
----
+Use non-default ports to avoid reusing stale Agent or Dashboard processes.
 
 ## Troubleshooting
 
-### Proxy shows `unknown_instance`
+### Dashboard starts but no window appears
 
-Start the Proxy before the Instance:
+- `--no-ui-open-browser` intentionally suppresses automatic browser opening.
+- Root users, containers, SSH sessions, and headless servers may not have a usable browser even with `--ui`.
+- Open the printed URL manually or use SSH port forwarding.
 
-```bash
-python3 test/demo_proxy.py --host 127.0.0.1 --port 8001
-python3 test/demo_instance.py --host 127.0.0.1 --port 9001 --proxy-cp-url http://127.0.0.1:8002
-```
+### Proxy registration fails
 
-Also check for stale demo processes or containers that still send heartbeat messages with old `INSTANCE_ID` values.
+The Instance and local Dashboard may continue running. Proxy resource reporting is skipped until the Instance can register successfully.
 
-### `cargo: command not found`
+### Port `9201` or `9202` is already in use
 
-Install Rust/Cargo or use the CacheRoute development image that includes Rust.
-
-### Resource Agent fails with Cargo lockfile errors
-
-Use a recent stable Rust toolchain:
-
-```bash
-rustup update stable
-rustup default stable
-```
-
-Avoid mixing root-owned build artifacts and non-root cargo commands. If needed, remove the Rust build directory:
-
-```bash
-rm -rf instance/resource_agent/target
-```
-
-### Port `9201` is already in use
-
-Use another agent port:
+Choose alternate ports:
 
 ```bash
 python3 test/demo_instance.py \
   --resource-agent-listen 127.0.0.1:19201 \
-  --resource-agent-url http://127.0.0.1:19201
+  --resource-agent-url http://127.0.0.1:19201 \
+  --ui \
+  --ui-listen 127.0.0.1:19202
 ```
+
+### `cargo: command not found`
+
+Install a recent stable Rust/Cargo toolchain or use the CacheRoute development image that includes Rust.
 
 ### GPU list is empty
 
-Check whether the process can run:
+Run `nvidia-smi` and confirm Docker was started with GPU access such as `--gpus all`.
 
-```bash
-nvidia-smi
-```
+## Current status
 
-Inside Docker, make sure the container was started with GPU access, for example `--gpus all`.
+Implemented:
 
----
-
-## Current Status
-
-Completed:
-
-- Instance service-plane adapter for Proxy-forwarded OpenAI-compatible requests.
-- Instance control-plane registration and heartbeat with Proxy.
-- KVCache injection control-plane path.
-- Demo-managed Rust Resource Agent startup and cleanup.
-- Resource snapshot reporting to Proxy after registration.
-- Proxy-side resource inspection APIs.
-- Local dashboard tools for resource snapshots.
-- Experimental TTFT prediction subsystem.
+- Instance service and control planes;
+- Proxy registration and heartbeat;
+- KVCache injection signalling;
+- demo-managed Resource Agent startup, reuse, reporting, and cleanup;
+- optional integrated browser Resource Dashboard;
+- Dashboard identity/configuration validation before reuse;
+- experimental TTFT prediction.
 
 Not yet implemented:
 
-- resource-aware Instance selection strategy in Proxy;
+- resource-aware Proxy Instance selection;
 - detailed vLLM runtime queue metrics;
 - detailed KVCache block residency metrics;
 - lower-overhead GPU collection through NVML or a similar API.
