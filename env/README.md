@@ -1,123 +1,148 @@
 # Environment Setup
 
-This document describes the environment used to run CacheRoute with vLLM, LMCache, Redis, CUDA GPUs, and the optional Instance Resource Agent/Dashboard.
+This document describes the full CacheRoute environment with CUDA GPUs, vLLM, LMCache, Redis, and the optional Instance Resource Agent/Dashboard.
 
-CacheRoute can run a lightweight mock demo without a full LLM serving stack. This document is for the full deployment path, where vLLM + LMCache are built and used as the backend inference engine.
+CacheRoute supports two environment paths:
+
+1. **Existing complete image:** create a new experiment container from an image that already contains PyTorch, vLLM, and LMCache. This is the recommended path for repeated experiments.
+2. **Source-build path:** build the provided CUDA base image, install PyTorch, build vLLM and LMCache, and then preserve the resulting environment in a derived image.
+
+Do not mix the two paths. In particular, do not reinstall a different PyTorch build over a working vLLM/LMCache image.
 
 ---
 
 ## Tested Environment
 
-CacheRoute has been tested with the following environment:
-
-| Component | Version |
+| Component | Tested version |
 |---|---|
-| OS | Ubuntu 22.04.5 Jammy |
+| Host OS | Ubuntu 22.04.5 Jammy |
 | Docker | 28.2.2 |
-| CUDA | 13.0 |
-| NVIDIA Driver | 580.95.05 |
+| NVIDIA driver | 580.95.05 |
+| Container CUDA toolkit | 12.8 |
 | PyTorch | 2.9.1 |
 | vLLM | 0.13.x |
-| LMCache | 0.3.x |
+| LMCache | 0.3.11 |
 | Python | 3.12.x |
-| Rust | stable toolchain |
-| Tkinter | `python3.12-tk` for the optional desktop dashboard |
+| Redis | 7 |
+| Rust | Stable toolchain, optional |
+| Tkinter | `python3.12-tk`, optional |
 
-The exact versions can be adjusted, but the vLLM, LMCache, CUDA, PyTorch, and driver versions should be kept compatible.
+The host driver may be newer than the CUDA toolkit in the container, but the driver, CUDA, PyTorch, vLLM, and LMCache versions must remain mutually compatible.
 
-Rust is required only for the native Instance Resource Agent under `instance/resource_agent`. Tkinter is required only when using the local desktop dashboard under `instance/resource_dashboard/dashboard_app.py`.
+Rust and Cargo are required only by `instance/resource_agent`. Tkinter is required only by the desktop dashboard at `instance/resource_dashboard/dashboard_app.py`. The browser dashboard does not require Tkinter or a graphical display.
 
 ---
 
-## Workspace Layout
+## 1. Prepare the Host
 
-CacheRoute assumes a shared workspace for source code, models, cache files, and logs.
+Install Docker Engine first by following the official Docker instructions for the host distribution. Then install and configure the NVIDIA Container Toolkit.
 
-A recommended layout is:
+For Ubuntu or Debian:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends ca-certificates curl gnupg2
+
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | \
+  sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+  sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+  sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+
+sudo apt-get update
+sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+```
+
+Verify the host driver and container GPU access:
+
+```bash
+nvidia-smi
+sudo docker run --rm --gpus all \
+  nvidia/cuda:12.8.0-base-ubuntu22.04 \
+  nvidia-smi
+```
+
+---
+
+## 2. Create the Workspace
+
+CacheRoute uses one host directory for source code, models, cache data, logs, and configuration. The examples in this repository use `/llm-stack` on the host and mount it at `/workspace/llm-stack` in the container.
 
 ```text
 /llm-stack/
-├── src/                         # vLLM, LMCache, and CacheRoute source code
-├── models/                      # local model files
+├── CacheRoute/
+├── vllm/
+├── LMCache/
+├── models/
+├── config/
 ├── cache/
 │   ├── hf/
 │   ├── torch/
 │   └── lmcache/
-│       └── local_disk/
-├── logs/
-└── docker/
+├── lmcache-data/
+└── logs/
 ```
 
-Create the workspace:
+Create the workspace and clone the repositories:
 
 ```bash
-sudo mkdir -p /llm-stack
-sudo mkdir -p /llm-stack/{src,models,cache/{hf,torch,lmcache/local_disk},logs,docker}
-```
+sudo mkdir -p /llm-stack/{models,config,cache/{hf,torch,lmcache},lmcache-data,logs}
+sudo chown -R "$USER":"$USER" /llm-stack
 
-Clone the required repositories:
-
-```bash
-cd /llm-stack/src
-
+cd /llm-stack
+git clone https://github.com/AstraNetLab/CacheRoute.git
 git clone https://github.com/vllm-project/vllm.git
 git clone https://github.com/LMCache/LMCache.git
-git clone https://github.com/BJTU-ANT/CacheRoute.git
 ```
 
----
-
-## Docker Setup
-
-### Install Docker
-
-```bash
-sudo apt --fix-broken install
-sudo apt install docker.io
-sudo apt install apt-transport-https ca-certificates curl software-properties-common
-```
-
-### Install NVIDIA container runtime
-
-```bash
-sudo apt install nvidia-container-runtime
-sudo systemctl restart docker
-```
-
-Check whether the GPU is visible on the host:
-
-```bash
-nvidia-smi
-```
-
----
-
-## Build the Base Docker Image
-
-CacheRoute provides a Dockerfile under:
+The resulting CacheRoute path is:
 
 ```text
-CacheRoute/env/docker/Dockerfile
+Host:      /llm-stack/CacheRoute
+Container: /workspace/llm-stack/CacheRoute
 ```
 
-Build the base CUDA image:
+---
+
+## 3. Choose an Image Path
+
+### Path A: Use an existing complete image
+
+For repeated CacheRoute experiments, use an image that already contains the compatible PyTorch, vLLM, and LMCache stack. The examples below use:
+
+```text
+cacheroute:vllm0.13-lmcache3.11-pytorch2.9.1
+```
+
+The image tag uses `lmcache3.11` as a compact label; the corresponding LMCache package version is `0.3.11`.
+
+Skip the source-build sections when using this image.
+
+### Path B: Build the provided base image
+
+The repository Dockerfile installs CUDA development dependencies, Python 3.12, Rust/Cargo, and `python3.12-tk`. It does not install the final PyTorch, vLLM, and LMCache stack.
 
 ```bash
-cd /llm-stack/src/CacheRoute/env/docker
+cd /llm-stack/CacheRoute/env/docker
 sudo docker build -t basic-cu128 .
 ```
 
-The Dockerfile installs the Rust stable toolchain for the Instance Resource Agent and `python3.12-tk` for the optional desktop dashboard. The image name can be changed according to your local environment. Make sure the CUDA version in the image matches your driver and PyTorch version.
+After creating a container from `basic-cu128`, follow the source-build sections below.
 
 ---
 
-## Start the Development Container
+## 4. Create the CacheRoute Container
 
-Create a container for building and running vLLM + LMCache:
+### 4.1 Headless or browser-dashboard mode
+
+This mode is sufficient for vLLM, LMCache, Redis, the CacheRoute services, and the browser dashboards.
 
 ```bash
 sudo docker run --gpus all -it \
-  --name cacheroute-dev \
+  --name cacheroute-main \
   --network host \
   --ipc=host \
   --shm-size=64g \
@@ -127,103 +152,118 @@ sudo docker run --gpus all -it \
   --memory-swap=0 \
   -v /llm-stack:/workspace/llm-stack \
   -w /workspace/llm-stack \
-  basic-cu128 bash
+  cacheroute:vllm0.13-lmcache3.11-pytorch2.9.1 \
+  bash
 ```
 
-Useful options:
+`--network host` exposes services directly on the host network, so `-p` port mappings are redundant. If host networking is not used, explicitly publish the required ports, such as `8000`, `7001`, `8202`, and `9202`.
 
-| Option | Description |
-|---|---|
-| `--gpus all` | Exposes all host GPUs to the container. |
-| `--network host` | Uses host networking, which simplifies multi-service communication and exposes the dashboard at `127.0.0.1:9202`. |
-| `--ipc=host` | Shares IPC namespace with the host. |
-| `--shm-size=64g` | Provides enough shared memory for large-model serving. |
-| `--ulimit memlock=-1` | Allows memory locking. |
-| `-v /llm-stack:/workspace/llm-stack` | Mounts the workspace into the container. |
+### 4.2 Optional Tkinter desktop-dashboard mode
 
-If the container does not use host networking, map the dashboard port explicitly, for example `-p 9202:9202`.
+Tkinter support has two independent requirements:
 
-Restart and enter the container later:
+1. `python3.12-tk` must exist in the image.
+2. The container must receive the host X11 display at runtime.
+
+On the host, grant the local root user access to the X server:
 
 ```bash
-sudo docker start cacheroute-dev
-sudo docker exec -it cacheroute-dev bash
+xhost +si:localuser:root
 ```
+
+Then create the container with the additional display settings:
+
+```bash
+sudo docker run --gpus all -it \
+  --name cacheroute-main \
+  --network host \
+  --ipc=host \
+  --shm-size=64g \
+  --ulimit memlock=-1 \
+  --ulimit stack=67108864 \
+  --memory=0 \
+  --memory-swap=0 \
+  -e DISPLAY="$DISPLAY" \
+  -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
+  -v /llm-stack:/workspace/llm-stack \
+  -w /workspace/llm-stack \
+  cacheroute:vllm0.13-lmcache3.11-pytorch2.9.1 \
+  bash
+```
+
+Do not hard-code `DISPLAY=:0` in the Dockerfile. The actual display may be `:0`, `:1`, or another value.
+
+When desktop access is no longer needed, revoke the authorization on the host:
+
+```bash
+xhost -si:localuser:root
+```
+
+If `$DISPLAY` is empty or X11 forwarding is unavailable, use the browser dashboard instead.
 
 ---
 
-## Verify Rust and Tkinter
+## 5. Verify the Container
 
-Inside the container, verify that Rust is available:
+Inside the container, verify the core serving stack:
+
+```bash
+python3 --version
+python3 -m pip show torch vllm lmcache
+
+python3 - <<'PY'
+import torch
+
+print("torch:", torch.__version__)
+print("cuda available:", torch.cuda.is_available())
+print("cuda runtime:", torch.version.cuda)
+print("visible GPUs:", torch.cuda.device_count())
+PY
+```
+
+Verify the optional Rust resource agent toolchain:
 
 ```bash
 rustc --version
 cargo --version
 ```
 
-Verify that Tkinter is available for the desktop dashboard:
+Verify that Tkinter is installed for the active Python interpreter:
 
 ```bash
-python3 - <<'EOF'
+python3 - <<'PY'
+import sys
 import tkinter
-print("tkinter: ok")
-EOF
+
+print("python:", sys.executable)
+print("tkinter:", tkinter.TkVersion)
+PY
 ```
 
-If you use a custom image instead of `env/docker/Dockerfile`, install Rust and Tkinter manually before using `instance/resource_agent` or `instance/resource_dashboard/dashboard_app.py`.
+The import test only verifies the Python/Tk libraries. Test graphical display separately:
 
 ```bash
-apt update
-apt install -y curl build-essential pkg-config
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-EOF
+python3 -m tkinter
 ```
 
-Select `1) Proceed with standard installation`
-
-```bash
-apt install -y python3-tk
-python3 -c "import tkinter; print('Tkinter OK, Tk version:', tkinter.TkVersion)"
-EOF
-```
+If the import succeeds but the window fails with `no display name` or `cannot open display`, recreate the container with the X11 options in Section 4.2, or use the browser dashboard.
 
 ---
 
-## Install PyTorch
+## 6. Install CacheRoute Application Dependencies
 
-Inside the container, install PyTorch with CUDA support:
+From the repository root:
 
 ```bash
+cd /workspace/llm-stack/CacheRoute
 python3 -m pip install -U pip
-python3 -m pip install --index-url https://download.pytorch.org/whl/cu128 torch torchvision torchaudio
-```
-
-Verify GPU availability:
-
-```bash
-python3 - <<'EOF'
-import torch
-
-print("torch:", torch.__version__)
-print("cuda available:", torch.cuda.is_available())
-print("cuda:", torch.version.cuda)
-print("n_gpus:", torch.cuda.device_count())
-EOF
-```
-
----
-
-## Install CacheRoute Dependencies
-
-From the CacheRoute root directory:
-
-```bash
-cd /workspace/llm-stack/src/CacheRoute
 python3 -m pip install -r requirements.txt
 python3 -m pip check
 ```
 
-Optional tools for model downloading and API testing:
+`requirements.txt` intentionally does not pin PyTorch, vLLM, or LMCache. These packages belong to the serving image and must remain compatible with its CUDA environment.
+
+Optional tools:
 
 ```bash
 python3 -m pip install modelscope openai
@@ -231,18 +271,198 @@ python3 -m pip install modelscope openai
 
 ---
 
-## Optional: Instance Resource Dashboard
+## 7. Repair an Older or Custom Image
 
-The Instance Resource Dashboard starts or connects to the Rust resource agent and visualizes local Instance resource snapshots.
+Use this section only when an existing image lacks Rust/Cargo or Tkinter. These changes are stored in the current container writable layer and disappear if the container is deleted unless a new image is created.
 
-Build/check the Rust agent:
+### Install Tkinter
 
 ```bash
-cd /workspace/llm-stack/src/CacheRoute
+apt-get update
+apt-get install -y --no-install-recommends python3.12-tk
+rm -rf /var/lib/apt/lists/*
+
+python3 -c "import tkinter; print('Tkinter:', tkinter.TkVersion)"
+```
+
+If the active interpreter is Conda Python rather than `/usr/bin/python3.12`, install the matching Conda `tk` package instead.
+
+### Install Rust and Cargo
+
+```bash
+apt-get update
+apt-get install -y --no-install-recommends curl ca-certificates build-essential pkg-config libssl-dev
+
+export RUSTUP_HOME=/opt/rustup
+export CARGO_HOME=/opt/cargo
+export PATH="/opt/cargo/bin:$PATH"
+
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+  sh -s -- -y --profile minimal --default-toolchain stable
+
+rustc --version
+cargo --version
+```
+
+For a reproducible public environment, prefer updating `env/docker/Dockerfile` or creating a derived Dockerfile instead of relying only on manual container changes.
+
+---
+
+## 8. Source-Build Path Only
+
+Skip this section when using the complete image from Path A.
+
+### 8.1 Install PyTorch for CUDA 12.8
+
+```bash
+python3 -m pip install -U pip
+python3 -m pip install \
+  --index-url https://download.pytorch.org/whl/cu128 \
+  torch torchvision torchaudio
+```
+
+### 8.2 Build vLLM
+
+```bash
+cd /workspace/llm-stack/vllm
+git checkout v0.13.0
+python3 use_existing_torch.py
+python3 -m pip install -U pip setuptools wheel packaging
+python3 -m pip install -r requirements/build.txt
+
+export MAX_JOBS=8
+python3 -m pip install --no-build-isolation -e .
+```
+
+### 8.3 Install LMCache
+
+```bash
+cd /workspace/llm-stack/LMCache
+python3 -m pip install -e .
+python3 -m pip show lmcache
+```
+
+Validate the resulting stack before continuing:
+
+```bash
+python3 -m pip check
+python3 -m pip show torch vllm lmcache
+```
+
+---
+
+## 9. Configure the Chat Template
+
+Stable KVCache reuse requires deterministic prompt prefixes. Do not include time-varying fields, such as the current date, in the chat template.
+
+An example tokenizer configuration is provided at:
+
+```text
+/workspace/llm-stack/CacheRoute/env/tokenizer_config.json
+```
+
+For a model without a suitable chat template, copy a compatible vLLM template into the model's `tokenizer_config.json` before warming the cache.
+
+---
+
+## 10. Start Redis and Configure LMCache
+
+Start Redis on the host network:
+
+```bash
+sudo docker run -d \
+  --name lmcache-redis \
+  --network host \
+  redis:7 \
+  redis-server \
+    --bind 0.0.0.0 \
+    --protected-mode no \
+    --save "" \
+    --appendonly no \
+    --maxmemory 200gb \
+    --maxmemory-policy allkeys-lru
+```
+
+Create the LMCache configuration:
+
+```bash
+mkdir -p /workspace/llm-stack/config
+
+cat > /workspace/llm-stack/config/lmcache_with_redis.yaml <<'EOF'
+chunk_size: 256
+pre_caching_hash_algorithm: "sha256_cbor"
+
+local_cpu: true
+max_local_cpu_size: 80.0
+
+remote_url: "redis://127.0.0.1:6379"
+remote_serde: "cachegen"
+
+local_disk: null
+max_local_disk_size: 0
+
+save_decode_cache: false
+cache_policy: "LRU"
+numa_mode: null
+EOF
+```
+
+For CacheRoute's cross-container cache-key behavior, follow the LMCache patch instructions in the main README and `kdn_server/README.md`.
+
+---
+
+## 11. Start vLLM with LMCache
+
+The following example starts a LLaMA-70B model with tensor parallelism across eight GPUs. Adjust the paths and resource limits for the actual system.
+
+```bash
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export MODEL_DIR=/workspace/llm-stack/models/LLM-Research/Meta-Llama-3-70B-Instruct
+export LMCACHE_CONFIG_FILE=/workspace/llm-stack/config/lmcache_with_redis.yaml
+export PYTHONHASHSEED=0
+export OMP_NUM_THREADS=8
+
+pkill -f vllm || true
+pkill -f api_server || true
+
+python3 -m vllm.entrypoints.openai.api_server \
+  --model "$MODEL_DIR" \
+  --served-model-name llama3-70b \
+  --host 0.0.0.0 \
+  --port 8000 \
+  --tensor-parallel-size 8 \
+  --gpu-memory-utilization 0.75 \
+  --dtype auto \
+  --max-model-len 4096 \
+  --max-num-seqs 8 \
+  --max-num-batched-tokens 16384 \
+  --kv-offloading-backend lmcache \
+  --kv-offloading-size 64 \
+  --disable-hybrid-kv-cache-manager \
+  --kv-cache-metrics
+```
+
+Verify the server from another terminal:
+
+```bash
+curl -sS http://127.0.0.1:8000/v1/models | python3 -m json.tool
+```
+
+---
+
+## 12. Run the Resource Agent and Dashboard
+
+Build-check the Rust agent:
+
+```bash
+cd /workspace/llm-stack/CacheRoute
 cargo check --manifest-path instance/resource_agent/Cargo.toml
 ```
 
-Start the desktop dashboard:
+### Desktop dashboard
+
+The container must have been created with the X11 settings in Section 4.2.
 
 ```bash
 python3 instance/resource_dashboard/dashboard_app.py \
@@ -251,11 +471,9 @@ python3 instance/resource_dashboard/dashboard_app.py \
   --instance-id hp_127.0.0.1:9001
 ```
 
-A small local window should open and update CPU, memory, GPU, network, admission-state, and raw snapshot information.
+### Browser dashboard
 
-If the container cannot open the desktop window, you can also try running the Rust agent and desktop dashboard directly on the host machine, as long as the host has a compatible Rust/Cargo toolchain and repository permissions are correct.
-
-If the container has no graphical display, use the browser/server fallback:
+Use this mode in headless environments:
 
 ```bash
 python3 instance/resource_dashboard/dashboard_server.py \
@@ -265,7 +483,13 @@ python3 instance/resource_dashboard/dashboard_server.py \
   --instance-id hp_127.0.0.1:9001
 ```
 
-Validate the fallback APIs:
+Open:
+
+```text
+http://127.0.0.1:9202
+```
+
+Validate the APIs:
 
 ```bash
 curl -sS http://127.0.0.1:9202/api/health | python3 -m json.tool
@@ -274,269 +498,68 @@ curl -sS http://127.0.0.1:9201/healthz
 curl -sS http://127.0.0.1:9201/v1/resource/snapshot | python3 -m json.tool
 ```
 
-The dashboard is optional and does not change Scheduler decisions, Proxy forwarding, Instance request handling, or KDN injection.
+The resource dashboard is optional and does not change Scheduler routing, Proxy forwarding, Instance execution, or KDN injection.
 
 ---
 
-## Build vLLM from Source
+## 13. Start CacheRoute
 
-CacheRoute has been tested with vLLM 0.13.x.
-
-```bash
-cd /workspace/llm-stack/src/vllm
-
-git checkout v0.13.0
-python3 use_existing_torch.py
-
-python3 -m pip install -U pip setuptools wheel packaging
-python3 -m pip install -r requirements/build.txt
-
-export MAX_JOBS=8
-python3 -m pip install --no-build-isolation -e .
-```
-
-This step may take a long time. If the build appears stuck, check CPU and memory usage:
-
-```bash
-ps -eo pid,ppid,cmd,%cpu,%mem --sort=-%cpu | head -n 30
-```
-
----
-
-## Configure the Chat Template
-
-Some LLaMA-family models do not include a proper chat template. You can reuse the template provided by vLLM.
-
-Example:
-
-```bash
-export VLLM_DIR=/workspace/llm-stack/src/vllm
-export TEMPLATE=$VLLM_DIR/examples/tool_chat_template_llama3.2_json.jinja
-export MODEL_DIR=/workspace/llm-stack/models/LLM-Research/Meta-Llama-3-70B-Instruct
-
-python3 - <<'EOF'
-import json
-import os
-from pathlib import Path
-
-model_dir = Path(os.environ["MODEL_DIR"])
-tpl_path = Path(os.environ["TEMPLATE"])
-
-assert model_dir.is_dir(), model_dir
-assert tpl_path.is_file(), tpl_path
-
-tpl = tpl_path.read_text(encoding="utf-8")
-cfg = model_dir / "tokenizer_config.json"
-
-data = {}
-if cfg.exists():
-    data = json.loads(cfg.read_text(encoding="utf-8"))
-
-data["chat_template"] = tpl
-cfg.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-print("OK wrote:", cfg)
-print("template chars:", len(tpl))
-EOF
-```
-
-For stable KVCache reuse, the chat template should not contain time-varying fields such as the current date. Otherwise, the generated cache keys may change over time. CacheRoute provides an example modified tokenizer configuration under:
+Set `USE_MOCK = False` in `core/config.py`, configure the model and embedding paths, and start the components in this order:
 
 ```text
-env/tokenizer_config.json
+Scheduler -> KDN Server -> Proxy -> Instance -> Client
 ```
+
+From `/workspace/llm-stack/CacheRoute/test`, typical commands are:
+
+```bash
+python3 demo_scheduler.py --cacheroute
+python3 demo_kdn.py
+python3 demo_proxy.py \
+  --strategy round_robin \
+  --injection-strategy iws \
+  --ready-release-policy text_bypass
+python3 demo_instance.py --port 9001 --host 127.0.0.1
+python3 demo_client.py --with-ui
+```
+
+For component-specific parameters, see the READMEs under `scheduler/`, `proxy/`, `instance/`, `kdn_server/`, and `client/`.
 
 ---
 
-## Install LMCache
+## 14. Container Lifecycle
 
-Install LMCache from source:
-
-```bash
-cd /workspace/llm-stack/src/LMCache
-python3 -m pip install -e .
-```
-
-Verify installation:
+Start and enter an existing container:
 
 ```bash
-python3 -m pip show lmcache
+sudo docker start cacheroute-main
+sudo docker exec -it cacheroute-main bash
 ```
 
----
+A container name does not preserve the creation configuration. If a container is deleted and recreated with the same name, its bind mounts, working directory, X11 settings, environment variables, and startup command must be supplied again.
 
-## Configure LMCache
-
-Create a local LMCache configuration file:
+Inspect the effective configuration:
 
 ```bash
-mkdir -p /workspace/llm-stack/config
-mkdir -p /workspace/llm-stack/lmcache-data
-
-cat > /workspace/llm-stack/config/lmcache.yaml <<'EOF'
-chunk_size: 256
-
-local_cpu: true
-max_local_cpu_size: 64.0
-
-local_disk: "file:///workspace/llm-stack/lmcache-data"
-max_local_disk_size: 200.0
-
-remote_url: null
-
-save_decode_cache: false
-cache_policy: "LRU"
-numa_mode: null
-EOF
+sudo docker inspect cacheroute-main
+sudo docker inspect -f '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{println}}{{end}}' cacheroute-main
 ```
 
-For CacheRoute experiments with Redis-based KVCache injection, use a Redis backend configuration instead. See the main `README.md` and `kdn_server/README.md` for Redis-based KDN injection.
-
----
-
-## Start vLLM
-
-Example command for starting a LLaMA-70B model with tensor parallelism:
+To preserve a manually assembled environment temporarily:
 
 ```bash
-export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
-export MODEL_DIR=/workspace/llm-stack/models/LLM-Research/Meta-Llama-3-70B-Instruct
-export LMCACHE_CONFIG_FILE=/workspace/llm-stack/config/lmcache.yaml
-
-python3 -m vllm.entrypoints.openai.api_server \
-  --model "$MODEL_DIR" \
-  --served-model-name llama3-70b \
-  --host 0.0.0.0 \
-  --port 8000 \
-  --tensor-parallel-size 8 \
-  --gpu-memory-utilization 0.84 \
-  --dtype auto \
-  --max-model-len 4096 \
-  --max-num-seqs 8 \
-  --max-num-batched-tokens 8192
+sudo docker commit cacheroute-main cacheroute:local-vllm0.13-lmcache0.3.11-pytorch2.9.1
 ```
 
-Adjust `MODEL_DIR`, tensor parallel size, memory utilization, and batch limits according to your model and GPU resources.
-
----
-
-## Verify vLLM
-
-### Chat completion
-
-```bash
-curl http://127.0.0.1:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "llama3-70b",
-    "messages": [
-      {"role": "system", "content": "You are a helpful assistant."},
-      {"role": "user", "content": "Tell me a short story about a sailor."}
-    ],
-    "temperature": 0,
-    "max_tokens": 128
-  }'
-```
-
-### Completion
-
-```bash
-curl http://127.0.0.1:8000/v1/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "llama3-70b",
-    "prompt": "Tell me a short story about a sailor.",
-    "temperature": 0,
-    "max_tokens": 128
-  }'
-```
-
-If the server returns a valid response, vLLM is ready.
-
----
-
-## Optional: Run Sanity Check
-
-If you have a local sanity-check script, run:
-
-```bash
-python3 /workspace/scripts/sanity_check.py
-```
-
-The environment is considered valid when the required checks pass.
-
----
-
-## Commit the Docker Image
-
-After vLLM, LMCache, PyTorch, and CacheRoute dependencies are installed, you can commit the container as a reusable image:
-
-```bash
-sudo docker commit cacheroute-dev cacheroute:vllm0.13-lmcache0.3-pytorch2.9
-```
-
-You can then use this image in later CacheRoute experiments.
-
----
-
-## Common Docker Commands
-
-List containers:
-
-```bash
-sudo docker ps -a
-```
-
-Start a container:
-
-```bash
-sudo docker start <container>
-```
-
-Enter a running container:
-
-```bash
-sudo docker exec -it <container> bash
-```
-
-Remove a container:
-
-```bash
-sudo docker rm <container>
-```
-
-List images:
-
-```bash
-sudo docker images
-```
-
-Remove an image:
-
-```bash
-sudo docker rmi <image_name>:<tag>
-```
-
-Check Python version:
-
-```bash
-python --version
-```
-
-Check installed package version:
-
-```bash
-python3 -m pip show <package_name>
-```
+`docker commit` is convenient for local snapshots but is not a reproducible build specification. For public releases, preserve system dependencies in a Dockerfile and keep Python application packages in `requirements.txt`.
 
 ---
 
 ## Notes
 
-- This document describes the full LLM serving environment. For a lightweight CacheRoute workflow, use the demo scripts in `test/`.
-- The default examples assume host networking and a single-machine setup.
-- Multi-machine deployment requires updating the service addresses in `core/config.py`.
-- Redis-based LMCache configuration is required when validating KDN-based KVCache injection.
-- The Instance Resource Dashboard uses port `9202` for the browser fallback and starts the Rust resource agent on `9201` by default.
-- Some model paths and image names in the commands should be adjusted according to your local environment.
+- The examples assume a single host and host networking.
+- Multi-machine deployment requires updating service addresses in `core/config.py`.
+- The browser dashboards are the preferred option for remote or headless servers.
+- Tkinter belongs to the image or operating-system package layer, not `requirements.txt`.
+- `DISPLAY` and `/tmp/.X11-unix` belong to `docker run`, not the Dockerfile.
+- PyTorch, vLLM, and LMCache belong to the serving image and should not be replaced by application dependency installation.

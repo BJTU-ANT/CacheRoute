@@ -1,6 +1,12 @@
 # Test and Demo Scripts
 
-`test/` contains local entrypoints, smoke scripts, and historical utility tests for CacheRoute development. Most `demo_*.py` files are intended to be launched manually from the repository root or from the `test` directory.
+`test/` contains local entrypoints, smoke scripts, and historical utility tests for CacheRoute development. The main `demo_*.py` entrypoints add the repository root to Python's module search path, so the documented commands can be launched directly from the `test` directory without manually setting `PYTHONPATH`.
+
+If an older checkout reports `ModuleNotFoundError: No module named 'core'`, update the checkout or temporarily run:
+
+```bash
+export PYTHONPATH="$(cd .. && pwd)${PYTHONPATH:+:$PYTHONPATH}"
+```
 
 The default single-machine demo ports are:
 
