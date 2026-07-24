@@ -172,6 +172,21 @@ EOF
 
 If you use a custom image instead of `env/docker/Dockerfile`, install Rust and Tkinter manually before using `instance/resource_agent` or `instance/resource_dashboard/dashboard_app.py`.
 
+```bash
+apt update
+apt install -y curl build-essential pkg-config
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+EOF
+```
+
+Select `1) Proceed with standard installation`
+
+```bash
+apt install -y python3-tk
+python3 -c "import tkinter; print('Tkinter OK, Tk version:', tkinter.TkVersion)"
+EOF
+```
+
 ---
 
 ## Install PyTorch
