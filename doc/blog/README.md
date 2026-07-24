@@ -11,6 +11,54 @@ This document records major engineering milestones for the CacheRoute prototype.
 
 ---
 
+## 260724: Reproducible Setup, Client Command Parsing, and Integrated Instance Dashboard
+
+### Changes
+
+- Reworked the container and deployment guides around a reproducible `/llm-stack` workflow, modern NVIDIA Container Toolkit setup, headless/Tkinter separation, and a complete single-machine startup runbook.
+- Declared a compatible `redis-py` dependency to prevent legacy Redis client import failures in the KDN KV builder.
+- Added a shared multiline curl-like command parser for the CLI and browser client, including URL-first and standard curl forms, line continuations, clearer quote errors, and regression tests.
+- Integrated optional Resource Dashboard startup into `demo_instance.py` with readiness/reuse checks, browser launch control, process ownership and cleanup, focused tests, and updated Instance documentation.
+
+### Files
+
+- `README.md`
+- `env/README.md`
+- `env/docker/Dockerfile`
+- `requirements.txt`
+- `client/command_input.py`
+- `client/repl.py`
+- `UI/client_ui/`
+- `test/demo_instance.py`
+- `instance/instance_api.py`
+- `instance/resource_dashboard/`
+
+Owner: yao
+
+---
+
+## 260723: Predictive Queue Pressure and Interactive Proxy Topology
+
+### Changes
+
+- Added per-Instance predicted pressure from queue reservations and timelines, including pending Prefill work, active Decode work, slot readiness, Prefill availability, and estimated backlog time.
+- Extended `least_load` scoring and `/debug/instance_loads` to use the same predictive pressure snapshot while preserving instantaneous, inflight-only, and round-robin fallback behavior.
+- Upgraded the Proxy topology to a deterministic force-relaxed layout with stable positions, curved links, particles, hover relationships, drag/pan/zoom controls, fit/reset actions, and reduced-motion support.
+- Expanded pure-function tests for scheduling pressure, topology determinism, bounds, collisions, link geometry, tooltips, and interaction helpers.
+
+### Files
+
+- `proxy/queue/manager.py`
+- `proxy/strategy/least_load.py`
+- `proxy/proxy.py`
+- `proxy/resource/instance_pool.py`
+- `UI/proxy_ui/static/`
+- `UI/proxy_ui/test_proxy_ui_pure.js`
+
+Owner: yao
+
+---
+
 ## 260720: Queue-Aware Least-Load Scheduling and Proxy UI Visualization
 
 ### Changes
