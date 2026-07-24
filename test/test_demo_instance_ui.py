@@ -14,40 +14,11 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-fake_config = types.SimpleNamespace(
-    INSTANCE_RESOURCE_MONITOR_ENABLE=True,
-    INSTANCE_RESOURCE_AUTO_START_AGENT=True,
-    INSTANCE_RESOURCE_AGENT_LISTEN="127.0.0.1:9201",
-    INSTANCE_RESOURCE_AGENT_URL="http://127.0.0.1:9201",
-    INSTANCE_RESOURCE_AGENT_SAMPLE_INTERVAL_MS=1000,
-    INSTANCE_RESOURCE_AGENT_START_TIMEOUT_S=60.0,
-    INSTANCE_RESOURCE_REPORT_ENABLE=False,
-    INSTANCE_RESOURCE_REPORT_HZ=1.0,
-    INSTANCE_RESOURCE_REPORT_TIMEOUT_S=2.0,
-    INSTANCE_UI_ENABLE=False,
-    INSTANCE_UI_LISTEN="0.0.0.0:9202",
-    INSTANCE_UI_OPEN_BROWSER=False,
-    INSTANCE_UI_START_TIMEOUT_S=5.0,
-    INSTANCE_PORT=9001,
-    INSTANCE_HOST="127.0.0.1",
-    PROXY_CP_URL="http://127.0.0.1:8002",
-)
-fake_core = types.ModuleType("core")
-fake_core.config = fake_config
-sys.modules.setdefault("core", fake_core)
-sys.modules.setdefault("core.config", fake_config)
-fake_uvicorn = types.ModuleType("uvicorn")
-fake_uvicorn.run = lambda *args, **kwargs: None
-sys.modules.setdefault("uvicorn", fake_uvicorn)
-fake_reporter = types.ModuleType("instance.resource_agent.proxy_reporter")
-fake_reporter.report_once = lambda *args, **kwargs: True
-sys.modules.setdefault("instance.resource_agent.proxy_reporter", fake_reporter)
-config = fake_config
-
 spec = importlib.util.spec_from_file_location("demo_instance", os.path.join(os.path.dirname(__file__), "demo_instance.py"))
 demo_instance = importlib.util.module_from_spec(spec)
 assert spec.loader is not None
 spec.loader.exec_module(demo_instance)
+config = demo_instance.config
 
 
 def test_interval_from_hz_preserves_existing_conversion():
@@ -142,14 +113,125 @@ class Logger:
     def debug(self, *args): self.messages.append(("debug", args))
 
 
+class FakeHTTPResponse:
+    def __init__(self, status=200, body=''):
+        self.status = status
+        self._body = body.encode('utf-8')
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self):
+        return self._body
+
+
+def dashboard_payload(*, agent_url="http://127.0.0.1:9201", sample_interval_ms=1000, instance_id="runtime-id"):
+    return {
+        "ok": True,
+        "dashboard": "ok",
+        "agent": {
+            "agent_url": agent_url,
+            "sample_interval_ms": sample_interval_ms,
+            "instance_id": instance_id,
+        },
+    }
+
+
+def dashboard_for_health() -> object:
+    return demo_instance.DemoDashboard(
+        enabled=True,
+        listen="127.0.0.1:9202",
+        open_browser=False,
+        start_timeout_s=0.1,
+        agent_listen="127.0.0.1:9201",
+        sample_interval_ms=1000,
+    )
+
+
+def test_health_ok_accepts_compatible_dashboard_json(monkeypatch):
+    d = dashboard_for_health()
+    monkeypatch.setattr(demo_instance.urllib.request, "urlopen", lambda req, timeout: FakeHTTPResponse(body=demo_instance.json.dumps(dashboard_payload())))
+    assert d._health_ok(runtime_instance_id="runtime-id") is True
+
+
+def test_health_ok_rejects_non_json_200(monkeypatch):
+    d = dashboard_for_health()
+    monkeypatch.setattr(demo_instance.urllib.request, "urlopen", lambda req, timeout: FakeHTTPResponse(body="not json"))
+    assert d._health_ok(runtime_instance_id="runtime-id") is False
+
+
+def test_health_ok_rejects_unrelated_200_service(monkeypatch):
+    d = dashboard_for_health()
+    monkeypatch.setattr(demo_instance.urllib.request, "urlopen", lambda req, timeout: FakeHTTPResponse(body=demo_instance.json.dumps({"ok": True})))
+    assert d._health_ok(runtime_instance_id="runtime-id") is False
+
+
+def test_health_ok_rejects_mismatched_agent_url(monkeypatch):
+    d = dashboard_for_health()
+    payload = dashboard_payload(agent_url="http://127.0.0.1:9999")
+    monkeypatch.setattr(demo_instance.urllib.request, "urlopen", lambda req, timeout: FakeHTTPResponse(body=demo_instance.json.dumps(payload)))
+    assert d._health_ok(runtime_instance_id="runtime-id") is False
+
+
+def test_health_ok_rejects_mismatched_sample_interval(monkeypatch):
+    d = dashboard_for_health()
+    payload = dashboard_payload(sample_interval_ms=250)
+    monkeypatch.setattr(demo_instance.urllib.request, "urlopen", lambda req, timeout: FakeHTTPResponse(body=demo_instance.json.dumps(payload)))
+    assert d._health_ok(runtime_instance_id="runtime-id") is False
+
+
+def test_health_ok_rejects_mismatched_instance_id(monkeypatch):
+    d = dashboard_for_health()
+    payload = dashboard_payload(instance_id="other-id")
+    monkeypatch.setattr(demo_instance.urllib.request, "urlopen", lambda req, timeout: FakeHTTPResponse(body=demo_instance.json.dumps(payload)))
+    assert d._health_ok(runtime_instance_id="runtime-id") is False
+
+
+
 def test_reuse_existing_dashboard_does_not_spawn_or_stop(monkeypatch):
     calls = []
     d = demo_instance.DemoDashboard(enabled=True, listen="127.0.0.1:9202", open_browser=False, start_timeout_s=0.1, agent_listen="127.0.0.1:9201", sample_interval_ms=1000)
-    monkeypatch.setattr(d, "_health_ok", lambda timeout_s=0.5: True)
+    monkeypatch.setattr(d, "_health_ok", lambda timeout_s=0.5, runtime_instance_id=None: True)
     monkeypatch.setattr(demo_instance.subprocess, "Popen", lambda *a, **k: calls.append((a, k)))
     asyncio.run(d.start(runtime_instance_id="id", logger=Logger()))
     asyncio.run(d.stop(logger=Logger()))
     assert calls == []
+
+
+def test_compatible_external_dashboard_reuse_validates_identity(monkeypatch):
+    d = dashboard_for_health()
+    popen_calls = []
+    monkeypatch.setattr(demo_instance.urllib.request, "urlopen", lambda req, timeout: FakeHTTPResponse(body=demo_instance.json.dumps(dashboard_payload())))
+    monkeypatch.setattr(demo_instance.subprocess, "Popen", lambda *a, **k: popen_calls.append((a, k)))
+
+    asyncio.run(d.start(runtime_instance_id="runtime-id", logger=Logger()))
+    asyncio.run(d.stop(logger=Logger()))
+
+    assert popen_calls == []
+    assert d._started_dashboard is False
+
+
+def test_incompatible_external_service_is_not_marked_reused(monkeypatch):
+    d = dashboard_for_health()
+    popen_calls = []
+    log = Logger()
+    monkeypatch.setattr(demo_instance.urllib.request, "urlopen", lambda req, timeout: FakeHTTPResponse(body=demo_instance.json.dumps({"ok": True})))
+
+    def fake_popen(*args, **kwargs):
+        popen_calls.append((args, kwargs))
+        raise OSError("address already in use")
+
+    monkeypatch.setattr(demo_instance.subprocess, "Popen", fake_popen)
+
+    asyncio.run(d.start(runtime_instance_id="runtime-id", logger=log))
+
+    assert popen_calls
+    assert d._started_dashboard is False
+    assert any(m[0] == "warning" and "failed to start Dashboard" in m[1][0] for m in log.messages)
+
 
 
 def test_start_timeout_nonfatal_and_bounded_tails(monkeypatch):
@@ -157,7 +239,7 @@ def test_start_timeout_nonfatal_and_bounded_tails(monkeypatch):
     fake = FakeProc()
     d._stdout_tail = deque([f"out{i}\n" for i in range(30)], maxlen=20)
     d._stderr_tail = deque([f"err{i}\n" for i in range(30)], maxlen=20)
-    monkeypatch.setattr(d, "_health_ok", lambda timeout_s=0.5: False)
+    monkeypatch.setattr(d, "_health_ok", lambda timeout_s=0.5, runtime_instance_id=None: False)
     monkeypatch.setattr(demo_instance.subprocess, "Popen", lambda *a, **k: fake)
     log = Logger()
     asyncio.run(d.start(runtime_instance_id="id", logger=log))
@@ -169,7 +251,7 @@ def test_start_timeout_nonfatal_and_bounded_tails(monkeypatch):
 def test_browser_open_success_failure_and_disabled(monkeypatch):
     opened = []
     d = demo_instance.DemoDashboard(enabled=True, listen="127.0.0.1:9202", open_browser=True, start_timeout_s=0.1, agent_listen="127.0.0.1:9201", sample_interval_ms=1000)
-    monkeypatch.setattr(d, "_health_ok", lambda timeout_s=0.5: len(opened) == 0)
+    monkeypatch.setattr(d, "_health_ok", lambda timeout_s=0.5, runtime_instance_id=None: len(opened) == 0)
     monkeypatch.setattr(demo_instance.webbrowser, "open", lambda url: opened.append(url) or False)
     log = Logger()
     asyncio.run(d.start(runtime_instance_id="id", logger=log))
@@ -200,19 +282,26 @@ def test_main_default_report_interval_initialization_uses_hz_without_name_error(
     fake_instance_module.instance = fake_instance_app
     run_calls = []
 
-    monkeypatch.setitem(sys.modules, "instance", fake_instance_module)
-    monkeypatch.setattr(fake_uvicorn, "run", lambda *args, **kwargs: run_calls.append((args, kwargs)))
-    monkeypatch.setattr(sys, "argv", ["demo_instance.py", "--no-resource-monitor", "--no-ui"])
-    monkeypatch.delenv("INSTANCE_RESOURCE_REPORT_INTERVAL_MS", raising=False)
-    monkeypatch.delenv("INSTANCE_RESOURCE_REPORT_HZ", raising=False)
-    monkeypatch.delenv("INSTANCE_ID", raising=False)
+    fake_uvicorn = types.ModuleType("uvicorn")
+    fake_uvicorn.run = lambda *args, **kwargs: run_calls.append((args, kwargs))
 
-    demo_instance.main()
+    with monkeypatch.context() as m:
+        m.setitem(sys.modules, "instance", fake_instance_module)
+        m.setitem(sys.modules, "uvicorn", fake_uvicorn)
+        m.setattr(sys, "argv", ["demo_instance.py", "--no-resource-monitor", "--no-ui"])
+        m.delenv("INSTANCE_RESOURCE_REPORT_INTERVAL_MS", raising=False)
+        m.delenv("INSTANCE_RESOURCE_REPORT_HZ", raising=False)
+        m.delenv("INSTANCE_ID", raising=False)
 
-    assert os.environ["INSTANCE_RESOURCE_REPORT_INTERVAL_MS"] == "1000"
-    assert run_calls
-    assert fake_instance_app.state._demo_resource_monitor.report_interval_ms == 1000
-    assert fake_instance_app.state._demo_dashboard.enabled is False
+        demo_instance.main()
+
+        assert os.environ["INSTANCE_RESOURCE_REPORT_INTERVAL_MS"] == "1000"
+        assert run_calls
+        assert fake_instance_app.state._demo_resource_monitor.report_interval_ms == 1000
+        assert fake_instance_app.state._demo_dashboard.enabled is False
+
+    assert sys.modules.get("instance") is not fake_instance_module
+    assert sys.modules.get("uvicorn") is not fake_uvicorn
 
 
 def test_resource_agent_for_ui_uses_monitor_owner_without_reporting(monkeypatch):

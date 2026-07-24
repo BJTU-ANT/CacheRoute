@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import sys
 import asyncio
@@ -133,18 +134,39 @@ class DemoDashboard:
             "--no-auto-start",
         ]
 
-    def _health_ok(self, timeout_s: float = 0.5) -> bool:
+    def _expected_agent_url(self) -> str:
+        return f"http://{self.agent_listen}"
+
+    def _compatible_health_payload(self, payload: dict, runtime_instance_id: str | None = None) -> bool:
+        if payload.get("ok") is not True or payload.get("dashboard") != "ok":
+            return False
+        agent = payload.get("agent")
+        if not isinstance(agent, dict):
+            return False
+        if agent.get("agent_url") != self._expected_agent_url():
+            return False
+        if int(agent.get("sample_interval_ms", -1)) != self.sample_interval_ms:
+            return False
+        if runtime_instance_id is not None and agent.get("instance_id") != runtime_instance_id:
+            return False
+        return True
+
+    def _health_ok(self, timeout_s: float = 0.5, runtime_instance_id: str | None = None) -> bool:
         try:
             req = urllib.request.Request(f"{self.url}/api/health", headers={"Accept": "application/json"})
             with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-                return 200 <= int(resp.status) < 300
+                if not (200 <= int(resp.status) < 300):
+                    return False
+                body = resp.read().decode("utf-8")
+            payload = json.loads(body) if body else {}
+            return isinstance(payload, dict) and self._compatible_health_payload(payload, runtime_instance_id)
         except Exception:
             return False
 
-    async def _wait_ready(self, logger) -> bool:
+    async def _wait_ready(self, logger, runtime_instance_id: str) -> bool:
         deadline = time.monotonic() + max(0.0, self.start_timeout_s)
         while time.monotonic() <= deadline:
-            if await asyncio.to_thread(self._health_ok, 0.5):
+            if await asyncio.to_thread(self._health_ok, 0.5, runtime_instance_id):
                 logger.info("[demo_instance][ui] dashboard ready: %s", self.url)
                 return True
             if self._proc is not None and self._proc.poll() is not None:
@@ -164,8 +186,8 @@ class DemoDashboard:
         if not self.enabled:
             return
         cmd = self.build_command(runtime_instance_id)
-        if await asyncio.to_thread(self._health_ok, 0.5):
-            logger.info("[demo_instance][ui] reusing reachable Dashboard: %s", self.url)
+        if await asyncio.to_thread(self._health_ok, 0.5, runtime_instance_id):
+            logger.info("[demo_instance][ui] reusing compatible reachable Dashboard: %s", self.url)
             if self.open_browser:
                 await self._open_browser(logger)
             return
@@ -178,7 +200,7 @@ class DemoDashboard:
             return
         asyncio.create_task(asyncio.to_thread(DemoResourceMonitor._spawn_log_reader, self._proc.stdout, self._stdout_tail))
         asyncio.create_task(asyncio.to_thread(DemoResourceMonitor._spawn_log_reader, self._proc.stderr, self._stderr_tail))
-        if await self._wait_ready(logger):
+        if await self._wait_ready(logger, runtime_instance_id):
             print(f"[demo_instance] Resource Dashboard URL: {self.url}", flush=True)
             if self.open_browser:
                 await self._open_browser(logger)
